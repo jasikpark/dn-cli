@@ -2,7 +2,7 @@ use std::fmt;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::config::Config;
 
@@ -48,7 +48,11 @@ impl ApiError {
             .as_ref()
             .and_then(|v| v.get("errors"))
             .and_then(Value::as_array)
-            .map(|arr| arr.iter().map(ApiErrorDetail::from_value).collect::<Vec<_>>())
+            .map(|arr| {
+                arr.iter()
+                    .map(ApiErrorDetail::from_value)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         // Only fall back to the raw body when we couldn't extract any structured
@@ -60,7 +64,12 @@ impl ApiError {
             None
         };
 
-        ApiError { status, request_id, errors, raw }
+        ApiError {
+            status,
+            request_id,
+            errors,
+            raw,
+        }
     }
 }
 
@@ -124,15 +133,21 @@ impl Client {
 
     /// GET a versioned path and return the parsed JSON body.
     pub fn get(&self, path: &str) -> Result<Value> {
+        self.get_with_query(path, &[])
+    }
+
+    /// GET a versioned path with query parameters, returning the parsed JSON
+    /// body. ureq handles percent-encoding of the values.
+    fn get_with_query(&self, path: &str, query: &[(&str, &str)]) -> Result<Value> {
         let url = format!("{}{}", self.config.api_url, path);
         let auth = format!("Bearer {}", self.config.api_key);
 
-        let mut res = self
-            .agent
-            .get(&url)
-            .header("Authorization", &auth)
-            .call()
-            .context("request to Defined API failed")?;
+        let mut req = self.agent.get(&url).header("Authorization", &auth);
+        for (key, value) in query {
+            req = req.query(*key, *value);
+        }
+
+        let mut res = req.call().context("request to Defined API failed")?;
 
         let status = res.status();
         // x-request-id is worth surfacing on errors — it's the handle support
@@ -154,9 +169,151 @@ impl Client {
         Err(ApiError::from_response(status.as_u16(), &body, request_id).into())
     }
 
+    /// List every host, following cursor pagination to completion.
+    ///
+    /// The Defined API returns one page per call (`{ data, metadata }`); an
+    /// agent consuming a single page would silently see only the first slice,
+    /// so we walk the cursor and return one merged envelope. The last page's
+    /// `metadata` (carrying `totalCount`) is preserved so the count still
+    /// reflects the server's view.
+    ///
+    /// TODO(write-phase): add ?networkID= filtering once the exact query
+    /// param is confirmed against the api repo.
     pub fn list_hosts(&self) -> Result<Value> {
-        // TODO(write-phase): add ?networkID= filtering once the exact query
-        // param is confirmed against the api repo.
-        self.get("/v1/hosts")
+        let mut data: Vec<Value> = Vec::new();
+        let mut metadata = Value::Null;
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let page = match &cursor {
+                Some(c) => self.get_with_query("/v1/hosts", &[("cursor", c)])?,
+                None => self.get("/v1/hosts")?,
+            };
+
+            if let Some(rows) = page.get("data").and_then(Value::as_array) {
+                data.extend(rows.iter().cloned());
+            }
+            if let Some(m) = page.get("metadata") {
+                metadata = m.clone();
+            }
+
+            match next_cursor(page.get("metadata")) {
+                // Guard against a server that reports a next page but never
+                // advances the cursor — better a short result than a spin.
+                Some(next) if Some(&next) != cursor.as_ref() => cursor = Some(next),
+                _ => break,
+            }
+        }
+
+        Ok(json!({ "data": data, "metadata": metadata }))
+    }
+}
+
+/// Pull the next-page cursor out of a list response's `metadata`, or `None`
+/// when there are no more pages.
+///
+/// Only advances when the server says `hasNextPage` *and* hands back a
+/// non-empty cursor, so a missing/false flag stops the walk cleanly. Accepts
+/// `nextCursor` as an alias for `cursor` as cheap insurance against drift in
+/// the exact field name.
+fn next_cursor(metadata: Option<&Value>) -> Option<String> {
+    let metadata = metadata?;
+    if !metadata
+        .get("hasNextPage")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    metadata
+        .get("cursor")
+        .or_else(|| metadata.get("nextCursor"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_response_parses_structured_errors() {
+        let body = r#"{"errors":[{"code":"ERR_BAD","message":"nope","path":"name"}]}"#;
+        let err = ApiError::from_response(422, body, Some("req-1".into()));
+
+        assert_eq!(err.status, 422);
+        assert_eq!(err.request_id.as_deref(), Some("req-1"));
+        assert_eq!(err.errors.len(), 1);
+        assert_eq!(err.errors[0].code, "ERR_BAD");
+        assert_eq!(err.errors[0].message, "nope");
+        assert_eq!(err.errors[0].path.as_deref(), Some("name"));
+        // Structured errors present -> raw is redundant and dropped.
+        assert!(err.raw.is_none());
+    }
+
+    #[test]
+    fn from_response_defaults_missing_error_fields() {
+        let err = ApiError::from_response(400, r#"{"errors":[{}]}"#, None);
+
+        assert_eq!(err.errors.len(), 1);
+        assert_eq!(err.errors[0].code, "ERR_UNKNOWN");
+        assert_eq!(err.errors[0].message, "(no message)");
+        assert!(err.errors[0].path.is_none());
+    }
+
+    #[test]
+    fn from_response_keeps_raw_for_non_envelope_body() {
+        // e.g. an upstream proxy 502 returning HTML, not the DN error shape.
+        let err = ApiError::from_response(502, "<html>Bad Gateway</html>", None);
+
+        assert!(err.errors.is_empty());
+        assert_eq!(err.raw.as_deref(), Some("<html>Bad Gateway</html>"));
+        assert!(err.to_string().contains("Bad Gateway"));
+    }
+
+    #[test]
+    fn from_response_empty_body_has_no_raw() {
+        // e.g. an empty 401.
+        let err = ApiError::from_response(401, "   ", None);
+
+        assert!(err.errors.is_empty());
+        assert!(err.raw.is_none());
+        assert!(err.to_string().contains("(no response body)"));
+    }
+
+    #[test]
+    fn display_lists_each_error_and_request_id() {
+        let body = r#"{"errors":[{"code":"A","message":"first"},{"code":"B","message":"second","path":"x"}]}"#;
+        let rendered = ApiError::from_response(422, body, Some("req-9".into())).to_string();
+
+        assert!(rendered.contains("HTTP 422"));
+        assert!(rendered.contains("A: first"));
+        assert!(rendered.contains("B: second [x]"));
+        assert!(rendered.contains("request id: req-9"));
+    }
+
+    #[test]
+    fn next_cursor_advances_when_more_pages() {
+        let md = json!({"hasNextPage": true, "cursor": "abc"});
+        assert_eq!(next_cursor(Some(&md)).as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn next_cursor_accepts_next_cursor_alias() {
+        let md = json!({"hasNextPage": true, "nextCursor": "xyz"});
+        assert_eq!(next_cursor(Some(&md)).as_deref(), Some("xyz"));
+    }
+
+    #[test]
+    fn next_cursor_stops_on_last_page() {
+        assert!(next_cursor(Some(&json!({"hasNextPage": false, "cursor": "abc"}))).is_none());
+        // Missing flag is treated as "no more pages".
+        assert!(next_cursor(Some(&json!({"cursor": "abc"}))).is_none());
+        // Flag set but no usable cursor -> stop rather than re-request page one.
+        assert!(next_cursor(Some(&json!({"hasNextPage": true}))).is_none());
+        assert!(next_cursor(Some(&json!({"hasNextPage": true, "cursor": ""}))).is_none());
+        assert!(next_cursor(None).is_none());
     }
 }
