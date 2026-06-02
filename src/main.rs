@@ -14,7 +14,7 @@ use crate::config::Config;
 #[command(
     name = "dn",
     version,
-    about = "Personal clean-room CLI for the Defined Networking API"
+    about = "CLI for the Defined Networking API"
 )]
 struct Cli {
     /// Output machine-readable JSON (including errors) instead of human tables

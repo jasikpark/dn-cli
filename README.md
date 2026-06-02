@@ -1,11 +1,10 @@
 # dn-cli
 
-A personal, clean-room CLI (`dn`) for the [Defined Networking](https://defined.net) API.
+A CLI (`dn`) for the [Defined Networking](https://defined.net) API.
 
-Built from first principles against the public DN API — no third-party client
-code. Rust + [clap](https://docs.rs/clap) + [ureq](https://docs.rs/ureq)
-(pure-Rust TLS via rustls, so the binary statically links cleanly for
-per-platform npm distribution later, à la `sentry-cli`).
+Rust + [clap](https://docs.rs/clap) + [ureq](https://docs.rs/ureq) (pure-Rust
+TLS via rustls, so the binary statically links cleanly for per-platform npm
+distribution later, à la `sentry-cli`).
 
 Designed to be driven two ways:
 

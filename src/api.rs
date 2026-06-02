@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::config::Config;
 
-/// Minimal clean-room client for the Defined Networking REST API.
+/// Minimal client for the Defined Networking REST API.
 ///
 /// Endpoints are version-prefixed (`/v1/`, `/v2/`) per-verb; callers pass the
 /// full versioned path. This tracer exposes reads only; writes and deletes are
@@ -32,8 +32,7 @@ pub struct ApiError {
     pub raw: Option<String>,
 }
 
-/// One entry from the Defined API error envelope `{ errors: [{ ... }] }`
-/// (see <https://github.com/DefinedNet/api> webclient `src/api/errors.ts`).
+/// One entry from the Defined API error envelope: `{ code, message, path? }`.
 #[derive(Debug, Serialize)]
 pub struct ApiErrorDetail {
     pub code: String,
