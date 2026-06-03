@@ -43,9 +43,19 @@ op run --env-file=.env -- cargo run -- hosts list --json
 cargo build --release
 ```
 
+## Claude Code plugin
+
+This repo doubles as a [Claude Code](https://claude.com/claude-code) plugin
+(`.claude-plugin/plugin.json`). The `defined-networking` skill
+(`skills/defined-networking/SKILL.md`) teaches Claude to drive `dn` — injecting
+the API key with `op run` and parsing `--json` output. Load it by installing the
+plugin, or symlink the skill into `~/.claude/skills/` for local use. The longer-
+term goal: *"I have this device, set it up on my network"* — conversational
+device enrollment.
+
 ## Status
 
-Reads-only tracer: `hosts list`. Writes and deletes are a deliberate later
+Reads-only: `hosts list`. Writes and deletes are a deliberate later
 phase, gated behind confirmation prompts and host-level permission rules.
 
 ## License
