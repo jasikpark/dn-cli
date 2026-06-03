@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json::Value;
+use unicode_width::UnicodeWidthStr;
 
 use crate::api::{ApiError, Client};
 use crate::config::Config;
@@ -104,10 +105,14 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    for row in rows {
-        let (id, name, ip) = host_fields(row);
-        println!("{id}\t{name}\t{ip}");
-    }
+    let table_rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            let (id, name, ip) = host_fields(row);
+            vec![id.to_string(), name.to_string(), ip]
+        })
+        .collect();
+    print!("{}", render_table(&["ID", "NAME", "IP ADDRESSES"], &table_rows));
 
     if let Some(total) = res
         .get("metadata")
@@ -118,6 +123,48 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Render rows as a left-aligned column table with a header row, padding each
+/// column to its widest cell. Columns are separated by two spaces; the final
+/// column is never padded (no trailing whitespace).
+///
+/// Widths are measured in terminal display columns via `unicode-width`, so
+/// wide glyphs (emoji, CJK) and combining marks align correctly — a host named
+/// `caleb-macbook-pro 💻` lines up with its plain-ASCII neighbours. Generic
+/// over column count so future list commands (networks, roles, …) can reuse it.
+fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    let mut widths: Vec<usize> = headers.iter().map(|h| h.width()).collect();
+    for row in rows {
+        for (i, cell) in row.iter().enumerate() {
+            if let Some(w) = widths.get_mut(i) {
+                *w = (*w).max(cell.as_str().width());
+            }
+        }
+    }
+
+    let mut out = String::new();
+    push_row(&mut out, headers, &widths);
+    for row in rows {
+        let cells: Vec<&str> = row.iter().map(String::as_str).collect();
+        push_row(&mut out, &cells, &widths);
+    }
+    out
+}
+
+/// Append one padded row (newline-terminated) to `out`. The last cell is
+/// emitted without trailing padding.
+fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
+    let last = cells.len().saturating_sub(1);
+    for (i, &cell) in cells.iter().enumerate() {
+        out.push_str(cell);
+        if i != last {
+            let pad = widths.get(i).copied().unwrap_or(0).saturating_sub(cell.width());
+            out.push_str(&" ".repeat(pad));
+            out.push_str("  ");
+        }
+    }
+    out.push('\n');
 }
 
 /// The three columns the human host table renders. `id` and `name` fall back
@@ -167,6 +214,43 @@ mod tests {
         assert_eq!(
             host_fields(&row),
             ("host-3", "db", "10.0.0.2, fd00::2".to_string())
+        );
+    }
+
+    #[test]
+    fn render_table_aligns_columns_no_trailing_space() {
+        let rows = vec![
+            vec!["host-1".to_string(), "web".to_string(), "10.0.0.1".to_string()],
+            vec!["h2".to_string(), "longer-name".to_string(), "10.0.0.2".to_string()],
+        ];
+        let out = render_table(&["ID", "NAME", "IP"], &rows);
+        assert_eq!(
+            out,
+            "ID      NAME         IP\n\
+             host-1  web          10.0.0.1\n\
+             h2      longer-name  10.0.0.2\n"
+        );
+        // Last column is never padded.
+        assert!(out.lines().all(|l| !l.ends_with(' ')));
+    }
+
+    #[test]
+    fn render_table_aligns_wide_glyphs_by_display_width() {
+        // 💻 is one char but two display columns; a naive char/byte count would
+        // misalign the row after it. The final column must start at the same
+        // *display* offset on every line.
+        let rows = vec![
+            vec!["a".to_string(), "laptop 💻".to_string(), "x".to_string()],
+            vec!["b".to_string(), "pc".to_string(), "y".to_string()],
+        ];
+        let out = render_table(&["ID", "NAME", "C"], &rows);
+        let last_col_offsets: Vec<usize> = out
+            .lines()
+            .map(|line| line.width() - 1) // every last cell here is 1 column wide
+            .collect();
+        assert!(
+            last_col_offsets.windows(2).all(|w| w[0] == w[1]),
+            "last column misaligned across rows: {last_col_offsets:?}"
         );
     }
 }
