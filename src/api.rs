@@ -169,7 +169,8 @@ impl Client {
         Err(ApiError::from_response(status.as_u16(), &body, request_id).into())
     }
 
-    /// List every host, following cursor pagination to completion.
+    /// List every host (v2 endpoint — dual-stack `ipAddresses`), following
+    /// cursor pagination to completion.
     ///
     /// The Defined API returns one page per call (`{ data, metadata }`); an
     /// agent consuming a single page would silently see only the first slice,
@@ -186,8 +187,8 @@ impl Client {
 
         loop {
             let page = match &cursor {
-                Some(c) => self.get_with_query("/v1/hosts", &[("cursor", c)])?,
-                None => self.get("/v1/hosts")?,
+                Some(c) => self.get_with_query("/v2/hosts", &[("cursor", c)])?,
+                None => self.get("/v2/hosts")?,
             };
 
             if let Some(rows) = page.get("data").and_then(Value::as_array) {

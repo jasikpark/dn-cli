@@ -120,11 +120,23 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The three columns the human host table renders, each falling back to an
-/// empty string when the field is absent or not a string.
-fn host_fields(row: &Value) -> (&str, &str, &str) {
+/// The three columns the human host table renders. `id` and `name` fall back
+/// to an empty string when absent or non-string; the IP column joins the v2
+/// `ipAddresses` array (dual-stack: IPv4 and/or IPv6) with ", ".
+fn host_fields(row: &Value) -> (&str, &str, String) {
     let field = |key| row.get(key).and_then(Value::as_str).unwrap_or_default();
-    (field("id"), field("name"), field("ipAddress"))
+    let ips = row
+        .get("ipAddresses")
+        .and_then(Value::as_array)
+        .map(|addrs| {
+            addrs
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    (field("id"), field("name"), ips)
 }
 
 #[cfg(test)]
@@ -134,14 +146,27 @@ mod tests {
 
     #[test]
     fn host_fields_extracts_present_columns() {
-        let row = json!({"id": "host-1", "name": "web", "ipAddress": "10.0.0.1"});
-        assert_eq!(host_fields(&row), ("host-1", "web", "10.0.0.1"));
+        // Dual-stack: v2 returns an ipAddresses array (IPv4 + IPv6).
+        let row = json!({"id": "host-1", "name": "web", "ipAddresses": ["10.0.0.1", "fd00::1"]});
+        assert_eq!(
+            host_fields(&row),
+            ("host-1", "web", "10.0.0.1, fd00::1".to_string())
+        );
     }
 
     #[test]
     fn host_fields_defaults_missing_or_wrong_type() {
-        // Missing name, and an ipAddress that isn't a string.
-        let row = json!({"id": "host-2", "ipAddress": 42});
-        assert_eq!(host_fields(&row), ("host-2", "", ""));
+        // Missing name, and ipAddresses that isn't an array of strings.
+        let row = json!({"id": "host-2", "ipAddresses": 42});
+        assert_eq!(host_fields(&row), ("host-2", "", String::new()));
+    }
+
+    #[test]
+    fn host_fields_skips_non_string_ip_entries() {
+        let row = json!({"id": "host-3", "name": "db", "ipAddresses": ["10.0.0.2", 7, "fd00::2"]});
+        assert_eq!(
+            host_fields(&row),
+            ("host-3", "db", "10.0.0.2, fd00::2".to_string())
+        );
     }
 }
