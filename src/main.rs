@@ -11,11 +11,7 @@ use crate::api::{ApiError, Client};
 use crate::config::Config;
 
 #[derive(Parser)]
-#[command(
-    name = "dn",
-    version,
-    about = "CLI for the Defined Networking API"
-)]
+#[command(name = "dn", version, about = "CLI for the Defined Networking API")]
 struct Cli {
     /// Output machine-readable JSON (including errors) instead of human tables
     #[arg(long, global = true)]
@@ -109,12 +105,7 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
     }
 
     for row in rows {
-        let id = row.get("id").and_then(Value::as_str).unwrap_or_default();
-        let name = row.get("name").and_then(Value::as_str).unwrap_or_default();
-        let ip = row
-            .get("ipAddress")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let (id, name, ip) = host_fields(row);
         println!("{id}\t{name}\t{ip}");
     }
 
@@ -127,4 +118,30 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// The three columns the human host table renders, each falling back to an
+/// empty string when the field is absent or not a string.
+fn host_fields(row: &Value) -> (&str, &str, &str) {
+    let field = |key| row.get(key).and_then(Value::as_str).unwrap_or_default();
+    (field("id"), field("name"), field("ipAddress"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn host_fields_extracts_present_columns() {
+        let row = json!({"id": "host-1", "name": "web", "ipAddress": "10.0.0.1"});
+        assert_eq!(host_fields(&row), ("host-1", "web", "10.0.0.1"));
+    }
+
+    #[test]
+    fn host_fields_defaults_missing_or_wrong_type() {
+        // Missing name, and an ipAddress that isn't a string.
+        let row = json!({"id": "host-2", "ipAddress": 42});
+        assert_eq!(host_fields(&row), ("host-2", "", ""));
+    }
 }
