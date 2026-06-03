@@ -15,20 +15,32 @@ Designed to be driven two ways:
 
 `dn` reads `DEFINED_API_KEY` from the environment and never persists it. Inject
 it per-invocation with 1Password so the secret lives only for the lifetime of a
-single command:
+single command. `op run` resolves a 1Password *secret reference* mapped to that
+variable name — bare `op run -- dn ...` won't inject anything on its own. Map it
+once with an env file:
 
 ```bash
-op run -- dn hosts list
+cp .env.example .env          # set DEFINED_API_KEY to your op:// reference
+op run --env-file=.env -- dn hosts list
 ```
 
-Override the base URL with `DEFINED_API_URL` (defaults to `https://api.defined.net`).
+`.env` is gitignored and holds only the reference (`op://vault/item/field`),
+never the secret value. Override the base URL with `DEFINED_API_URL` (defaults
+to `https://api.defined.net`).
 
 ## Develop
 
+With [`just`](https://github.com/casey/just) (wraps `op run` + `cargo`):
+
 ```bash
-cargo run -- hosts list --json
+just run hosts list --json
+```
+
+Or directly:
+
+```bash
+op run --env-file=.env -- cargo run -- hosts list --json
 cargo build --release
-op run -- ./target/release/dn hosts list
 ```
 
 ## Status
