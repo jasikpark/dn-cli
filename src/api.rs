@@ -212,10 +212,12 @@ impl Client {
 /// Pull the next-page cursor out of a list response's `metadata`, or `None`
 /// when there are no more pages.
 ///
-/// Only advances when the server says `hasNextPage` *and* hands back a
-/// non-empty cursor, so a missing/false flag stops the walk cleanly. Accepts
-/// `nextCursor` as an alias for `cursor` as cheap insurance against drift in
-/// the exact field name.
+/// Per the Defined API's shared `PaginationMetadata`, the next-page cursor
+/// comes back as `nextCursor` and is accompanied by a `hasNextPage` flag
+/// (both present whether or not `includeCounts` was requested). We only
+/// advance when `hasNextPage` is true *and* a non-empty cursor is present, so
+/// a missing/false flag stops the walk cleanly. `cursor` is accepted as a
+/// fallback purely as insurance against field-name drift.
 fn next_cursor(metadata: Option<&Value>) -> Option<String> {
     let metadata = metadata?;
     if !metadata
@@ -227,8 +229,8 @@ fn next_cursor(metadata: Option<&Value>) -> Option<String> {
     }
 
     metadata
-        .get("cursor")
-        .or_else(|| metadata.get("nextCursor"))
+        .get("nextCursor")
+        .or_else(|| metadata.get("cursor"))
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
@@ -296,24 +298,25 @@ mod tests {
 
     #[test]
     fn next_cursor_advances_when_more_pages() {
-        let md = json!({"hasNextPage": true, "cursor": "abc"});
+        // Canonical shape from the API's PaginationMetadata.
+        let md = json!({"hasNextPage": true, "hasPrevPage": true, "nextCursor": "abc"});
         assert_eq!(next_cursor(Some(&md)).as_deref(), Some("abc"));
     }
 
     #[test]
-    fn next_cursor_accepts_next_cursor_alias() {
-        let md = json!({"hasNextPage": true, "nextCursor": "xyz"});
+    fn next_cursor_accepts_cursor_fallback() {
+        let md = json!({"hasNextPage": true, "cursor": "xyz"});
         assert_eq!(next_cursor(Some(&md)).as_deref(), Some("xyz"));
     }
 
     #[test]
     fn next_cursor_stops_on_last_page() {
-        assert!(next_cursor(Some(&json!({"hasNextPage": false, "cursor": "abc"}))).is_none());
+        assert!(next_cursor(Some(&json!({"hasNextPage": false, "nextCursor": "abc"}))).is_none());
         // Missing flag is treated as "no more pages".
-        assert!(next_cursor(Some(&json!({"cursor": "abc"}))).is_none());
+        assert!(next_cursor(Some(&json!({"nextCursor": "abc"}))).is_none());
         // Flag set but no usable cursor -> stop rather than re-request page one.
         assert!(next_cursor(Some(&json!({"hasNextPage": true}))).is_none());
-        assert!(next_cursor(Some(&json!({"hasNextPage": true, "cursor": ""}))).is_none());
+        assert!(next_cursor(Some(&json!({"hasNextPage": true, "nextCursor": ""}))).is_none());
         assert!(next_cursor(None).is_none());
     }
 }
