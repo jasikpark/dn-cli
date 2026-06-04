@@ -63,9 +63,19 @@ device enrollment.
 
 ## Status
 
-Reads-only: `hosts list`, plus `auth login/status/logout`. Writes and deletes
-are a deliberate later phase, gated behind confirmation prompts and host-level
-permission rules.
+- Reads: `hosts list`
+- Auth: `auth login` / `auth status` / `auth logout` — stores a 1Password
+  secret reference (never the key) in `~/.config/dn/config.json` and resolves
+  it per call with `op read`.
+- Writes: `hosts create` (host / lighthouse / relay) — wraps the
+  `POST /v2/host-and-enrollment-code` one-shot endpoint, so the OTP comes
+  back in the same response and the human view prints the `dnclient enroll`
+  command to copy. Network is auto-picked when the account has exactly one.
+- Coming next: `roles create` and `roles add-rule` — the default role denies
+  all traffic, so newly enrolled hosts share a network but can't talk to
+  each other until a permissive role lands.
+- Deletes are deliberately deferred until confirmation prompts and
+  host-level permission rules land.
 
 ## License
 

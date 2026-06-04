@@ -169,6 +169,39 @@ impl Client {
         Err(ApiError::from_response(status.as_u16(), &body, request_id).into())
     }
 
+    /// POST a JSON body to a versioned path and return the parsed JSON
+    /// response. Mirrors `get`'s error handling: non-2xx is bubbled as an
+    /// `ApiError` carrying the typed `{code, message, path}` entries so the
+    /// `--json` envelope can serialize them directly.
+    pub fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
+        let url = format!("{}{}", self.config.api_url, path);
+        let auth = format!("Bearer {}", self.config.api_key);
+
+        let mut res = self
+            .agent
+            .post(&url)
+            .header("Authorization", &auth)
+            .send_json(body)
+            .context("request to Defined API failed")?;
+
+        let status = res.status();
+        let request_id = res
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+
+        if status.is_success() {
+            return res
+                .body_mut()
+                .read_json::<Value>()
+                .context("failed to parse Defined API response as JSON");
+        }
+
+        let body = res.body_mut().read_to_string().unwrap_or_default();
+        Err(ApiError::from_response(status.as_u16(), &body, request_id).into())
+    }
+
     /// List every host (v2 endpoint — dual-stack `ipAddresses`), following
     /// cursor pagination to completion.
     ///
@@ -215,6 +248,23 @@ impl Client {
     pub fn verify_key(&self) -> Result<()> {
         self.get_with_query("/v2/hosts", &[("pageSize", "1")])
             .map(|_| ())
+    }
+
+    /// Fetch the first page of networks. Used by `hosts create` to
+    /// auto-pick when the account has exactly one (the common case at signup)
+    /// — paginating to completion isn't worth it since accounts with enough
+    /// networks to exceed one page will pass `--network` explicitly anyway.
+    pub fn list_networks(&self) -> Result<Value> {
+        self.get("/v2/networks")
+    }
+
+    /// Create a host (or lighthouse / relay) AND its enrollment code in one
+    /// transaction. Wraps `POST /v2/host-and-enrollment-code` — the coupled
+    /// endpoint exists because the OTP-issuing surface is the natural pair of
+    /// host creation, so callers don't have to chase a second request and
+    /// reason about partial-failure cleanup.
+    pub fn create_host_with_enrollment(&self, body: &Value) -> Result<Value> {
+        self.post_json("/v2/host-and-enrollment-code", body)
     }
 }
 
