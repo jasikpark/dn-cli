@@ -1,0 +1,42 @@
+name: Tag Release
+
+# When the release-preview PR (head_ref = 'release') merges into main, push
+# the vX.Y.Z tag. cargo-dist's release.yml then fires on the tag push to
+# build all platforms, attach archives + installers, and publish
+# @jasikpark/dn-cli.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    if: ${{ github.event.pull_request.merged && github.head_ref == 'release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # PAT needed: tags pushed with GITHUB_TOKEN don't fire downstream
+          # workflows, so release.yml wouldn't run.
+          token: ${{ secrets.PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Read version from Cargo.toml
+        id: v
+        run: |
+          version=$(awk -F\" '/^version = / { print $2; exit }' Cargo.toml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and push
+        run: |
+          git tag "v${{ steps.v.outputs.version }}"
+          git push origin "v${{ steps.v.outputs.version }}"

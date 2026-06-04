@@ -1,0 +1,52 @@
+# Release automation. On every push to main, if there are unreleased
+# conventional commits, Knope opens (or updates) a "chore: prepare release X"
+# PR that bumps Cargo.toml + writes CHANGELOG.md. Merging that PR runs
+# tag-release.yml, which pushes vX -- cargo-dist's release.yml then fires on
+# the tag push and handles the build + npm publish + GitHub Release.
+
+[package]
+versioned_files = ["Cargo.toml"]
+changelog = "CHANGELOG.md"
+
+[github]
+owner = "jasikpark"
+repo = "dn-cli"
+
+# Opens or updates the release-preview PR. Runs on every push to main.
+[[workflows]]
+name = "prepare-release"
+
+[[workflows.steps]]
+type = "Command"
+command = "git switch -c release"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+
+[[workflows.steps]]
+type = "Command"
+command = "git commit -m \"chore: prepare release $version\""
+
+[[workflows.steps]]
+type = "Command"
+command = "git push --force --set-upstream origin release"
+
+[[workflows.steps]]
+type = "CreatePullRequest"
+base = "main"
+
+[workflows.steps.title]
+template = "chore: prepare release $version"
+
+[workflows.steps.body]
+template = "Merging this PR pushes the `v$version` tag, which fires cargo-dist's release pipeline (build all platforms, attach archives + installers, publish @jasikpark/dn-cli).\n\n$changelog"
+
+# Detector used by the prepare-release CI step. A --dry-run prints nothing and
+# exits 0 when there's nothing to release (allow_empty), so empty pushes can
+# be gated out without reimplementing knope's logic in shell.
+[[workflows]]
+name = "check-release"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+allow_empty = true

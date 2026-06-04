@@ -1,0 +1,58 @@
+name: Prepare Release
+
+# On every push to main, if there are unreleased conventional commits, open
+# (or update) a "chore: prepare release X" PR that bumps Cargo.toml and
+# writes CHANGELOG.md. Merging that PR triggers tag-release.yml.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-release:
+    # Don't react to the release PR's own merge (avoids a re-release loop).
+    # Must be `contains`, not `startsWith`: a merge commit reads
+    # "Merge pull request #N from owner/release\n\nchore: prepare release X",
+    # so the marker is in the body, not at the start.
+    if: "${{ !contains(github.event.head_commit.message, 'chore: prepare release') }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Push the release branch as the PAT user. The default GITHUB_TOKEN
+          # can't create PRs (even with the repo setting enabled), and
+          # branches it pushes don't trigger downstream workflows; a PAT does
+          # both.
+          token: ${{ secrets.PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - uses: knope-dev/action@v2.1.2
+        with:
+          version: 0.23.0
+
+      # Ask knope (via its own conventional-commit logic, not a shell
+      # reimplementation) whether there's anything to release. The
+      # `check-release` workflow is just a PrepareRelease step with
+      # `allow_empty = true`, so a dry run prints nothing and exits 0 when
+      # there's nothing to release. Gating the real run on this lets us drop
+      # continue-on-error: empty pushes are skipped, real failures stay red.
+      - name: Check for a pending release
+        id: check
+        run: |
+          if [ -n "$(knope check-release --dry-run)" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open release PR
+        if: steps.check.outputs.release == 'true'
+        run: knope prepare-release --verbose
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT }}
