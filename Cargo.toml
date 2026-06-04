@@ -2,6 +2,13 @@
 name = "dn-cli"
 version = "0.1.0"
 edition = "2024"
+description = "CLI for the Defined Networking API"
+repository = "https://github.com/jasikpark/dn-cli"
+homepage = "https://github.com/jasikpark/dn-cli"
+readme = "README.md"
+license-file = "LICENSE.md"
+keywords = ["defined-networking", "nebula", "vpn", "cli"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "dn"
@@ -14,3 +21,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 unicode-width = "0.2.2"
 ureq = { version = "3.3.0", features = ["json"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
