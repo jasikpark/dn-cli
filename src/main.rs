@@ -11,7 +11,10 @@ use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
 use crate::api::{ApiError, Client};
-use crate::config::{Config, FileConfig, KeySource, config_path, op_read, validate_op_ref};
+use crate::config::{
+    Config, FileConfig, KeySource, api_key_env_is_set, api_url, config_path, op_read,
+    validate_op_ref,
+};
 
 #[derive(Parser)]
 #[command(name = "dn", version, about = "CLI for the Defined Networking API")]
@@ -112,27 +115,60 @@ fn auth_login(args: &AuthLoginArgs, json: bool) -> anyhow::Result<()> {
     };
     validate_op_ref(&reference)?;
 
-    let mut file = FileConfig::load()?;
+    let (mut file, corrupt) = FileConfig::load_or_reset()?;
+    if let Some(err) = corrupt {
+        eprintln!("warning: replacing unreadable config ({err:#})");
+    }
     if !args.no_verify {
         let key = op_read(&reference)?;
         Client::new(Config::with_key(key, &file))
-            .get("/v2/networks?pageSize=1")
-            .context("the key resolved but the API rejected it")?;
+            .verify_key()
+            .map_err(label_verify_error)?;
     }
     file.api_key_ref = Some(reference.clone());
     let path = file.save()?;
+    let env_override = warn_env_override();
 
     if json {
-        println!(
-            "{}",
-            json!({ "ok": true, "config_path": path, "api_key_ref": reference })
-        );
+        print_json(&json!({
+            "ok": true,
+            "config_path": path,
+            "api_key_ref": reference,
+            "env_override": env_override,
+        }))?;
     } else {
         println!(
             "Saved reference to {}. `dn` will resolve it with `op read` on every call.",
             path.display()
         );
     }
+    Ok(())
+}
+
+/// Only an API response is evidence the key itself was rejected; anything
+/// else (offline, bad `DEFINED_API_URL`) is a reachability problem.
+fn label_verify_error(err: anyhow::Error) -> anyhow::Error {
+    if err.downcast_ref::<ApiError>().is_some() {
+        err.context("the key resolved but the API rejected it")
+    } else {
+        err.context("could not reach the API to verify the key")
+    }
+}
+
+/// The environment shadows the file, so a login/logout under an exported
+/// `DEFINED_API_KEY` changes nothing for the next call. Say so.
+fn warn_env_override() -> bool {
+    let set = api_key_env_is_set();
+    if set {
+        eprintln!(
+            "warning: DEFINED_API_KEY is set in this environment and takes precedence over the stored reference."
+        );
+    }
+    set
+}
+
+fn print_json(value: &Value) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
 
@@ -159,59 +195,87 @@ fn prompt_for_reference(json: bool) -> anyhow::Result<String> {
     Ok(line.to_string())
 }
 
+/// Read-only introspection: never resolves a secret and never fails on a
+/// misconfigured key — a bad reference or blank env var is reported as
+/// `source: "invalid"` so callers can branch on it.
 fn auth_status(json: bool) -> anyhow::Result<()> {
-    let source = KeySource::detect()?;
     let file = FileConfig::load()?;
     let path = config_path()?;
-    let api_url = Config::with_key(String::new(), &file).api_url;
-    let label = source.as_ref().map_or("none", KeySource::label);
-    let reference = source.as_ref().and_then(KeySource::reference);
+    let api_url = api_url(&file);
+    let source = KeySource::detect(&file);
+    let (label, reference, message) = match &source {
+        Ok(Some(s)) => (s.label(), s.reference(), None),
+        Ok(None) => ("none", None, None),
+        Err(e) => ("invalid", None, Some(format!("{e:#}"))),
+    };
 
     if json {
-        println!(
-            "{}",
-            json!({
-                "source": label,
-                "api_key_ref": reference,
-                "config_path": path,
-                "api_url": api_url,
-            })
-        );
-        return Ok(());
+        return print_json(&json!({
+            "source": label,
+            "api_key_ref": reference,
+            "message": message,
+            "config_path": path,
+            "api_url": api_url,
+        }));
     }
 
     match &source {
-        None => println!("No API key configured. Run `dn auth login` or set DEFINED_API_KEY."),
-        Some(KeySource::Env(_)) => println!("API key: DEFINED_API_KEY (raw value in environment)"),
-        Some(KeySource::EnvRef(r)) => {
+        Ok(None) => {
+            println!("No API key configured. Run `dn auth login` or set DEFINED_API_KEY.")
+        }
+        Ok(Some(KeySource::Env(_))) => {
+            println!("API key: DEFINED_API_KEY (raw value in environment)")
+        }
+        Ok(Some(KeySource::EnvRef(r))) => {
             println!("API key: DEFINED_API_KEY -> {r} (resolved via op read)")
         }
-        Some(KeySource::FileRef(r)) => println!(
+        Ok(Some(KeySource::FileRef(r))) => println!(
             "API key: {r} (from {}, resolved via op read)",
             path.display()
         ),
+        Err(e) => println!("API key: invalid — {e:#}"),
     }
     println!("API URL: {api_url}");
     Ok(())
 }
 
 fn auth_logout(json: bool) -> anyhow::Result<()> {
-    let mut file = FileConfig::load()?;
-    let removed = file.api_key_ref.take();
-    let path = file.save()?;
+    let (mut file, corrupt) = FileConfig::load_or_reset()?;
+    let path = config_path()?;
+    if let Some(err) = corrupt {
+        eprintln!("warning: removing unreadable config ({err:#})");
+    }
+    let removed = file.api_key_ref.take().is_some();
+    let file_deleted = if file.is_empty() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => {
+                return Err(e).with_context(|| format!("failed to remove {}", path.display()));
+            }
+        }
+    } else {
+        file.save()?;
+        false
+    };
+    let env_override = warn_env_override();
 
     if json {
-        println!(
-            "{}",
-            json!({ "ok": true, "removed": removed.is_some(), "config_path": path })
-        );
-    } else if removed.is_some() {
-        println!(
+        return print_json(&json!({
+            "ok": true,
+            "removed": removed,
+            "file_deleted": file_deleted,
+            "config_path": path,
+            "env_override": env_override,
+        }));
+    }
+    match (removed, file_deleted) {
+        (true, true) => println!("Removed {}.", path.display()),
+        (true, false) => println!(
             "Removed the stored secret reference from {}.",
             path.display()
-        );
-    } else {
-        println!("No stored secret reference to remove.");
+        ),
+        (false, _) => println!("No stored secret reference to remove."),
     }
     Ok(())
 }

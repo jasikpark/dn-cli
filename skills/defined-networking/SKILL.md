@@ -20,7 +20,9 @@ anything else:
 dn auth status --json
 ```
 
-`source` is `file`, `env`, `env-ref`, or `none`. On `none`, stop and ask the
+`source` is `file`, `env`, `env-ref`, `none`, or `invalid` (a malformed `op://`
+reference or a blank `DEFINED_API_KEY`; `message` says which — surface it to
+the user). On `none`, stop and ask the
 user to run `dn auth login` themselves — it needs their 1Password reference and
 an interactive terminal; do not try to prompt for it or pass `--ref` on their
 behalf. Every call that resolves an `op://` reference may pop a 1Password unlock

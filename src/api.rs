@@ -180,6 +180,14 @@ impl Client {
     ///
     /// TODO(write-phase): add ?networkID= filtering once the exact query
     /// param is confirmed against the api repo.
+    /// Prove a key works with the least privilege the CLI relies on: a
+    /// one-item `GET /v2/hosts` needs only `hosts:list`, so a key scoped
+    /// exactly as the README suggests still passes.
+    pub fn verify_key(&self) -> Result<()> {
+        self.get_with_query("/v2/hosts", &[("pageSize", "1")])
+            .map(|_| ())
+    }
+
     pub fn list_hosts(&self) -> Result<Value> {
         let mut data: Vec<Value> = Vec::new();
         let mut metadata = Value::Null;
