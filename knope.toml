@@ -5,7 +5,7 @@
 # the tag push and handles the build + npm publish + GitHub Release.
 
 [package]
-versioned_files = ["Cargo.toml"]
+versioned_files = ["Cargo.toml", "Cargo.lock"]
 changelog = "CHANGELOG.md"
 
 [github]
