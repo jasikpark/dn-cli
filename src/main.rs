@@ -275,7 +275,8 @@ fn auth_logout(json: bool) -> anyhow::Result<()> {
             "Removed the stored secret reference from {}.",
             path.display()
         ),
-        (false, _) => println!("No stored secret reference to remove."),
+        (false, true) => println!("Removed unreadable config {}.", path.display()),
+        (false, false) => println!("No stored secret reference to remove."),
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
 use std::fmt;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -50,17 +50,15 @@ impl FileConfig {
         }
     }
 
-    /// Like [`load`](Self::load), but an unparsable file yields an empty config
-    /// plus the parse error, so commands that are about to overwrite or remove
-    /// the file can proceed instead of being wedged by their own corrupt state.
+    /// Like [`load`](Self::load), but an unreadable or unparsable file yields an
+    /// empty config plus the error, so commands that are about to overwrite or
+    /// remove the file can proceed instead of being wedged by their own corrupt
+    /// state.
     pub fn load_or_reset() -> Result<(Self, Option<anyhow::Error>)> {
-        match Self::load() {
-            Ok(cfg) => Ok((cfg, None)),
-            Err(e) if e.downcast_ref::<serde_json::Error>().is_some() => {
-                Ok((Self::default(), Some(e)))
-            }
-            Err(e) => Err(e),
-        }
+        Ok(match Self::load() {
+            Ok(cfg) => (cfg, None),
+            Err(e) => (Self::default(), Some(e)),
+        })
     }
 
     /// Write the config (pretty JSON, owner-only on unix, atomic replace),
@@ -79,31 +77,61 @@ impl FileConfig {
     }
 }
 
-/// Write via a freshly created `<path>.tmp` and rename over the target. A
-/// new file is the only place `mode` applies (open(2) ignores it for an
-/// existing inode), and the rename means a crash mid-write can never leave a
+/// Write to a per-process sibling temp file and rename it over the target. The
+/// temp name carries this process's pid and is opened `create_new` (O_EXCL), so
+/// two `dn` processes can never write the same temp and interleave, and the
+/// open refuses to follow a symlink planted at the temp path. A freshly created
+/// file is also the only place `mode` applies — open(2) ignores it for an
+/// existing inode — so 0600 is guaranteed rather than inherited. The rename is
+/// atomic within the directory, so a crash mid-write can never leave a
 /// truncated config behind.
+///
+/// The target is canonicalized first because dotfile-managed configs are often
+/// symlinks (`~/.config/dn/config.json` -> `~/dotfiles/dn.json`), and the write
+/// has to land on the file the link points at instead of replacing the link.
 fn write_private(path: &Path, text: &str) -> Result<()> {
     use std::io::Write;
 
-    let tmp = path.with_extension("json.tmp");
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let name = target
+        .file_name()
+        .ok_or_else(|| anyhow!("{} is not a file path", target.display()))?;
+    let tmp = target.with_file_name(format!(
+        "{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+
     let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut file = opts
-        .open(&tmp)
-        .with_context(|| format!("failed to open {}", tmp.display()))?;
-    file.write_all(text.as_bytes())
-        .and_then(|()| file.sync_all())
-        .with_context(|| format!("failed to write {}", tmp.display()))?;
+    let mut file = match opts.open(&tmp) {
+        Ok(file) => file,
+        // A temp this pid's predecessor left behind when it crashed mid-write.
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            fs::remove_file(&tmp)
+                .with_context(|| format!("failed to remove stale {}", tmp.display()))?;
+            opts.open(&tmp)
+                .with_context(|| format!("failed to open {}", tmp.display()))?
+        }
+        Err(e) => return Err(e).with_context(|| format!("failed to open {}", tmp.display())),
+    };
+
+    let written = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all());
     drop(file);
-    if let Err(e) = fs::rename(&tmp, path) {
+    if let Err(e) = written {
         let _ = fs::remove_file(&tmp);
-        return Err(e).with_context(|| format!("failed to replace {}", path.display()));
+        return Err(e).with_context(|| format!("failed to write {}", tmp.display()));
+    }
+    if let Err(e) = fs::rename(&tmp, &target) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("failed to replace {}", target.display()));
     }
     Ok(())
 }
@@ -232,8 +260,6 @@ pub fn resolve_key_source(
     Ok(None)
 }
 
-/// A 1Password secret reference is `op://vault/item/field` or
-/// `op://vault/item/section/field`; every segment must be non-empty.
 /// Clean up a pasted reference. 1Password's "Copy Secret Reference" wraps the
 /// value in double quotes when an item or section name contains spaces
 /// (`"op://Personal/DN production API Key/credential"`), so the shell-quoted
@@ -247,27 +273,49 @@ pub fn normalize_op_ref(s: &str) -> String {
     unquoted.trim().to_string()
 }
 
+/// A 1Password secret reference is `op://vault/item/field` or
+/// `op://vault/item/section/field`; every segment must be non-empty.
 pub fn validate_op_ref(s: &str) -> Result<()> {
     let s = s.trim();
     let Some(path) = s.strip_prefix(OP_SCHEME) else {
         bail!("expected a 1Password secret reference starting with {OP_SCHEME}, got {s:?}");
     };
-    // A trailing `?attribute=...` query (e.g. `?attribute=otp`) is part of the
-    // field segment's syntax, not of its name.
-    let path = path.split('?').next().unwrap_or(path);
+    // A trailing query selects an attribute of the field rather than naming it,
+    // and `op` takes exactly one `key=value` pair there (`?attribute=otp`,
+    // `?ssh-format=openssh`).
+    let (path, query) = match path.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (path, None),
+    };
+    if let Some(query) = query {
+        let well_formed = query.split_once('=').is_some_and(|(key, value)| {
+            !key.is_empty()
+                && !value.is_empty()
+                && [key, value].iter().all(|part| {
+                    part.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+                })
+        });
+        if !well_formed {
+            bail!(
+                "expected a single ?attribute=value query in {s} (`?attribute=otp` is the common form), got {query:?}"
+            );
+        }
+    }
     let segments: Vec<&str> = path.split('/').collect();
     if !(3..=4).contains(&segments.len()) || segments.iter().any(|seg| seg.trim().is_empty()) {
         bail!(
             "expected {OP_SCHEME}vault/item/field (optionally {OP_SCHEME}vault/item/section/field), got {s:?}"
         );
     }
-    // 1Password only resolves names made of alphanumerics, `-`, `_`, `.` and
-    // whitespace; a vault/item/field whose name has anything else (an `@` in
-    // an email-style title, a `:`) must be referenced by its ID instead.
+    // `op` accepts names made of alphanumerics, `-`, `_`, `.`, `=` and ASCII
+    // spaces; a vault/item/field whose name has anything else (an `@` in an
+    // email-style title, a `:`) must be referenced by its ID instead.
     for seg in &segments {
-        if let Some(bad) = seg.chars().find(|c| {
-            !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || c.is_whitespace())
-        }) {
+        if let Some(bad) = seg
+            .chars()
+            .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '=' | ' ')))
+        {
             bail!(
                 "1Password can't resolve {seg:?} in {s}: {bad:?} isn't allowed in a secret reference name.\n\
                  Use the item's ID instead — in 1Password, right-click the field \u{2192} Copy Secret Reference \
@@ -282,13 +330,21 @@ pub fn validate_op_ref(s: &str) -> Result<()> {
 /// per-invocation gate: `op` prompts for unlock (biometric or password) per
 /// its own session policy, so a stored reference alone grants nothing.
 ///
-/// stdin and stderr are inherited so `op` can prompt for a password and show
-/// its own "waiting for authorization" progress; only stdout is captured.
+/// stdin is always inherited so `op` can prompt for a password. stderr is
+/// inherited only when it is a terminal, where a human is there to read the
+/// prompt and the "waiting for authorization" progress; when it is redirected
+/// nobody is watching, so it is captured and folded into the error chain rather
+/// than lost. stdout is always captured — it carries the secret.
 pub fn op_read(reference: &str) -> Result<String> {
+    let stderr_is_terminal = std::io::stderr().is_terminal();
     let output = Command::new("op")
         .args(["read", "--no-newline", reference])
         .stdin(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stderr(if stderr_is_terminal {
+            Stdio::inherit()
+        } else {
+            Stdio::piped()
+        })
         .stdout(Stdio::piped())
         .output()
         .map_err(|e| match e.kind() {
@@ -303,7 +359,14 @@ pub fn op_read(reference: &str) -> Result<String> {
             .status
             .code()
             .map_or("signal".to_string(), |c| c.to_string());
-        bail!("`op read {reference}` failed (exit {code}); see op's output above");
+        if stderr_is_terminal {
+            bail!("`op read {reference}` failed (exit {code}); see op's output above");
+        }
+        let diag = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if diag.is_empty() {
+            bail!("`op read {reference}` failed (exit {code})");
+        }
+        return Err(anyhow!(diag).context(format!("`op read {reference}` failed (exit {code})")));
     }
     let key = String::from_utf8(output.stdout)
         .context("`op read` returned non-UTF-8 output")?
@@ -481,6 +544,118 @@ mod tests {
         let back: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
         assert_eq!(back, serde_json::json!({ "future_flag": true }));
+    }
+
+    /// A per-process scratch directory, so parallel tests never share one.
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("dn-cli-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The temp path [`write_private`] picks for a target in this process.
+    fn temp_sibling(target: &Path) -> PathBuf {
+        target.with_file_name(format!(
+            "{}.{}.tmp",
+            target.file_name().unwrap().to_string_lossy(),
+            std::process::id()
+        ))
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn write_private_leaves_no_temp_file_and_sets_mode() {
+        let dir = scratch_dir("write-private");
+        let target = dir.join("config.json");
+
+        write_private(&target, "{}\n").unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "{}\n");
+        let entries: Vec<PathBuf> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(entries, vec![target.clone()], "temp file left behind");
+        #[cfg(unix)]
+        assert_eq!(mode_of(&target), 0o600, "{:o}", mode_of(&target));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_private_replaces_a_preexisting_stale_temp() {
+        let dir = scratch_dir("stale-temp");
+        let target = dir.join("config.json");
+        let stale = temp_sibling(&target);
+        fs::write(&stale, "stale").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&stale, fs::Permissions::from_mode(0o666)).unwrap();
+        }
+
+        write_private(&target, "fresh\n").unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "fresh\n");
+        assert!(!stale.exists(), "stale temp survived the write");
+        #[cfg(unix)]
+        assert_eq!(mode_of(&target), 0o600, "{:o}", mode_of(&target));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn write_private_writes_through_a_symlinked_target() {
+        let dir = scratch_dir("symlinked-target");
+        let real = dir.join("dotfiles-dn.json");
+        fs::write(&real, "old\n").unwrap();
+        let link = dir.join("config.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        write_private(&link, "new\n").unwrap();
+
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the symlink was replaced by a regular file"
+        );
+        assert_eq!(fs::read_to_string(&real).unwrap(), "new\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_op_ref_rejects_non_ascii_whitespace() {
+        assert!(validate_op_ref("op://v/i/a\u{00A0}b").is_err());
+        assert!(validate_op_ref("op://v/i/a\tb").is_err());
+        assert!(validate_op_ref("op://v/i/a\u{3000}b").is_err());
+        validate_op_ref("op://v/i/a b").unwrap();
+    }
+
+    #[test]
+    fn validate_op_ref_accepts_equals_in_names() {
+        validate_op_ref("op://v/i/f=g").unwrap();
+    }
+
+    #[test]
+    fn validate_op_ref_validates_query_suffix() {
+        validate_op_ref("op://v/i/f?attribute=otp").unwrap();
+        validate_op_ref("op://v/i/f?ssh-format=openssh").unwrap();
+        for bad in [
+            "op://v/i/f?",
+            "op://v/i/f?g",
+            "op://v/i/f?attribute",
+            "op://v/i/f?attribute=/x",
+            "op://v/i/f?attribute=otp&x=1",
+        ] {
+            assert!(validate_op_ref(bad).is_err(), "{bad} should be rejected");
+        }
     }
 
     #[test]
