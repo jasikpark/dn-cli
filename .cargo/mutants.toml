@@ -1,0 +1,11 @@
+# Every Client verb and endpoint wrapper is one ureq round-trip against
+# api.defined.net and nothing else, so only a live HTTP call can observe a
+# change to its body; Client::list_hosts is deliberately left in because its
+# pagination loop is real in-process logic.
+exclude_re = [
+    "replace Client::(get|get_with_query|post_json|delete|verify_key|list_networks|get_network|get_host|delete_host|create_host_with_enrollment) ->",
+]
+
+# CI builds and tests with --locked, so mutant builds resolve the same
+# lockfile instead of silently picking up a newer dependency.
+additional_cargo_args = ["--locked"]
