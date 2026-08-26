@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.1.3 (2026-08-26)
+
+### Features
+
+- create host / lighthouse / relay + enrollment in one shot
+- assign IPv4 by default on networks with an IPv4 prefix
+
+### Fixes
+
+- clearer --network permission error and --no-ipv4 help
+
 ## 0.1.2 (2026-08-26)
 
 ### Features
