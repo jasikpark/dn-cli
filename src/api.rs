@@ -258,6 +258,13 @@ impl Client {
         self.get("/v2/networks")
     }
 
+    /// Fetch one network. `hosts create --network <id>` needs its `cidrs` to
+    /// auto-assign an IPv4, since the API only does so when handed the
+    /// network's own IPv4 prefix.
+    pub fn get_network(&self, id: &str) -> Result<Value> {
+        self.get(&format!("/v2/networks/{id}"))
+    }
+
     /// Create a host (or lighthouse / relay) AND its enrollment code in one
     /// transaction. Wraps `POST /v2/host-and-enrollment-code` — the coupled
     /// endpoint exists because the OTP-issuing surface is the natural pair of

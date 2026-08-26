@@ -101,13 +101,17 @@ struct HostCreateArgs {
     /// exclusive with `--lighthouse`.
     #[arg(long)]
     relay: bool,
-    /// IPv4 address to assign. Omit on dual-stack networks to skip v4
-    /// auto-assign; required if the network is v4-only and no auto-assign
-    /// pool covers it.
-    #[arg(long)]
+    /// IPv4 address to assign, or the network's IPv4 CIDR to have the server
+    /// pick one inside it. When omitted, hosts on networks with an IPv4
+    /// prefix still get an auto-assigned IPv4: the CLI sends that prefix,
+    /// because the API otherwise creates v6-only hosts. See `--no-ipv4`.
+    #[arg(long, conflicts_with = "no_ipv4")]
     ipv4: Option<String>,
-    /// IPv6 address to assign. Auto-assigned by the server on v6-capable
-    /// networks if omitted.
+    /// Create a v6-only host: skip IPv4 assignment even when the network has
+    /// an IPv4 prefix.
+    #[arg(long)]
+    no_ipv4: bool,
+    /// IPv6 address to assign. The server auto-assigns one when omitted.
     #[arg(long)]
     ipv6: Option<String>,
     /// Static `ip:port` (or `hostname:port`) for lighthouses / relays.
@@ -412,15 +416,32 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
 }
 
 fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyhow::Result<()> {
-    let network_id = match &args.network {
-        Some(id) => id.clone(),
+    // Auto-assigning an IPv4 means sending the network's own IPv4 prefix, so
+    // the network is fetched unless the caller already settled IPv4 either way.
+    let wants_auto_ipv4 = args.ipv4.is_none() && !args.no_ipv4;
+    let (network_id, ipv4_cidr) = match &args.network {
+        Some(id) if !wants_auto_ipv4 => (id.clone(), None),
+        Some(id) => {
+            let network = client.get_network(id)?;
+            (id.clone(), network_ipv4_cidr(&network["data"]))
+        }
         None => {
             let networks = client.list_networks()?;
-            pick_network_id(&networks, None)?
+            let network = pick_network(&networks)?;
+            let id = network
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("network list response missing 'id' on the only entry"))?;
+            let cidr = if wants_auto_ipv4 {
+                network_ipv4_cidr(network)
+            } else {
+                None
+            };
+            (id.to_owned(), cidr)
         }
     };
 
-    let body = build_host_create_body(args, &network_id);
+    let body = build_host_create_body(args, &network_id, ipv4_cidr.as_deref());
     let res = client.create_host_with_enrollment(&body)?;
 
     if json {
@@ -455,20 +476,16 @@ fn validate_create_preflight(args: &HostCreateArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolve the network ID to use for a request: prefer an explicit override,
-/// else pick the account's only network. Returns a usefully-typed error when
-/// auto-pick is ambiguous (0 networks → tell user to create one; ≥2 → tell
-/// user to pass --network), so the caller doesn't have to know the shape of
-/// `GET /v2/networks` to recover.
-fn pick_network_id(networks: &Value, explicit: Option<&str>) -> anyhow::Result<String> {
-    if let Some(id) = explicit {
-        return Ok(id.to_string());
-    }
-    let empty: Vec<Value> = Vec::new();
+/// Pick the account's only network from a `GET /v2/networks` page. Returns a
+/// usefully-typed error when auto-pick is ambiguous (0 networks → tell user
+/// to create one; ≥2, or more pages → tell user to pass --network), so the
+/// caller doesn't have to know the shape of the response to recover.
+fn pick_network(networks: &Value) -> anyhow::Result<&Value> {
     let rows = networks
         .get("data")
         .and_then(Value::as_array)
-        .unwrap_or(&empty);
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
     let has_more = networks
         .get("metadata")
         .and_then(|m| m.get("hasNextPage"))
@@ -478,15 +495,28 @@ fn pick_network_id(networks: &Value, explicit: Option<&str>) -> anyhow::Result<S
         (0, _) => Err(anyhow!(
             "no networks found in this account — create one in the web client first"
         )),
-        (1, false) => rows[0]
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or_else(|| anyhow!("network list response missing 'id' on the only entry")),
+        (1, false) => Ok(&rows[0]),
         _ => Err(anyhow!(
             "multiple networks found — pass --network <id> to disambiguate"
         )),
     }
+}
+
+/// The network's IPv4 prefix from its `cidrs` list, or `None` on a v6-only
+/// network. Sent as an `ipAddresses` entry it makes the server auto-assign an
+/// IPv4 inside that prefix; the API honours only the network's exact prefix
+/// (sub-prefixes are rejected), so this is the one CIDR worth sending.
+fn network_ipv4_cidr(network: &Value) -> Option<String> {
+    network
+        .get("cidrs")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|cidr| {
+            cidr.split_once('/')
+                .is_some_and(|(addr, _)| addr.parse::<std::net::Ipv4Addr>().is_ok())
+        })
+        .map(str::to_owned)
 }
 
 /// Assemble the JSON body for `POST /v2/host-and-enrollment-code` from parsed
@@ -494,7 +524,15 @@ fn pick_network_id(networks: &Value, explicit: Option<&str>) -> anyhow::Result<S
 /// hitting the wire. Optional fields are omitted entirely when unset rather
 /// than sent as null — the API treats absent and null the same, but a tighter
 /// payload makes API logs easier to diff later.
-fn build_host_create_body(args: &HostCreateArgs, network_id: &str) -> Value {
+///
+/// `ipv4_auto_cidr` is the network's IPv4 prefix, sent in place of an explicit
+/// `--ipv4` so the server picks an address inside it. Without either, the
+/// server creates a v6-only host on every network but a legacy v4-only one.
+fn build_host_create_body(
+    args: &HostCreateArgs,
+    network_id: &str,
+    ipv4_auto_cidr: Option<&str>,
+) -> Value {
     let mut body = json!({
         "name": args.name,
         "networkID": network_id,
@@ -504,8 +542,10 @@ fn build_host_create_body(args: &HostCreateArgs, network_id: &str) -> Value {
     if let Some(role) = &args.role {
         obj.insert("roleID".into(), json!(role));
     }
-    let mut ips: Vec<&String> = Vec::new();
-    if let Some(v4) = &args.ipv4 {
+    let mut ips: Vec<&str> = Vec::new();
+    if !args.no_ipv4
+        && let Some(v4) = args.ipv4.as_deref().or(ipv4_auto_cidr)
+    {
         ips.push(v4);
     }
     if let Some(v6) = &args.ipv6 {
@@ -736,6 +776,7 @@ mod tests {
             lighthouse,
             relay,
             ipv4: None,
+            no_ipv4: false,
             ipv6: None,
             static_addresses: static_addresses.into_iter().map(str::to_owned).collect(),
             listen_port,
@@ -745,51 +786,65 @@ mod tests {
     }
 
     #[test]
-    fn pick_network_id_returns_explicit_when_present() {
-        let res = pick_network_id(&json!({"data": []}), Some("network-explicit"));
-        assert_eq!(res.unwrap(), "network-explicit");
-    }
-
-    #[test]
-    fn pick_network_id_returns_sole_network_when_one() {
+    fn pick_network_returns_sole_network_when_one() {
         let networks = json!({
-            "data": [{"id": "network-only"}],
+            "data": [{"id": "network-only", "cidrs": ["100.100.0.0/22"]}],
             "metadata": {"hasNextPage": false},
         });
-        assert_eq!(pick_network_id(&networks, None).unwrap(), "network-only");
+        let network = pick_network(&networks).unwrap();
+        assert_eq!(network["id"], json!("network-only"));
+        assert_eq!(network["cidrs"], json!(["100.100.0.0/22"]));
     }
 
     #[test]
-    fn pick_network_id_errors_on_zero_networks() {
+    fn pick_network_errors_on_zero_networks() {
         let networks = json!({"data": [], "metadata": {"hasNextPage": false}});
-        let err = pick_network_id(&networks, None).unwrap_err().to_string();
+        let err = pick_network(&networks).unwrap_err().to_string();
         assert!(err.contains("no networks"));
     }
 
     #[test]
-    fn pick_network_id_errors_on_multiple_in_data() {
+    fn pick_network_errors_on_multiple_in_data() {
         let networks = json!({
             "data": [{"id": "a"}, {"id": "b"}],
             "metadata": {"hasNextPage": false},
         });
-        let err = pick_network_id(&networks, None).unwrap_err().to_string();
+        let err = pick_network(&networks).unwrap_err().to_string();
         assert!(err.contains("--network"));
     }
 
     #[test]
-    fn pick_network_id_errors_when_more_pages_exist() {
+    fn pick_network_errors_when_more_pages_exist() {
         // Single row but a second page → can't safely auto-pick.
         let networks = json!({
             "data": [{"id": "a"}],
             "metadata": {"hasNextPage": true},
         });
-        assert!(pick_network_id(&networks, None).is_err());
+        assert!(pick_network(&networks).is_err());
+    }
+
+    #[test]
+    fn network_ipv4_cidr_picks_v4_among_mixed_cidrs() {
+        let network = json!({"cidrs": ["fdef:c0:c0::/48", "100.100.0.0/22"]});
+        assert_eq!(
+            network_ipv4_cidr(&network).as_deref(),
+            Some("100.100.0.0/22")
+        );
+    }
+
+    #[test]
+    fn network_ipv4_cidr_is_none_without_a_v4_prefix() {
+        assert_eq!(
+            network_ipv4_cidr(&json!({"cidrs": ["fdef:c0:c0::/48"]})),
+            None
+        );
+        assert_eq!(network_ipv4_cidr(&json!({})), None);
     }
 
     #[test]
     fn build_body_minimal_omits_all_optionals() {
         let a = args("server", None, false, false, vec![], None);
-        let body = build_host_create_body(&a, "network-1");
+        let body = build_host_create_body(&a, "network-1", None);
         assert_eq!(
             body,
             json!({"name": "server", "networkID": "network-1"}),
@@ -801,7 +856,7 @@ mod tests {
     fn build_body_lighthouse_payload() {
         let mut a = args("lh", None, true, false, vec!["1.2.3.4:4242"], Some(4242));
         a.ipv4 = Some("100.100.0.5".into());
-        let body = build_host_create_body(&a, "network-1");
+        let body = build_host_create_body(&a, "network-1", None);
         assert_eq!(body["isLighthouse"], json!(true));
         assert_eq!(body["staticAddresses"], json!(["1.2.3.4:4242"]));
         assert_eq!(body["listenPort"], json!(4242));
@@ -814,8 +869,34 @@ mod tests {
         let mut a = args("h", None, false, false, vec![], None);
         a.ipv4 = Some("100.100.0.5".into());
         a.ipv6 = Some("fdef::42".into());
-        let body = build_host_create_body(&a, "n");
+        let body = build_host_create_body(&a, "n", None);
         assert_eq!(body["ipAddresses"], json!(["100.100.0.5", "fdef::42"]));
+    }
+
+    #[test]
+    fn build_body_sends_network_cidr_to_auto_assign_ipv4() {
+        let a = args("h", None, false, false, vec![], None);
+        let body = build_host_create_body(&a, "n", Some("100.100.0.0/22"));
+        assert_eq!(body["ipAddresses"], json!(["100.100.0.0/22"]));
+    }
+
+    #[test]
+    fn build_body_explicit_ipv4_wins_over_network_cidr() {
+        let mut a = args("h", None, false, false, vec![], None);
+        a.ipv4 = Some("100.100.0.5".into());
+        let body = build_host_create_body(&a, "n", Some("100.100.0.0/22"));
+        assert_eq!(body["ipAddresses"], json!(["100.100.0.5"]));
+    }
+
+    #[test]
+    fn build_body_no_ipv4_yields_v6_only_host() {
+        let mut a = args("h", None, false, false, vec![], None);
+        a.no_ipv4 = true;
+        let body = build_host_create_body(&a, "n", Some("100.100.0.0/22"));
+        assert!(body.get("ipAddresses").is_none());
+        a.ipv6 = Some("fdef::42".into());
+        let body = build_host_create_body(&a, "n", Some("100.100.0.0/22"));
+        assert_eq!(body["ipAddresses"], json!(["fdef::42"]));
     }
 
     #[test]
@@ -823,7 +904,7 @@ mod tests {
         let mut a = args("h", None, false, false, vec![], None);
         a.tags = vec!["env:prod".into(), "team:gaming".into()];
         a.code_lifetime = Some(3600);
-        let body = build_host_create_body(&a, "n");
+        let body = build_host_create_body(&a, "n", None);
         assert_eq!(body["tags"], json!(["env:prod", "team:gaming"]));
         assert_eq!(body["codeLifetimeSeconds"], json!(3600));
     }

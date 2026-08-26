@@ -71,6 +71,8 @@ device enrollment.
   `POST /v2/host-and-enrollment-code` one-shot endpoint, so the OTP comes
   back in the same response and the human view prints the `dnclient enroll`
   command to copy. Network is auto-picked when the account has exactly one.
+  Hosts get an IPv4 whenever the network has an IPv4 prefix (`--no-ipv4`
+  for a v6-only host); the API alone would leave them v6-only.
 - Coming next: `roles create` and `roles add-rule` — the default role denies
   all traffic, so newly enrolled hosts share a network but can't talk to
   each other until a permissive role lands.
