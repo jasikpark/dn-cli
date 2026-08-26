@@ -9,8 +9,8 @@ use crate::config::Config;
 /// Minimal client for the Defined Networking REST API.
 ///
 /// Endpoints are version-prefixed (`/v1/`, `/v2/`) per-verb; callers pass the
-/// full versioned path. This tracer exposes reads only; writes and deletes are
-/// a deliberate later phase gated behind confirmation + permission rules.
+/// full versioned path. Every verb reports a non-2xx response as a typed
+/// [`ApiError`] rather than a flattened string.
 pub struct Client {
     config: Config,
     agent: ureq::Agent,
@@ -148,31 +148,15 @@ impl Client {
         }
 
         let mut res = req.call().context("request to Defined API failed")?;
+        error_for_status(&mut res)?;
 
-        let status = res.status();
-        // x-request-id is worth surfacing on errors — it's the handle support
-        // uses to find the request server-side.
-        let request_id = res
-            .headers()
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-
-        if status.is_success() {
-            return res
-                .body_mut()
-                .read_json::<Value>()
-                .context("failed to parse Defined API response as JSON");
-        }
-
-        let body = res.body_mut().read_to_string().unwrap_or_default();
-        Err(ApiError::from_response(status.as_u16(), &body, request_id).into())
+        res.body_mut()
+            .read_json::<Value>()
+            .context("failed to parse Defined API response as JSON")
     }
 
     /// POST a JSON body to a versioned path and return the parsed JSON
-    /// response. Mirrors `get`'s error handling: non-2xx is bubbled as an
-    /// `ApiError` carrying the typed `{code, message, path}` entries so the
-    /// `--json` envelope can serialize them directly.
+    /// response.
     pub fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
         let url = format!("{}{}", self.config.api_url, path);
         let auth = format!("Bearer {}", self.config.api_key);
@@ -183,23 +167,27 @@ impl Client {
             .header("Authorization", &auth)
             .send_json(body)
             .context("request to Defined API failed")?;
+        error_for_status(&mut res)?;
 
-        let status = res.status();
-        let request_id = res
-            .headers()
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
+        res.body_mut()
+            .read_json::<Value>()
+            .context("failed to parse Defined API response as JSON")
+    }
 
-        if status.is_success() {
-            return res
-                .body_mut()
-                .read_json::<Value>()
-                .context("failed to parse Defined API response as JSON");
-        }
+    /// DELETE a versioned path. A 2xx carries an empty `{data, metadata}`
+    /// envelope, so nothing is parsed — the status is the whole answer.
+    pub fn delete(&self, path: &str) -> Result<()> {
+        let url = format!("{}{}", self.config.api_url, path);
+        let auth = format!("Bearer {}", self.config.api_key);
 
-        let body = res.body_mut().read_to_string().unwrap_or_default();
-        Err(ApiError::from_response(status.as_u16(), &body, request_id).into())
+        let mut res = self
+            .agent
+            .delete(&url)
+            .header("Authorization", &auth)
+            .call()
+            .context("request to Defined API failed")?;
+
+        error_for_status(&mut res)
     }
 
     /// List every host (v2 endpoint — dual-stack `ipAddresses`), following
@@ -265,6 +253,19 @@ impl Client {
         self.get(&format!("/v2/networks/{id}"))
     }
 
+    /// Fetch one host (v2 — dual-stack `ipAddresses`), which needs the
+    /// `hosts:read` scope. `hosts delete` reads the host first so the
+    /// confirmation prompt can name what is about to be removed.
+    pub fn get_host(&self, id: &str) -> Result<Value> {
+        self.get(&format!("/v2/hosts/{id}"))
+    }
+
+    /// Delete a host, which needs the `hosts:delete` scope. v1 is the only
+    /// version of the API with a host delete.
+    pub fn delete_host(&self, id: &str) -> Result<()> {
+        self.delete(&format!("/v1/hosts/{id}"))
+    }
+
     /// Create a host (or lighthouse / relay) AND its enrollment code in one
     /// transaction. Wraps `POST /v2/host-and-enrollment-code` — the coupled
     /// endpoint exists because the OTP-issuing surface is the natural pair of
@@ -273,6 +274,26 @@ impl Client {
     pub fn create_host_with_enrollment(&self, body: &Value) -> Result<Value> {
         self.post_json("/v2/host-and-enrollment-code", body)
     }
+}
+
+/// Turn a non-2xx response into a typed [`ApiError`] carrying the API's
+/// `{code, message, path}` entries, so the `--json` envelope can serialize
+/// them directly. A successful response is left with its body unread, for the
+/// caller to parse or ignore. `x-request-id` is worth surfacing on errors —
+/// it's the handle support uses to find the request server-side.
+fn error_for_status(res: &mut ureq::http::Response<ureq::Body>) -> Result<()> {
+    let status = res.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let request_id = res
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let body = res.body_mut().read_to_string().unwrap_or_default();
+    Err(ApiError::from_response(status.as_u16(), &body, request_id).into())
 }
 
 /// Pull the next-page cursor out of a list response's `metadata`, or `None`

@@ -75,11 +75,14 @@ device enrollment.
   leaves dual-stack hosts v6-only — and `--no-ipv4` skips that for a v6-only
   host. Key permissions: `hosts:create`, `hosts:enroll`, and `networks:list`
   (auto-pick) or `networks:read` (`--network <id>`).
+- Deletes: `hosts delete <HOST_ID>` — wraps `DELETE /v1/hosts/{id}`. An
+  interactive run looks the host up first (`hosts:read`) and asks
+  `Delete host "<name>" (<id>; <ips>)? [y/N]`; `--yes` skips the lookup and the
+  prompt, and is required with `--json` or when stdin isn't a terminal. Key
+  permission: `hosts:delete`.
 - Coming next: `roles create` and `roles add-rule` — the default role denies
   all traffic, so newly enrolled hosts share a network but can't talk to
   each other until a permissive role lands.
-- Deletes are deliberately deferred until confirmation prompts and
-  host-level permission rules land.
 
 ## License
 
