@@ -212,7 +212,7 @@ impl Client {
     /// reflects the server's view.
     ///
     /// TODO(write-phase): add ?networkID= filtering once the exact query
-    /// param is confirmed against the api repo.
+    /// param is confirmed against the live API.
     pub fn list_hosts(&self) -> Result<Value> {
         let mut data: Vec<Value> = Vec::new();
         let mut metadata = Value::Null;
