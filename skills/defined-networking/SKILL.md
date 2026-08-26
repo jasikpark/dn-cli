@@ -71,14 +71,13 @@ Use this to answer questions like "what hosts do I have", "is <device> online"
 ### Create a host — `dn hosts create`
 
 ```bash
-dn hosts create --name <NAME> --json
+dn hosts create <NAME> --json
 ```
 
 Creates the host **and** its one-time enrollment code in a single call.
 
 | flag | when to pass it |
 |------|-----------------|
-| `--name <NAME>` | required |
 | `--network <id>` | only when the account has more than one network — otherwise auto-picked |
 | `--role <id>` | to skip the account's default (deny-all) role |
 | `--lighthouse` | with `--static-address <host:port>` (repeatable) and `--listen-port <port>` |

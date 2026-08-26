@@ -85,7 +85,6 @@ enum HostsCommand {
 #[derive(Args)]
 struct HostCreateArgs {
     /// Host name (1–255 chars)
-    #[arg(long)]
     name: String,
     /// Network ID. Omit if the account has exactly one network — it's
     /// auto-picked, which is the common case at signup.
@@ -1197,6 +1196,18 @@ mod tests {
         };
         assert_eq!(args.host_id, "host-1");
         assert!(args.yes);
+    }
+
+    #[test]
+    fn parses_hosts_create_with_positional_name() {
+        let cli = Cli::try_parse_from(["dn", "hosts", "create", "my-laptop"]).unwrap();
+        let Command::Hosts {
+            command: HostsCommand::Create(args),
+        } = cli.command
+        else {
+            panic!("expected `hosts create` to parse into HostsCommand::Create");
+        };
+        assert_eq!(args.name, "my-laptop");
     }
 
     #[test]
