@@ -51,6 +51,13 @@ cargo run -- hosts list --json
 cargo build --release
 ```
 
+`just mutants` runs [cargo-mutants](https://mutants.rs/) over the crate: it edits
+one expression at a time and reruns `cargo test`. A MISSED mutant is an edit the
+suite did not notice, so it names a behaviour nothing asserts on.
+`just mutants-diff` narrows that to the lines the current change touches.
+The `cargo-mutants` skill in `.claude/skills/` loads when Claude Code runs in this
+checkout and walks through a run and the survivor triage.
+
 ### Changelog and releases
 
 `CHANGELOG.md` is generated from commit subjects, so every user-visible change
