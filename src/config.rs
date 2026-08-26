@@ -234,6 +234,19 @@ pub fn resolve_key_source(
 
 /// A 1Password secret reference is `op://vault/item/field` or
 /// `op://vault/item/section/field`; every segment must be non-empty.
+/// Clean up a pasted reference. 1Password's "Copy Secret Reference" wraps the
+/// value in double quotes when an item or section name contains spaces
+/// (`"op://Personal/DN production API Key/credential"`), so the shell-quoted
+/// form is what lands in a prompt or `--ref`.
+pub fn normalize_op_ref(s: &str) -> String {
+    let s = s.trim();
+    let unquoted = [('"', '"'), ('\'', '\'')]
+        .iter()
+        .find_map(|(open, close)| s.strip_prefix(*open)?.strip_suffix(*close))
+        .unwrap_or(s);
+    unquoted.trim().to_string()
+}
+
 pub fn validate_op_ref(s: &str) -> Result<()> {
     let s = s.trim();
     let Some(path) = s.strip_prefix(OP_SCHEME) else {
@@ -379,6 +392,16 @@ mod tests {
         assert!(resolve_key_source(None, Some("op://v//f")).is_err());
         assert!(resolve_key_source(None, Some("http://v/i/f")).is_err());
         assert!(resolve_key_source(None, Some("op://v/i/s/x/f")).is_err());
+    }
+
+    #[test]
+    fn normalize_op_ref_strips_pasted_quotes() {
+        let want = "op://Personal/DN production API Key/credential";
+        assert_eq!(normalize_op_ref(&format!("  \"{want}\"\n")), want);
+        assert_eq!(normalize_op_ref(&format!("'{want}'")), want);
+        assert_eq!(normalize_op_ref(want), want);
+        assert_eq!(normalize_op_ref("\"op://v/i/f"), "\"op://v/i/f");
+        validate_op_ref(&normalize_op_ref(&format!("\"{want}\""))).unwrap();
     }
 
     #[test]

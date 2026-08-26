@@ -12,8 +12,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::api::{ApiError, Client};
 use crate::config::{
-    Config, FileConfig, KeySource, api_key_env_is_set, api_url, config_path, op_read,
-    validate_op_ref,
+    Config, FileConfig, KeySource, api_key_env_is_set, api_url, config_path, normalize_op_ref,
+    op_read, validate_op_ref,
 };
 
 #[derive(Parser)]
@@ -110,7 +110,7 @@ const API_KEYS_URL: &str = "https://admin.defined.net/settings/api-keys/add";
 
 fn auth_login(args: &AuthLoginArgs, json: bool) -> anyhow::Result<()> {
     let reference = match &args.reference {
-        Some(r) => r.trim().to_string(),
+        Some(r) => normalize_op_ref(r),
         None => prompt_for_reference(json)?,
     };
     validate_op_ref(&reference)?;
@@ -188,11 +188,11 @@ fn prompt_for_reference(json: bool) -> anyhow::Result<String> {
     err.flush()?;
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line)?;
-    let line = line.trim();
+    let line = normalize_op_ref(&line);
     if line.is_empty() {
         bail!("no reference entered");
     }
-    Ok(line.to_string())
+    Ok(line)
 }
 
 /// Read-only introspection: never resolves a secret and never fails on a
