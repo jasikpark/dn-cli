@@ -1,13 +1,12 @@
-# Run the CLI with secrets injected from 1Password.
-# `.env` maps DEFINED_API_KEY to an op:// secret reference (see .env.example).
+# Run the CLI from source. Auth comes from `dn auth login` or DEFINED_API_KEY.
 # Usage:  just run hosts list [--json]
 run *args:
-    op run --env-file=.env -- cargo run -- {{args}}
+    cargo run -- {{args}}
 
 # Build the release binary.
 build:
     cargo build --release
 
-# Run a release binary build with secrets injected.
+# Run the release binary.
 run-release *args: build
-    op run --env-file=.env -- ./target/release/dn {{args}}
+    ./target/release/dn {{args}}

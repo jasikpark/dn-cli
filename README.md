@@ -13,24 +13,32 @@ Designed to be driven two ways:
 
 ## Auth
 
-`dn` reads `DEFINED_API_KEY` from the environment and never persists it. Inject
-it per-invocation with 1Password so the secret lives only for the lifetime of a
-single command. `op run` resolves a 1Password *secret reference* mapped to that
-variable name — bare `op run -- dn ...` won't inject anything on its own. Map it
-once with an env file:
+Store a 1Password *secret reference* to your API key once:
 
 ```bash
-cp .env.example .env          # set DEFINED_API_KEY to your op:// reference
-op run --env-file=.env -- dn hosts list
+dn auth login
 ```
 
-`.env` is gitignored and holds only the reference (`op://vault/item/field`),
-never the secret value. Override the base URL with `DEFINED_API_URL` (defaults
-to `https://api.defined.net`).
+It walks you through creating a key at
+<https://admin.defined.net/settings/api-keys/add> (pick only the permissions you
+need), asks for the key's `op://vault/item/field` reference, verifies it against
+the API, and saves the reference to `~/.config/dn/config.json`
+(`%APPDATA%\dn\config.json` on Windows; override the directory with
+`DN_CONFIG_DIR`). The key itself never touches disk: every `dn` call resolves
+the reference with [`op read`](https://developer.1password.com/docs/cli/get-started/),
+so 1Password's unlock prompt gates each invocation.
+
+`dn auth status` shows which source is active; `dn auth logout` forgets the
+reference. Pass `--ref op://...` to `auth login` when scripting it.
+
+For CI or agents, `DEFINED_API_KEY` in the environment takes precedence over the
+config file. It may hold the raw key or an `op://` reference — `dn` resolves the
+latter the same way. Override the base URL with `DEFINED_API_URL` (defaults to
+`https://api.defined.net`).
 
 ## Develop
 
-With [`just`](https://github.com/casey/just) (wraps `op run` + `cargo`):
+With [`just`](https://github.com/casey/just):
 
 ```bash
 just run hosts list --json
@@ -39,7 +47,7 @@ just run hosts list --json
 Or directly:
 
 ```bash
-op run --env-file=.env -- cargo run -- hosts list --json
+cargo run -- hosts list --json
 cargo build --release
 ```
 
@@ -47,16 +55,17 @@ cargo build --release
 
 This repo doubles as a [Claude Code](https://claude.com/claude-code) plugin
 (`.claude-plugin/plugin.json`). The `defined-networking` skill
-(`skills/defined-networking/SKILL.md`) teaches Claude to drive `dn` — injecting
-the API key with `op run` and parsing `--json` output. Load it by installing the
+(`skills/defined-networking/SKILL.md`) teaches Claude to drive `dn` — checking
+`dn auth status --json` first and parsing `--json` output. Load it by installing the
 plugin, or symlink the skill into `~/.claude/skills/` for local use. The longer-
 term goal: *"I have this device, set it up on my network"* — conversational
 device enrollment.
 
 ## Status
 
-Reads-only: `hosts list`. Writes and deletes are a deliberate later
-phase, gated behind confirmation prompts and host-level permission rules.
+Reads-only: `hosts list`, plus `auth login/status/logout`. Writes and deletes
+are a deliberate later phase, gated behind confirmation prompts and host-level
+permission rules.
 
 ## License
 
