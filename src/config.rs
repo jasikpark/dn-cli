@@ -252,11 +252,28 @@ pub fn validate_op_ref(s: &str) -> Result<()> {
     let Some(path) = s.strip_prefix(OP_SCHEME) else {
         bail!("expected a 1Password secret reference starting with {OP_SCHEME}, got {s:?}");
     };
+    // A trailing `?attribute=...` query (e.g. `?attribute=otp`) is part of the
+    // field segment's syntax, not of its name.
+    let path = path.split('?').next().unwrap_or(path);
     let segments: Vec<&str> = path.split('/').collect();
     if !(3..=4).contains(&segments.len()) || segments.iter().any(|seg| seg.trim().is_empty()) {
         bail!(
             "expected {OP_SCHEME}vault/item/field (optionally {OP_SCHEME}vault/item/section/field), got {s:?}"
         );
+    }
+    // 1Password only resolves names made of alphanumerics, `-`, `_`, `.` and
+    // whitespace; a vault/item/field whose name has anything else (an `@` in
+    // an email-style title, a `:`) must be referenced by its ID instead.
+    for seg in &segments {
+        if let Some(bad) = seg.chars().find(|c| {
+            !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || c.is_whitespace())
+        }) {
+            bail!(
+                "1Password can't resolve {seg:?} in {s}: {bad:?} isn't allowed in a secret reference name.\n\
+                 Use the item's ID instead — in 1Password, right-click the field \u{2192} Copy Secret Reference \
+                 gives the ID form (op://vault/<item-id>/field)."
+            );
+        }
     }
     Ok(())
 }
@@ -392,6 +409,18 @@ mod tests {
         assert!(resolve_key_source(None, Some("op://v//f")).is_err());
         assert!(resolve_key_source(None, Some("http://v/i/f")).is_err());
         assert!(resolve_key_source(None, Some("op://v/i/s/x/f")).is_err());
+    }
+
+    #[test]
+    fn validate_op_ref_rejects_unsupported_name_characters_with_id_hint() {
+        let err = validate_op_ref("op://Personal/caleb@defined.net - DN API Key/credential")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'@'"), "{err}");
+        assert!(err.contains("item's ID"), "{err}");
+        assert!(validate_op_ref("op://Personal/DN API: hosts/credential").is_err());
+        validate_op_ref("op://Personal/z3sn5zvnff527fab3zrfqz7ymu/credential").unwrap();
+        validate_op_ref("op://Personal/My_item.v2 - prod/one time password?attribute=otp").unwrap();
     }
 
     #[test]
