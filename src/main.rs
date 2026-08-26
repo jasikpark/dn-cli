@@ -1,15 +1,17 @@
 mod api;
 mod config;
 
+use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use anyhow::{Context, bail};
+use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
 use crate::api::{ApiError, Client};
-use crate::config::Config;
+use crate::config::{Config, FileConfig, KeySource, config_path, op_read, validate_op_ref};
 
 #[derive(Parser)]
 #[command(name = "dn", version, about = "CLI for the Defined Networking API")]
@@ -23,11 +25,38 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Configure how `dn` finds your API key
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
     /// Inspect Nebula hosts
     Hosts {
         #[command(subcommand)]
         command: HostsCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    /// Store a 1Password secret reference to your API key. The key itself is
+    /// never written to disk; every `dn` call resolves it with `op read`.
+    Login(AuthLoginArgs),
+    /// Show where the API key comes from (never prints the key)
+    Status,
+    /// Forget the stored secret reference
+    Logout,
+}
+
+#[derive(Args)]
+struct AuthLoginArgs {
+    /// 1Password secret reference to the API key. Prompted for when omitted
+    /// (interactive terminals only).
+    #[arg(long = "ref", value_name = "op://vault/item/field")]
+    reference: Option<String>,
+    /// Skip resolving the reference and calling the API before saving
+    #[arg(long)]
+    no_verify: bool,
 }
 
 #[derive(Subcommand)]
@@ -57,14 +86,133 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
-    let client = Client::new(Config::from_env()?);
-
     match &cli.command {
-        Command::Hosts { command } => match command {
-            HostsCommand::List => hosts_list(&client, cli.json)?,
+        Command::Auth { command } => match command {
+            AuthCommand::Login(args) => auth_login(args, cli.json)?,
+            AuthCommand::Status => auth_status(cli.json)?,
+            AuthCommand::Logout => auth_logout(cli.json)?,
         },
+        Command::Hosts { command } => {
+            let client = Client::new(Config::load()?);
+            match command {
+                HostsCommand::List => hosts_list(&client, cli.json)?,
+            }
+        }
     }
 
+    Ok(())
+}
+
+const API_KEYS_URL: &str = "https://admin.defined.net/settings/api-keys/add";
+
+fn auth_login(args: &AuthLoginArgs, json: bool) -> anyhow::Result<()> {
+    let reference = match &args.reference {
+        Some(r) => r.trim().to_string(),
+        None => prompt_for_reference(json)?,
+    };
+    validate_op_ref(&reference)?;
+
+    let mut file = FileConfig::load()?;
+    if !args.no_verify {
+        let key = op_read(&reference)?;
+        Client::new(Config::with_key(key, &file))
+            .get("/v2/networks?pageSize=1")
+            .context("the key resolved but the API rejected it")?;
+    }
+    file.api_key_ref = Some(reference.clone());
+    let path = file.save()?;
+
+    if json {
+        println!(
+            "{}",
+            json!({ "ok": true, "config_path": path, "api_key_ref": reference })
+        );
+    } else {
+        println!(
+            "Saved reference to {}. `dn` will resolve it with `op read` on every call.",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Interactive-only: explain where to mint a key, then read the reference from
+/// stdin. Agents pass `--ref` instead — no prompt ever blocks a `--json` run.
+fn prompt_for_reference(json: bool) -> anyhow::Result<String> {
+    if json || !std::io::stdin().is_terminal() {
+        bail!("pass --ref when running non-interactively");
+    }
+    let mut err = std::io::stderr();
+    writeln!(
+        err,
+        "Create an API key at {API_KEYS_URL} (pick only the permissions you need),\n\
+         save it in 1Password, then right-click the field \u{2192} Copy Secret Reference."
+    )?;
+    write!(err, "Secret reference (op://vault/item/field): ")?;
+    err.flush()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    let line = line.trim();
+    if line.is_empty() {
+        bail!("no reference entered");
+    }
+    Ok(line.to_string())
+}
+
+fn auth_status(json: bool) -> anyhow::Result<()> {
+    let source = KeySource::detect()?;
+    let file = FileConfig::load()?;
+    let path = config_path()?;
+    let api_url = Config::with_key(String::new(), &file).api_url;
+    let label = source.as_ref().map_or("none", KeySource::label);
+    let reference = source.as_ref().and_then(KeySource::reference);
+
+    if json {
+        println!(
+            "{}",
+            json!({
+                "source": label,
+                "api_key_ref": reference,
+                "config_path": path,
+                "api_url": api_url,
+            })
+        );
+        return Ok(());
+    }
+
+    match &source {
+        None => println!("No API key configured. Run `dn auth login` or set DEFINED_API_KEY."),
+        Some(KeySource::Env(_)) => println!("API key: DEFINED_API_KEY (raw value in environment)"),
+        Some(KeySource::EnvRef(r)) => {
+            println!("API key: DEFINED_API_KEY -> {r} (resolved via op read)")
+        }
+        Some(KeySource::FileRef(r)) => println!(
+            "API key: {r} (from {}, resolved via op read)",
+            path.display()
+        ),
+    }
+    println!("API URL: {api_url}");
+    Ok(())
+}
+
+fn auth_logout(json: bool) -> anyhow::Result<()> {
+    let mut file = FileConfig::load()?;
+    let removed = file.api_key_ref.take();
+    let path = file.save()?;
+
+    if json {
+        println!(
+            "{}",
+            json!({ "ok": true, "removed": removed.is_some(), "config_path": path })
+        );
+    } else if removed.is_some() {
+        println!(
+            "Removed the stored secret reference from {}.",
+            path.display()
+        );
+    } else {
+        println!("No stored secret reference to remove.");
+    }
     Ok(())
 }
 
@@ -112,7 +260,10 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
             vec![id.to_string(), name.to_string(), ip]
         })
         .collect();
-    print!("{}", render_table(&["ID", "NAME", "IP ADDRESSES"], &table_rows));
+    print!(
+        "{}",
+        render_table(&["ID", "NAME", "IP ADDRESSES"], &table_rows)
+    );
 
     if let Some(total) = res
         .get("metadata")
@@ -159,7 +310,11 @@ fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
     for (i, &cell) in cells.iter().enumerate() {
         out.push_str(cell);
         if i != last {
-            let pad = widths.get(i).copied().unwrap_or(0).saturating_sub(cell.width());
+            let pad = widths
+                .get(i)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(cell.width());
             out.push_str(&" ".repeat(pad));
             out.push_str("  ");
         }
@@ -220,8 +375,16 @@ mod tests {
     #[test]
     fn render_table_aligns_columns_no_trailing_space() {
         let rows = vec![
-            vec!["host-1".to_string(), "web".to_string(), "10.0.0.1".to_string()],
-            vec!["h2".to_string(), "longer-name".to_string(), "10.0.0.2".to_string()],
+            vec![
+                "host-1".to_string(),
+                "web".to_string(),
+                "10.0.0.1".to_string(),
+            ],
+            vec![
+                "h2".to_string(),
+                "longer-name".to_string(),
+                "10.0.0.2".to_string(),
+            ],
         ];
         let out = render_table(&["ID", "NAME", "IP"], &rows);
         assert_eq!(
