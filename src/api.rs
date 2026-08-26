@@ -208,6 +208,14 @@ impl Client {
 
         Ok(json!({ "data": data, "metadata": metadata }))
     }
+
+    /// Prove a key works with the least privilege the CLI relies on: a
+    /// one-item `GET /v2/hosts` needs only `hosts:list`, so a key scoped
+    /// exactly as the README suggests still passes.
+    pub fn verify_key(&self) -> Result<()> {
+        self.get_with_query("/v2/hosts", &[("pageSize", "1")])
+            .map(|_| ())
+    }
 }
 
 /// Pull the next-page cursor out of a list response's `metadata`, or `None`

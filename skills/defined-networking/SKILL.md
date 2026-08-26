@@ -9,21 +9,24 @@ description: View and manage a Defined Networking (Nebula mesh VPN) network with
 API — the managed [Nebula](https://github.com/slackhq/nebula) mesh VPN. Use it to
 inspect and (later) manage the user's network.
 
-## Prerequisite: the API key must be injected
+## Prerequisite: an API key source must be configured
 
-`dn` reads `DEFINED_API_KEY` from the environment and never persists it. It is
-injected per-invocation from 1Password — **`dn` does nothing without it.** Run
-`dn` through `op run` with an env file that maps the key to a 1Password secret
-reference:
+`dn` never stores the API key itself. It resolves a 1Password secret reference
+with `op read` on every call, or reads `DEFINED_API_KEY` from the environment
+(raw key or `op://` reference — the environment wins). Check before doing
+anything else:
 
 ```bash
-op run --env-file=.env -- dn <args>     # from the dn-cli repo
+dn auth status --json
 ```
 
-If `dn` is installed on `PATH` and `DEFINED_API_KEY` is already available in the
-environment, `dn <args>` works directly. If you see
-`error: DEFINED_API_KEY is not set`, the secret isn't being injected — use the
-`op run --env-file=.env` form (run it from the dn-cli repo so `.env` resolves).
+`source` is `file`, `env`, `env-ref`, `none`, or `invalid` (a malformed `op://`
+reference or a blank `DEFINED_API_KEY`; `message` says which — surface it to
+the user). On `none`, stop and ask the
+user to run `dn auth login` themselves — it needs their 1Password reference and
+an interactive terminal; do not try to prompt for it or pass `--ref` on their
+behalf. Every call that resolves an `op://` reference may pop a 1Password unlock
+prompt on the user's machine; that is expected.
 
 ## Always use `--json` when reading data programmatically
 
@@ -43,7 +46,7 @@ non-zero exit, read the JSON error envelope: `status` is the HTTP code and
 ### List hosts — `dn hosts list`
 
 ```bash
-op run --env-file=.env -- dn hosts list --json
+dn hosts list --json
 ```
 
 Returns `{ "data": [ host… ], "metadata": { … } }`, following cursor pagination

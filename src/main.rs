@@ -1,15 +1,20 @@
 mod api;
 mod config;
 
+use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use anyhow::{Context, bail};
+use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
 use crate::api::{ApiError, Client};
-use crate::config::Config;
+use crate::config::{
+    Config, FileConfig, KeySource, api_key_env_is_set, api_url, config_path, normalize_op_ref,
+    op_read, validate_op_ref,
+};
 
 #[derive(Parser)]
 #[command(name = "dn", version, about = "CLI for the Defined Networking API")]
@@ -23,11 +28,38 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Configure how `dn` finds your API key
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
     /// Inspect Nebula hosts
     Hosts {
         #[command(subcommand)]
         command: HostsCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    /// Store a 1Password secret reference to your API key. The key itself is
+    /// never written to disk; every `dn` call resolves it with `op read`.
+    Login(AuthLoginArgs),
+    /// Show where the API key comes from (never prints the key)
+    Status,
+    /// Forget the stored secret reference
+    Logout,
+}
+
+#[derive(Args)]
+struct AuthLoginArgs {
+    /// 1Password secret reference to the API key. Prompted for when omitted
+    /// (interactive terminals only).
+    #[arg(long = "ref", value_name = "op://vault/item/field")]
+    reference: Option<String>,
+    /// Skip resolving the reference and calling the API before saving
+    #[arg(long)]
+    no_verify: bool,
 }
 
 #[derive(Subcommand)]
@@ -57,14 +89,195 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
-    let client = Client::new(Config::from_env()?);
-
     match &cli.command {
-        Command::Hosts { command } => match command {
-            HostsCommand::List => hosts_list(&client, cli.json)?,
+        Command::Auth { command } => match command {
+            AuthCommand::Login(args) => auth_login(args, cli.json)?,
+            AuthCommand::Status => auth_status(cli.json)?,
+            AuthCommand::Logout => auth_logout(cli.json)?,
         },
+        Command::Hosts { command } => {
+            let client = Client::new(Config::load()?);
+            match command {
+                HostsCommand::List => hosts_list(&client, cli.json)?,
+            }
+        }
     }
 
+    Ok(())
+}
+
+const API_KEYS_URL: &str = "https://admin.defined.net/settings/api-keys/add";
+
+fn auth_login(args: &AuthLoginArgs, json: bool) -> anyhow::Result<()> {
+    let reference = match &args.reference {
+        Some(r) => normalize_op_ref(r),
+        None => prompt_for_reference(json)?,
+    };
+    validate_op_ref(&reference)?;
+
+    let (mut file, corrupt) = FileConfig::load_or_reset()?;
+    if let Some(err) = corrupt {
+        eprintln!("warning: replacing unreadable config ({err:#})");
+    }
+    if !args.no_verify {
+        let key = op_read(&reference)?;
+        Client::new(Config::with_key(key, &file))
+            .verify_key()
+            .map_err(label_verify_error)?;
+    }
+    file.api_key_ref = Some(reference.clone());
+    let path = file.save()?;
+    let env_override = warn_env_override();
+
+    if json {
+        print_json(&json!({
+            "ok": true,
+            "config_path": path,
+            "api_key_ref": reference,
+            "env_override": env_override,
+        }))?;
+    } else {
+        println!(
+            "Saved reference to {}. `dn` will resolve it with `op read` on every call.",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Only an API response is evidence the key itself was rejected; anything
+/// else (offline, bad `DEFINED_API_URL`) is a reachability problem.
+fn label_verify_error(err: anyhow::Error) -> anyhow::Error {
+    if err.downcast_ref::<ApiError>().is_some() {
+        err.context("the key resolved but the API rejected it")
+    } else {
+        err.context("could not reach the API to verify the key")
+    }
+}
+
+/// The environment shadows the file, so a login/logout under an exported
+/// `DEFINED_API_KEY` changes nothing for the next call. Say so.
+fn warn_env_override() -> bool {
+    let set = api_key_env_is_set();
+    if set {
+        eprintln!(
+            "warning: DEFINED_API_KEY is set in this environment and takes precedence over the stored reference."
+        );
+    }
+    set
+}
+
+fn print_json(value: &Value) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+/// Interactive-only: explain where to mint a key, then read the reference from
+/// stdin. Agents pass `--ref` instead — no prompt ever blocks a `--json` run.
+fn prompt_for_reference(json: bool) -> anyhow::Result<String> {
+    if json || !std::io::stdin().is_terminal() {
+        bail!("pass --ref when running non-interactively");
+    }
+    let mut err = std::io::stderr();
+    writeln!(
+        err,
+        "Create an API key at {API_KEYS_URL} (pick only the permissions you need),\n\
+         save it in 1Password, then right-click the field \u{2192} Copy Secret Reference."
+    )?;
+    write!(err, "Secret reference (op://vault/item/field): ")?;
+    err.flush()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    let line = normalize_op_ref(&line);
+    if line.is_empty() {
+        bail!("no reference entered");
+    }
+    Ok(line)
+}
+
+/// Read-only introspection: never resolves a secret and never fails on a
+/// misconfigured key — a bad reference or blank env var is reported as
+/// `source: "invalid"` so callers can branch on it.
+fn auth_status(json: bool) -> anyhow::Result<()> {
+    let file = FileConfig::load()?;
+    let path = config_path()?;
+    let api_url = api_url(&file);
+    let source = KeySource::detect(&file);
+    let (label, reference, message) = match &source {
+        Ok(Some(s)) => (s.label(), s.reference(), None),
+        Ok(None) => ("none", None, None),
+        Err(e) => ("invalid", None, Some(format!("{e:#}"))),
+    };
+
+    if json {
+        return print_json(&json!({
+            "source": label,
+            "api_key_ref": reference,
+            "message": message,
+            "config_path": path,
+            "api_url": api_url,
+        }));
+    }
+
+    match &source {
+        Ok(None) => {
+            println!("No API key configured. Run `dn auth login` or set DEFINED_API_KEY.")
+        }
+        Ok(Some(KeySource::Env(_))) => {
+            println!("API key: DEFINED_API_KEY (raw value in environment)")
+        }
+        Ok(Some(KeySource::EnvRef(r))) => {
+            println!("API key: DEFINED_API_KEY -> {r} (resolved via op read)")
+        }
+        Ok(Some(KeySource::FileRef(r))) => println!(
+            "API key: {r} (from {}, resolved via op read)",
+            path.display()
+        ),
+        Err(e) => println!("API key: invalid — {e:#}"),
+    }
+    println!("API URL: {api_url}");
+    Ok(())
+}
+
+fn auth_logout(json: bool) -> anyhow::Result<()> {
+    let (mut file, corrupt) = FileConfig::load_or_reset()?;
+    let path = config_path()?;
+    if let Some(err) = corrupt {
+        eprintln!("warning: removing unreadable config ({err:#})");
+    }
+    let removed = file.api_key_ref.take().is_some();
+    let file_deleted = if file.is_empty() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => {
+                return Err(e).with_context(|| format!("failed to remove {}", path.display()));
+            }
+        }
+    } else {
+        file.save()?;
+        false
+    };
+    let env_override = warn_env_override();
+
+    if json {
+        return print_json(&json!({
+            "ok": true,
+            "removed": removed,
+            "file_deleted": file_deleted,
+            "config_path": path,
+            "env_override": env_override,
+        }));
+    }
+    match (removed, file_deleted) {
+        (true, true) => println!("Removed {}.", path.display()),
+        (true, false) => println!(
+            "Removed the stored secret reference from {}.",
+            path.display()
+        ),
+        (false, true) => println!("Removed unreadable config {}.", path.display()),
+        (false, false) => println!("No stored secret reference to remove."),
+    }
     Ok(())
 }
 
@@ -112,7 +325,10 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
             vec![id.to_string(), name.to_string(), ip]
         })
         .collect();
-    print!("{}", render_table(&["ID", "NAME", "IP ADDRESSES"], &table_rows));
+    print!(
+        "{}",
+        render_table(&["ID", "NAME", "IP ADDRESSES"], &table_rows)
+    );
 
     if let Some(total) = res
         .get("metadata")
@@ -159,7 +375,11 @@ fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
     for (i, &cell) in cells.iter().enumerate() {
         out.push_str(cell);
         if i != last {
-            let pad = widths.get(i).copied().unwrap_or(0).saturating_sub(cell.width());
+            let pad = widths
+                .get(i)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(cell.width());
             out.push_str(&" ".repeat(pad));
             out.push_str("  ");
         }
@@ -220,8 +440,16 @@ mod tests {
     #[test]
     fn render_table_aligns_columns_no_trailing_space() {
         let rows = vec![
-            vec!["host-1".to_string(), "web".to_string(), "10.0.0.1".to_string()],
-            vec!["h2".to_string(), "longer-name".to_string(), "10.0.0.2".to_string()],
+            vec![
+                "host-1".to_string(),
+                "web".to_string(),
+                "10.0.0.1".to_string(),
+            ],
+            vec![
+                "h2".to_string(),
+                "longer-name".to_string(),
+                "10.0.0.2".to_string(),
+            ],
         ];
         let out = render_table(&["ID", "NAME", "IP"], &rows);
         assert_eq!(
