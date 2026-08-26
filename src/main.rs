@@ -104,11 +104,12 @@ struct HostCreateArgs {
     /// IPv4 address to assign, or the network's IPv4 CIDR to have the server
     /// pick one inside it. When omitted, hosts on networks with an IPv4
     /// prefix still get an auto-assigned IPv4: the CLI sends that prefix,
-    /// because the API otherwise creates v6-only hosts. See `--no-ipv4`.
+    /// because the API otherwise leaves dual-stack hosts v6-only. See
+    /// `--no-ipv4`.
     #[arg(long, conflicts_with = "no_ipv4")]
     ipv4: Option<String>,
-    /// Create a v6-only host: skip IPv4 assignment even when the network has
-    /// an IPv4 prefix.
+    /// Skip the IPv4 auto-assign on a dual-stack network, creating a v6-only
+    /// host. IPv4-only networks always assign an IPv4.
     #[arg(long)]
     no_ipv4: bool,
     /// IPv6 address to assign. The server auto-assigns one when omitted.
@@ -417,13 +418,22 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
 
 fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyhow::Result<()> {
     // Auto-assigning an IPv4 means sending the network's own IPv4 prefix, so
-    // the network is fetched unless the caller already settled IPv4 either way.
-    let wants_auto_ipv4 = args.ipv4.is_none() && !args.no_ipv4;
+    // the network is fetched only while IPv4 is still undecided.
+    let auto_ipv4 = wants_auto_ipv4(args);
     let (network_id, ipv4_cidr) = match &args.network {
-        Some(id) if !wants_auto_ipv4 => (id.clone(), None),
         Some(id) => {
-            let network = client.get_network(id)?;
-            (id.clone(), network_ipv4_cidr(&network["data"]))
+            let cidr = if auto_ipv4 {
+                let network = client.get_network(id).with_context(|| {
+                    format!(
+                        "could not read network {id} to auto-assign an IPv4 (the API key needs \
+                         networks:read; pass --ipv4 <ADDR|CIDR> or --no-ipv4 to skip the lookup)"
+                    )
+                })?;
+                network_ipv4_cidr(&network["data"])
+            } else {
+                None
+            };
+            (id.clone(), cidr)
         }
         None => {
             let networks = client.list_networks()?;
@@ -432,7 +442,7 @@ fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyhow::R
                 .get("id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("network list response missing 'id' on the only entry"))?;
-            let cidr = if wants_auto_ipv4 {
+            let cidr = if auto_ipv4 {
                 network_ipv4_cidr(network)
             } else {
                 None
@@ -500,6 +510,12 @@ fn pick_network(networks: &Value) -> anyhow::Result<&Value> {
             "multiple networks found — pass --network <id> to disambiguate"
         )),
     }
+}
+
+/// Whether `hosts create` should have the server pick an IPv4: neither an
+/// explicit `--ipv4` nor `--no-ipv4` has settled it.
+fn wants_auto_ipv4(args: &HostCreateArgs) -> bool {
+    args.ipv4.is_none() && !args.no_ipv4
 }
 
 /// The network's IPv4 prefix from its `cidrs` list, or `None` on a v6-only
@@ -821,6 +837,17 @@ mod tests {
             "metadata": {"hasNextPage": true},
         });
         assert!(pick_network(&networks).is_err());
+    }
+
+    #[test]
+    fn wants_auto_ipv4_only_when_neither_flag_settles_it() {
+        let mut a = args("h", None, false, false, vec![], None);
+        assert!(wants_auto_ipv4(&a));
+        a.no_ipv4 = true;
+        assert!(!wants_auto_ipv4(&a));
+        a.no_ipv4 = false;
+        a.ipv4 = Some("100.100.0.0/22".into());
+        assert!(!wants_auto_ipv4(&a));
     }
 
     #[test]
