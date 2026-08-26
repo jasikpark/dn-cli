@@ -51,6 +51,20 @@ cargo run -- hosts list --json
 cargo build --release
 ```
 
+### Changelog and releases
+
+`CHANGELOG.md` is generated from commit subjects, so every user-visible change
+needs a [conventional commit](https://www.conventionalcommits.org/): `feat:`
+and `fix:` become entries under the next version, `feat!:` (or a
+`BREAKING CHANGE:` footer) marks a breaking change, and other types (`docs:`,
+`chore:`, `test:`) stay out of the changelog. Write the subject as the line a
+user should read in the release notes. The `Require changes to be documented`
+check on each PR is [Knope](https://knope.tech) looking for exactly that.
+
+On every push to `main`, Knope opens or updates a `chore: prepare release X`
+PR that bumps `Cargo.toml` and writes `CHANGELOG.md`. Merging it pushes the
+`vX` tag, and cargo-dist builds the binaries and publishes the release.
+
 ## Claude Code plugin
 
 This repo doubles as a [Claude Code](https://claude.com/claude-code) plugin
