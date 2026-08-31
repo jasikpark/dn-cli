@@ -69,6 +69,8 @@ enum HostsCommand {
     /// Create a host (or lighthouse / relay) and an enrollment code in one
     /// transaction. Prints the OTP to give to `dnclient enroll`.
     Create(HostCreateArgs),
+    /// Edit a host — update tags, and (in future) other mutable fields.
+    Edit(HostEditArgs),
     /// Delete a host. Asks for confirmation unless --yes is passed.
     Delete(HostDeleteArgs),
 }
@@ -134,6 +136,21 @@ struct HostCreateArgs {
 }
 
 #[derive(Args)]
+struct HostEditArgs {
+    /// Host id (host-…)
+    host_id: String,
+    /// Rename the host.
+    #[arg(long)]
+    name: Option<String>,
+    /// Add a tag in key:value form. Repeatable, or comma-separated.
+    #[arg(long, value_name = "KEY:VALUE", value_delimiter = ',')]
+    add_tag: Vec<String>,
+    /// Remove a tag by its key. Repeatable, or comma-separated.
+    #[arg(long, value_name = "KEY", value_delimiter = ',')]
+    remove_tag: Vec<String>,
+}
+
+#[derive(Args)]
 struct HostDeleteArgs {
     /// Host id (host-…)
     host_id: String,
@@ -185,6 +202,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             match command {
                 HostsCommand::List => hosts_list(&client, cli.json)?,
                 HostsCommand::Create(args) => hosts_create(&client, args, cli.json)?,
+                HostsCommand::Edit(args) => hosts_edit(&client, args, cli.json)?,
                 HostsCommand::Delete(args) => hosts_delete(&client, args, cli.json)?,
             }
         }
@@ -473,6 +491,97 @@ fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyhow::R
 
     print!("{}", render_host_create_human(&res));
     Ok(())
+}
+
+/// Edit a host's tags via read-modify-write: GET the current host, apply
+/// the `--add-tag` / `--remove-tag` deltas, PUT the full object back.
+fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::Result<()> {
+    if args.name.is_none() && args.add_tag.is_empty() && args.remove_tag.is_empty() {
+        bail!("nothing to edit — pass --name, --add-tag, or --remove-tag");
+    }
+
+    let id = args.host_id.as_str();
+    let res = client.get_host(id)?;
+    let data = res
+        .get("data")
+        .ok_or_else(|| anyhow!("host response missing 'data'"))?;
+
+    let mut tags = extract_tags(data);
+
+    for raw in &args.add_tag {
+        let tag = raw.trim().to_string();
+        parse_tag(&tag)?;
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    for raw in &args.remove_tag {
+        let tag = raw.trim();
+        let before = tags.len();
+        tags.retain(|t| t != tag);
+        if tags.len() == before && !json {
+            eprintln!("warning: tag \"{tag}\" was not present on the host");
+        }
+    }
+
+    let mut body = data.clone();
+    let obj = body
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("host data is not an object"))?;
+    obj.insert("tags".into(), json!(tags));
+    if let Some(new_name) = &args.name {
+        obj.insert("name".into(), json!(new_name));
+    }
+
+    let updated = client.update_host(id, &body)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&updated)?);
+        return Ok(());
+    }
+
+    let (_, name, ips) = host_fields(updated.get("data").unwrap_or(&Value::Null));
+    let final_tags = extract_tags(updated.get("data").unwrap_or(&Value::Null));
+    if name.is_empty() {
+        print!("Updated host {id}");
+    } else {
+        print!("Updated host \"{name}\" ({id})");
+    }
+    if !ips.is_empty() {
+        print!(" [{ips}]");
+    }
+    println!();
+    if final_tags.is_empty() {
+        println!("  Tags: (none)");
+    } else {
+        for tag in &final_tags {
+            println!("  {tag}");
+        }
+    }
+    Ok(())
+}
+
+/// Parse a `key:value` tag, splitting on the first `:`.
+fn parse_tag(s: &str) -> anyhow::Result<(String, String)> {
+    let s = s.trim();
+    match s.split_once(':') {
+        Some((k, v)) if !k.is_empty() && !v.is_empty() => Ok((k.to_string(), v.to_string())),
+        _ => Err(anyhow!("invalid tag \"{s}\" — expected key:value")),
+    }
+}
+
+/// Pull the tags out of a host object as a list of `key:value` strings.
+/// The full string is the identity — multiple tags can share a prefix.
+fn extract_tags(host: &Value) -> Vec<String> {
+    host.get("tags")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Delete one host, confirming interactively unless `--yes` says not to.
@@ -1208,6 +1317,88 @@ mod tests {
             panic!("expected `hosts create` to parse into HostsCommand::Create");
         };
         assert_eq!(args.name, "my-laptop");
+    }
+
+    #[test]
+    fn parse_tag_splits_on_first_colon() {
+        let (k, v) = parse_tag("dns:cloudflare").unwrap();
+        assert_eq!(k, "dns");
+        assert_eq!(v, "cloudflare");
+    }
+
+    #[test]
+    fn parse_tag_preserves_colons_in_value() {
+        let (k, v) = parse_tag("url:https://example.com").unwrap();
+        assert_eq!(k, "url");
+        assert_eq!(v, "https://example.com");
+    }
+
+    #[test]
+    fn parse_tag_rejects_missing_colon() {
+        assert!(parse_tag("novalue").is_err());
+    }
+
+    #[test]
+    fn parse_tag_rejects_empty_key_or_value() {
+        assert!(parse_tag(":val").is_err());
+        assert!(parse_tag("key:").is_err());
+    }
+
+    #[test]
+    fn extract_tags_returns_empty_when_absent() {
+        assert!(extract_tags(&json!({})).is_empty());
+        assert!(extract_tags(&json!({"tags": null})).is_empty());
+    }
+
+    #[test]
+    fn extract_tags_preserves_full_strings() {
+        let host = json!({"tags": ["dns:cloudflare", "dns:synced", "env:prod"]});
+        let tags = extract_tags(&host);
+        assert_eq!(tags, vec!["dns:cloudflare", "dns:synced", "env:prod"]);
+    }
+
+    #[test]
+    fn parses_hosts_edit_with_add_and_remove_tags() {
+        let cli = Cli::try_parse_from([
+            "dn",
+            "hosts",
+            "edit",
+            "host-1",
+            "--add-tag",
+            "dns:cloudflare",
+            "--remove-tag",
+            "old",
+        ])
+        .unwrap();
+        let Command::Hosts {
+            command: HostsCommand::Edit(args),
+        } = cli.command
+        else {
+            panic!("expected `hosts edit` to parse into HostsCommand::Edit");
+        };
+        assert_eq!(args.host_id, "host-1");
+        assert_eq!(args.add_tag, vec!["dns:cloudflare"]);
+        assert_eq!(args.remove_tag, vec!["old"]);
+    }
+
+    #[test]
+    fn parses_hosts_edit_comma_delimited_tags() {
+        let cli = Cli::try_parse_from([
+            "dn",
+            "hosts",
+            "edit",
+            "host-1",
+            "--add-tag",
+            "a:1,b:2",
+        ])
+        .unwrap();
+        let Command::Hosts {
+            command: HostsCommand::Edit(args),
+        } = cli.command
+        else {
+            panic!("expected comma-delimited add-tag to split");
+        };
+        assert_eq!(args.add_tag, vec!["a:1", "b:2"]);
     }
 
     #[test]

@@ -174,6 +174,25 @@ impl Client {
             .context("failed to parse Defined API response as JSON")
     }
 
+    /// PUT a JSON body to a versioned path and return the parsed JSON
+    /// response.
+    pub fn put_json(&self, path: &str, body: &Value) -> Result<Value> {
+        let url = format!("{}{}", self.config.api_url, path);
+        let auth = format!("Bearer {}", self.config.api_key);
+
+        let mut res = self
+            .agent
+            .put(&url)
+            .header("Authorization", &auth)
+            .send_json(body)
+            .context("request to Defined API failed")?;
+        error_for_status(&mut res)?;
+
+        res.body_mut()
+            .read_json::<Value>()
+            .context("failed to parse Defined API response as JSON")
+    }
+
     /// DELETE a versioned path. A 2xx carries an empty `{data, metadata}`
     /// envelope, so nothing is parsed — the status is the whole answer.
     pub fn delete(&self, path: &str) -> Result<()> {
@@ -258,6 +277,13 @@ impl Client {
     /// confirmation prompt can name what is about to be removed.
     pub fn get_host(&self, id: &str) -> Result<Value> {
         self.get(&format!("/v2/hosts/{id}"))
+    }
+
+    /// Update a host (v3). The body is the full host object — PUT is not
+    /// field-partial, so callers GET first and send the modified whole.
+    /// v2 network hosts require v3 for mutations.
+    pub fn update_host(&self, id: &str, body: &Value) -> Result<Value> {
+        self.put_json(&format!("/v3/hosts/{id}"), body)
     }
 
     /// Delete a host, which needs the `hosts:delete` scope. v1 is the only
