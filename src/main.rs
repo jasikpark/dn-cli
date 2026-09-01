@@ -502,6 +502,7 @@ fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyhow::R
 /// Catch user errors (empty flags, bad tag format) before credentials are
 /// resolved, matching `validate_create_preflight`'s contract.
 fn validate_edit_preflight(args: &HostEditArgs) -> anyhow::Result<()> {
+    validate_host_id(&args.host_id)?;
     if args.name.is_none() && args.add_tag.is_empty() && args.remove_tag.is_empty() {
         bail!("nothing to edit — pass --name, --add-tag, or --remove-tag");
     }
@@ -514,7 +515,9 @@ fn validate_edit_preflight(args: &HostEditArgs) -> anyhow::Result<()> {
         parse_tag(raw.trim())?;
     }
     for raw in &args.remove_tag {
-        parse_tag(raw.trim())?;
+        if raw.trim().is_empty() {
+            bail!("--remove-tag value must not be empty");
+        }
     }
     Ok(())
 }
@@ -552,7 +555,7 @@ fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::Resul
         .ok_or_else(|| anyhow!("host data is not an object"))?;
     obj.insert("tags".into(), json!(tags));
     if let Some(new_name) = &args.name {
-        obj.insert("name".into(), json!(new_name));
+        obj.insert("name".into(), json!(new_name.trim()));
     }
 
     if body == *data {
@@ -589,6 +592,17 @@ fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::Resul
         for tag in &final_tags {
             println!("  {tag}");
         }
+    }
+    Ok(())
+}
+
+/// Reject host IDs that contain URL-structural characters.
+fn validate_host_id(id: &str) -> anyhow::Result<()> {
+    if id.is_empty() {
+        bail!("host id must not be empty");
+    }
+    if let Some(c) = id.chars().find(|c| matches!(c, '?' | '#' | '/' | '\\')) {
+        bail!("host id contains invalid character '{c}'");
     }
     Ok(())
 }
@@ -635,6 +649,7 @@ fn extract_tags(host: &Value) -> Vec<String> {
 /// name and IPs of the host you typed an id for), so it runs before the
 /// prompt and its failure is fatal.
 fn hosts_delete(client: &Client, args: &HostDeleteArgs, json: bool) -> anyhow::Result<()> {
+    validate_host_id(&args.host_id)?;
     let id = args.host_id.as_str();
     let mut name = String::new();
 
@@ -1391,6 +1406,15 @@ mod tests {
     }
 
     #[test]
+    fn validate_host_id_rejects_url_structural_chars() {
+        assert!(validate_host_id("host-ABC123").is_ok());
+        assert!(validate_host_id("host-1?admin=true").is_err());
+        assert!(validate_host_id("host-1#frag").is_err());
+        assert!(validate_host_id("host-1/../../etc").is_err());
+        assert!(validate_host_id("").is_err());
+    }
+
+    #[test]
     fn parse_tag_rejects_long_key() {
         let long_key = "k".repeat(21);
         assert!(parse_tag(&format!("{long_key}:v")).is_err());
@@ -1473,15 +1497,8 @@ mod tests {
 
     #[test]
     fn commas_in_tag_values_are_preserved() {
-        let cli = Cli::try_parse_from([
-            "dn",
-            "hosts",
-            "edit",
-            "host-1",
-            "--add-tag",
-            "list:a,b,c",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["dn", "hosts", "edit", "host-1", "--add-tag", "list:a,b,c"])
+            .unwrap();
         let Command::Hosts {
             command: HostsCommand::Edit(args),
         } = cli.command
