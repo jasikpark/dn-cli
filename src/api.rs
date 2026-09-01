@@ -1,10 +1,13 @@
 use std::fmt;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::config::Config;
+
+const MAX_RETRIES: u32 = 3;
 
 /// Minimal client for the Defined Networking REST API.
 ///
@@ -126,9 +129,31 @@ impl Client {
         // (Error::StatusCode carries only the numeric code, never the body).
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(60)))
             .build()
             .into();
         Self { config, agent }
+    }
+
+    fn call_with_retry<F>(&self, send: F) -> Result<ureq::http::Response<ureq::Body>>
+    where
+        F: Fn() -> Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+    {
+        for attempt in 0..MAX_RETRIES {
+            let res = send().context("request to Defined API failed")?;
+            if res.status().as_u16() != 429 {
+                return Ok(res);
+            }
+            let delay = retry_delay(&res, attempt);
+            eprintln!(
+                "rate limited, retrying in {:.1}s ({}/{MAX_RETRIES})...",
+                delay.as_secs_f64(),
+                attempt + 1
+            );
+            std::thread::sleep(delay);
+        }
+        let res = send().context("request to Defined API failed")?;
+        Ok(res)
     }
 
     /// GET a versioned path and return the parsed JSON body.
@@ -142,12 +167,13 @@ impl Client {
         let url = format!("{}{}", self.config.api_url, path);
         let auth = format!("Bearer {}", self.config.api_key);
 
-        let mut req = self.agent.get(&url).header("Authorization", &auth);
-        for (key, value) in query {
-            req = req.query(*key, *value);
-        }
-
-        let mut res = req.call().context("request to Defined API failed")?;
+        let mut res = self.call_with_retry(|| {
+            let mut req = self.agent.get(&url).header("Authorization", &auth);
+            for (key, value) in query {
+                req = req.query(*key, *value);
+            }
+            req.call()
+        })?;
         error_for_status(&mut res)?;
 
         res.body_mut()
@@ -161,12 +187,12 @@ impl Client {
         let url = format!("{}{}", self.config.api_url, path);
         let auth = format!("Bearer {}", self.config.api_key);
 
-        let mut res = self
-            .agent
-            .post(&url)
-            .header("Authorization", &auth)
-            .send_json(body)
-            .context("request to Defined API failed")?;
+        let mut res = self.call_with_retry(|| {
+            self.agent
+                .post(&url)
+                .header("Authorization", &auth)
+                .send_json(body)
+        })?;
         error_for_status(&mut res)?;
 
         res.body_mut()
@@ -180,12 +206,12 @@ impl Client {
         let url = format!("{}{}", self.config.api_url, path);
         let auth = format!("Bearer {}", self.config.api_key);
 
-        let mut res = self
-            .agent
-            .put(&url)
-            .header("Authorization", &auth)
-            .send_json(body)
-            .context("request to Defined API failed")?;
+        let mut res = self.call_with_retry(|| {
+            self.agent
+                .put(&url)
+                .header("Authorization", &auth)
+                .send_json(body)
+        })?;
         error_for_status(&mut res)?;
 
         res.body_mut()
@@ -199,12 +225,12 @@ impl Client {
         let url = format!("{}{}", self.config.api_url, path);
         let auth = format!("Bearer {}", self.config.api_key);
 
-        let mut res = self
-            .agent
-            .delete(&url)
-            .header("Authorization", &auth)
-            .call()
-            .context("request to Defined API failed")?;
+        let mut res = self.call_with_retry(|| {
+            self.agent
+                .delete(&url)
+                .header("Authorization", &auth)
+                .call()
+        })?;
 
         error_for_status(&mut res)
     }
@@ -350,6 +376,32 @@ fn error_for_status(res: &mut ureq::http::Response<ureq::Body>) -> Result<()> {
     Err(ApiError::from_response(status.as_u16(), &body, request_id).into())
 }
 
+fn retry_delay(res: &ureq::http::Response<ureq::Body>, attempt: u32) -> Duration {
+    let header_val = res
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok());
+    retry_delay_from(header_val, attempt, cheap_jitter())
+}
+
+fn retry_delay_from(header: Option<&str>, attempt: u32, jitter: f64) -> Duration {
+    let from_header = header
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|s| (0.0..=60.0).contains(s));
+
+    let base = from_header.unwrap_or_else(|| 2.0_f64.powi(attempt as i32));
+    Duration::from_secs_f64(base + jitter * 0.5 * base)
+}
+
+fn cheap_jitter() -> f64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    let mixed = nanos ^ std::process::id().wrapping_mul(2654435761);
+    (mixed % 1000) as f64 / 1000.0
+}
+
 /// Pull the next-page cursor out of a list response's `metadata`, or `None`
 /// when there are no more pages.
 ///
@@ -448,6 +500,63 @@ mod tests {
     fn next_cursor_accepts_cursor_fallback() {
         let md = json!({"hasNextPage": true, "cursor": "xyz"});
         assert_eq!(next_cursor(Some(&md)).as_deref(), Some("xyz"));
+    }
+
+    #[test]
+    fn retry_delay_uses_header_when_valid() {
+        let d = retry_delay_from(Some("5"), 0, 0.0);
+        assert_eq!(d, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn retry_delay_honors_zero_header() {
+        let d = retry_delay_from(Some("0"), 0, 0.0);
+        assert_eq!(d, Duration::from_secs(0));
+    }
+
+    #[test]
+    fn retry_delay_caps_header_at_60() {
+        let d = retry_delay_from(Some("61"), 0, 0.0);
+        assert_eq!(d, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn retry_delay_rejects_nan_and_inf() {
+        let d_nan = retry_delay_from(Some("NaN"), 0, 0.0);
+        let d_inf = retry_delay_from(Some("inf"), 0, 0.0);
+        assert_eq!(d_nan, Duration::from_secs(1));
+        assert_eq!(d_inf, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn retry_delay_rejects_negative() {
+        let d = retry_delay_from(Some("-1"), 0, 0.0);
+        assert_eq!(d, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn retry_delay_rejects_http_date() {
+        let d = retry_delay_from(Some("Fri, 31 May 2024 23:59:59 GMT"), 0, 0.0);
+        assert_eq!(d, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn retry_delay_exponential_fallback() {
+        assert_eq!(retry_delay_from(None, 0, 0.0), Duration::from_secs(1));
+        assert_eq!(retry_delay_from(None, 1, 0.0), Duration::from_secs(2));
+        assert_eq!(retry_delay_from(None, 2, 0.0), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn retry_delay_adds_jitter() {
+        let d = retry_delay_from(None, 1, 1.0);
+        assert_eq!(d, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn cheap_jitter_in_range() {
+        let j = cheap_jitter();
+        assert!((0.0..1.0).contains(&j), "jitter {j} out of [0.0, 1.0)");
     }
 
     #[test]
