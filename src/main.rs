@@ -38,6 +38,17 @@ enum Command {
         #[command(subcommand)]
         command: HostsCommand,
     },
+    /// Inspect firewall roles
+    Roles {
+        #[command(subcommand)]
+        command: RolesCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum RolesCommand {
+    /// List firewall roles
+    List,
 }
 
 #[derive(Subcommand)]
@@ -212,6 +223,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 HostsCommand::Delete(args) => hosts_delete(&client, args, cli.json)?,
             }
         }
+        Command::Roles { command } => {
+            let client = Client::new(Config::load()?);
+            match command {
+                RolesCommand::List => roles_list(&client, cli.json)?,
+            }
+        }
     }
 
     Ok(())
@@ -381,6 +398,64 @@ fn auth_logout(json: bool) -> anyhow::Result<()> {
     } else {
         println!("No stored credentials to remove.");
     }
+    Ok(())
+}
+
+fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
+    let res = client.list_roles()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&res)?);
+        return Ok(());
+    }
+
+    let empty: Vec<Value> = Vec::new();
+    let rows = res.get("data").and_then(Value::as_array).unwrap_or(&empty);
+    if rows.is_empty() {
+        println!("No roles found.");
+        return Ok(());
+    }
+
+    let table_rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            let field = |key| {
+                row.get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let count = |key| {
+                row.get(key)
+                    .and_then(Value::as_u64)
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+            };
+            vec![
+                field("id"),
+                field("name"),
+                count("firewallRulesCount"),
+                count("hostCount"),
+                field("description"),
+            ]
+        })
+        .collect();
+    print!(
+        "{}",
+        render_table(
+            &["ID", "NAME", "RULES", "HOSTS", "DESCRIPTION"],
+            &table_rows
+        )
+    );
+
+    if let Some(total) = res
+        .get("metadata")
+        .and_then(|m| m.get("totalCount"))
+        .and_then(Value::as_u64)
+    {
+        println!("\n{} shown / {total} total", rows.len());
+    }
+
     Ok(())
 }
 
@@ -923,7 +998,7 @@ fn render_host_create_human(res: &Value) -> String {
     out.push('\n');
     out.push_str("Note: the default role denies all traffic. New hosts will be on the\n");
     out.push_str("network but unable to reach each other until a role with firewall rules\n");
-    out.push_str("is created and assigned (see `dn roles --help`).\n");
+    out.push_str("is created and assigned (see `dn roles list`).\n");
     out
 }
 

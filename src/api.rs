@@ -249,6 +249,34 @@ impl Client {
         Ok(json!({ "data": data, "metadata": metadata }))
     }
 
+    /// List every role, following cursor pagination to completion.
+    pub fn list_roles(&self) -> Result<Value> {
+        let mut data: Vec<Value> = Vec::new();
+        let mut metadata = Value::Null;
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let page = match &cursor {
+                Some(c) => self.get_with_query("/v1/roles", &[("cursor", c)])?,
+                None => self.get("/v1/roles")?,
+            };
+
+            if let Some(rows) = page.get("data").and_then(Value::as_array) {
+                data.extend(rows.iter().cloned());
+            }
+            if let Some(m) = page.get("metadata") {
+                metadata = m.clone();
+            }
+
+            match next_cursor(page.get("metadata")) {
+                Some(next) if Some(&next) != cursor.as_ref() => cursor = Some(next),
+                _ => break,
+            }
+        }
+
+        Ok(json!({ "data": data, "metadata": metadata }))
+    }
+
     /// Prove a key works with the least privilege the CLI relies on: a
     /// one-item `GET /v2/hosts` needs only `hosts:list`, so a key scoped
     /// exactly as the README suggests still passes.
