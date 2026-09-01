@@ -23,7 +23,7 @@ unicode-width = "0.2.2"
 ureq = { version = "3.3.0", features = ["json"] }
 
 [dev-dependencies]
-proptest = "1"
+proptest = "=1.11.0"
 
 # The profile that 'dist' will build with
 [profile.dist]
