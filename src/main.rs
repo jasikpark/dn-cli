@@ -355,13 +355,17 @@ fn auth_status(json: bool) -> anyhow::Result<()> {
 
 fn auth_logout(json: bool) -> anyhow::Result<()> {
     let path = auth_path()?;
-    let removed = match std::fs::remove_file(&path) {
+    let target = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    let removed = match std::fs::remove_file(&target) {
         Ok(()) => true,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => {
-            return Err(e).with_context(|| format!("failed to remove {}", path.display()));
+            return Err(e).with_context(|| format!("failed to remove {}", target.display()));
         }
     };
+    if removed && target != path {
+        let _ = std::fs::remove_file(&path);
+    }
     let env_override = warn_env_override();
 
     if json {
