@@ -17,16 +17,13 @@ pub struct Config {
     pub api_url: String,
 }
 
-/// On-disk config. Holds a 1Password *secret reference* for the API key, never
-/// the key itself — the secret is fetched with `op read` on every invocation,
-/// so each call goes through 1Password's own unlock gate.
+/// Settings file (`config.json`). Non-secret configuration like `api_url`.
+/// Credentials live in [`AuthFile`] (`auth.json`).
 ///
 /// Keys this binary doesn't model are preserved verbatim in `extra`, so a
 /// round-trip through an older `dn` never drops what a newer one wrote.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_url: Option<String>,
     #[serde(flatten)]
@@ -34,11 +31,7 @@ pub struct FileConfig {
 }
 
 impl FileConfig {
-    pub fn is_empty(&self) -> bool {
-        self.api_key_ref.is_none() && self.api_url.is_none() && self.extra.is_empty()
-    }
-
-    /// Read the config file, treating a missing file as an empty config. A
+    /// Read the settings file, treating a missing file as an empty config. A
     /// present-but-unparsable file is an error naming the path.
     pub fn load() -> Result<Self> {
         let path = config_path()?;
@@ -49,11 +42,29 @@ impl FileConfig {
             Err(e) => Err(e).with_context(|| format!("failed to read {}", path.display())),
         }
     }
+}
 
-    /// Like [`load`](Self::load), but an unreadable or unparsable file yields an
-    /// empty config plus the error, so commands that are about to overwrite or
-    /// remove the file can proceed instead of being wedged by their own corrupt
-    /// state.
+/// Credentials file (`auth.json`). Separated from [`FileConfig`] so that
+/// `dn auth logout` can delete credentials without touching settings.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuthFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_ref: Option<String>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AuthFile {
+    pub fn load() -> Result<Self> {
+        let path = auth_path()?;
+        match fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str(&text)
+                .with_context(|| format!("failed to parse {}", path.display())),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e).with_context(|| format!("failed to read {}", path.display())),
+        }
+    }
+
     pub fn load_or_reset() -> Result<(Self, Option<anyhow::Error>)> {
         Ok(match Self::load() {
             Ok(cfg) => (cfg, None),
@@ -61,11 +72,8 @@ impl FileConfig {
         })
     }
 
-    /// Write the config (pretty JSON, owner-only on unix, atomic replace),
-    /// creating the parent directory. Always writes — an empty config is `{}`;
-    /// deleting the file is the caller's decision.
     pub fn save(&self) -> Result<PathBuf> {
-        let path = config_path()?;
+        let path = auth_path()?;
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)
                 .with_context(|| format!("failed to create {}", dir.display()))?;
@@ -141,6 +149,10 @@ fn write_private(path: &Path, text: &str) -> Result<()> {
 /// convention, not `~/Library`), `%APPDATA%\dn` on Windows.
 pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.json"))
+}
+
+pub fn auth_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("auth.json"))
 }
 
 fn config_dir() -> Result<PathBuf> {
@@ -224,10 +236,10 @@ impl KeySource {
         }
     }
 
-    /// Detect the active source from the environment and an already-loaded
-    /// file config, without resolving any secret.
-    pub fn detect(file: &FileConfig) -> Result<Option<Self>> {
-        resolve_key_source(api_key_env().as_deref(), file.api_key_ref.as_deref())
+    /// Detect the active source from the environment and an optional file
+    /// reference, without resolving any secret.
+    pub fn detect(api_key_ref: Option<&str>) -> Result<Option<Self>> {
+        resolve_key_source(api_key_env().as_deref(), api_key_ref)
     }
 }
 
@@ -254,7 +266,7 @@ pub fn resolve_key_source(
         };
     }
     if let Some(r) = file_ref.map(str::trim).filter(|r| !r.is_empty()) {
-        validate_op_ref(r).context("config api_key_ref is an invalid op:// reference")?;
+        validate_op_ref(r).context("api_key_ref is an invalid op:// reference")?;
         return Ok(Some(KeySource::FileRef(r.to_string())));
     }
     Ok(None)
@@ -410,8 +422,9 @@ impl Config {
     /// Resolve the API key (running `op read` if the source is a reference)
     /// and the base URL. Only commands that talk to the API call this.
     pub fn load() -> Result<Self> {
-        let file = FileConfig::load()?;
-        let source = KeySource::detect(&file)?.ok_or_else(|| {
+        let auth = AuthFile::load()?;
+        let settings = FileConfig::load()?;
+        let source = KeySource::detect(auth.api_key_ref.as_deref())?.ok_or_else(|| {
             anyhow!(
                 "No API key configured. Run `dn auth login` (stores a 1Password secret \
                  reference) or set {API_KEY_ENV}."
@@ -421,7 +434,7 @@ impl Config {
             KeySource::Env(key) => key,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => op_read(&r)?,
         };
-        Ok(Self::with_key(api_key, &file))
+        Ok(Self::with_key(api_key, &settings))
     }
 }
 
@@ -520,30 +533,45 @@ mod tests {
     #[test]
     fn file_config_roundtrips_and_omits_none() {
         let cfg = FileConfig {
-            api_key_ref: Some("op://v/i/f".into()),
+            api_url: Some("https://api.test".into()),
             ..FileConfig::default()
         };
         let text = serde_json::to_string(&cfg).unwrap();
-        assert_eq!(text, r#"{"api_key_ref":"op://v/i/f"}"#);
+        assert_eq!(text, r#"{"api_url":"https://api.test"}"#);
         let back: FileConfig = serde_json::from_str(&text).unwrap();
         assert_eq!(back, cfg);
-        assert!(FileConfig::default().is_empty());
-        assert!(!cfg.is_empty());
+        let empty = serde_json::to_string(&FileConfig::default()).unwrap();
+        assert_eq!(empty, "{}");
     }
 
     #[test]
     fn file_config_preserves_unknown_keys() {
-        let text = r#"{"api_key_ref":"op://v/i/f","future_flag":true}"#;
-        let mut cfg: FileConfig = serde_json::from_str(text).unwrap();
+        let text = r#"{"api_url":"https://api.test","future_flag":true}"#;
+        let cfg: FileConfig = serde_json::from_str(text).unwrap();
         assert_eq!(
             cfg.extra.get("future_flag"),
             Some(&serde_json::Value::Bool(true))
         );
-        cfg.api_key_ref = None;
-        assert!(!cfg.is_empty(), "unknown keys keep the config non-empty");
         let back: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
-        assert_eq!(back, serde_json::json!({ "future_flag": true }));
+        assert_eq!(
+            back,
+            serde_json::json!({ "api_url": "https://api.test", "future_flag": true })
+        );
+    }
+
+    #[test]
+    fn auth_file_roundtrips_and_omits_none() {
+        let auth = AuthFile {
+            api_key_ref: Some("op://v/i/f".into()),
+            ..AuthFile::default()
+        };
+        let text = serde_json::to_string(&auth).unwrap();
+        assert_eq!(text, r#"{"api_key_ref":"op://v/i/f"}"#);
+        let back: AuthFile = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, auth);
+        let empty = serde_json::to_string(&AuthFile::default()).unwrap();
+        assert_eq!(empty, "{}");
     }
 
     /// A per-process scratch directory, so parallel tests never share one.
