@@ -1,6 +1,22 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.1 (2026-09-01)
+
+### Features
+
+- dn hosts edit with --name, --add-tag, --remove-tag
+- split config into settings (config.json) and credentials (auth.json)
+- add dn roles list with paginated table output (#34)
+- retry rate-limited requests with exponential backoff (#37)
+
+### Fixes
+
+- harden hosts edit after adversarial review
+- defense-in-depth from final roast
+- canonicalize auth path on logout to match write_private symlink contract
+- sanitize control characters in human-mode output (#35)
+
 ## 0.2.0 (2026-08-26)
 
 ### Breaking Changes
