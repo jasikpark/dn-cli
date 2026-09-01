@@ -3,4 +3,5 @@
 .DS_Store
 .env
 .env.*
+test-dn.sh
 /mutants.out*
