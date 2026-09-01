@@ -644,6 +644,8 @@ fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::Resul
 
     let (_, name, ips) = host_fields(updated.get("data").unwrap_or(&Value::Null));
     let final_tags = extract_tags(updated.get("data").unwrap_or(&Value::Null));
+    let name = sanitize_for_display(name);
+    let ips = sanitize_for_display(&ips);
     if name.is_empty() {
         print!("Updated host {id}");
     } else {
@@ -657,7 +659,7 @@ fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::Resul
         println!("  Tags: (none)");
     } else {
         for tag in &final_tags {
-            println!("  {tag}");
+            println!("  {}", sanitize_for_display(tag));
         }
     }
     Ok(())
@@ -733,7 +735,8 @@ fn hosts_delete(client: &Client, args: &HostDeleteArgs, json: bool) -> anyhow::R
                 )
             })?;
             let (_, found, ips) = host_fields(&res["data"]);
-            name = found.to_owned();
+            name = sanitize_for_display(found);
+            let ips = sanitize_for_display(&ips);
 
             let mut err = std::io::stderr();
             write!(err, "{}", delete_prompt(id, &name, &ips))?;
@@ -985,6 +988,9 @@ fn render_host_create_human(res: &Value) -> String {
     };
     let code = str_field(enrollment, "code");
 
+    let name = sanitize_for_display(&name);
+    let ips = sanitize_for_display(&ips);
+
     let mut out = String::new();
     out.push_str(&format!("Created {kind} \"{name}\" ({id})\n"));
     if !ips.is_empty() {
@@ -1010,9 +1016,19 @@ fn render_host_create_human(res: &Value) -> String {
 /// wide glyphs (emoji, CJK) and combining marks align correctly — a host named
 /// `caleb-macbook-pro 💻` lines up with its plain-ASCII neighbours. Generic
 /// over column count so future list commands (networks, roles, …) can reuse it.
+fn sanitize_for_display(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
 fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    let rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| row.iter().map(|c| sanitize_for_display(c)).collect())
+        .collect();
     let mut widths: Vec<usize> = headers.iter().map(|h| h.width()).collect();
-    for row in rows {
+    for row in &rows {
         for (i, cell) in row.iter().enumerate() {
             if let Some(w) = widths.get_mut(i) {
                 *w = (*w).max(cell.as_str().width());
@@ -1593,5 +1609,47 @@ mod tests {
             last_col_offsets.windows(2).all(|w| w[0] == w[1]),
             "last column misaligned across rows: {last_col_offsets:?}"
         );
+    }
+
+    mod sanitize {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn no_control_chars_survive(s in "\\PC*") {
+                let out = sanitize_for_display(&s);
+                assert!(
+                    !out.chars().any(|c| c.is_control()),
+                    "control character in output: {out:?}"
+                );
+            }
+
+            #[test]
+            fn non_control_chars_are_preserved(s in "[^\\p{Cc}]*") {
+                assert_eq!(sanitize_for_display(&s), s);
+            }
+
+            #[test]
+            fn length_is_preserved(s in "\\PC*") {
+                assert_eq!(
+                    sanitize_for_display(&s).chars().count(),
+                    s.chars().count(),
+                );
+            }
+
+            #[test]
+            fn table_rows_stay_aligned(
+                cells in prop::collection::vec("[\\x00-\\x1f\\x20-\\x7e]*", 1..5),
+            ) {
+                let rows = vec![cells];
+                let headers: Vec<&str> = (0..rows[0].len()).map(|_| "H").collect();
+                let out = render_table(&headers, &rows);
+                assert!(
+                    !out.lines().any(|l| l.contains('\n') || l.contains('\r')),
+                    "embedded newline broke table row: {out:?}"
+                );
+            }
+        }
     }
 }
