@@ -24,7 +24,7 @@ ureq = { version = "3.3.0", features = ["json"] }
 
 [dev-dependencies]
 proptest = "=1.11.0"
-tempfile = "3"
+tempfile = "=3.27.0"
 
 # The profile that 'dist' will build with
 [profile.dist]
