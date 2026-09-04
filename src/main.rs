@@ -80,7 +80,7 @@ enum HostsCommand {
     /// Create a host (or lighthouse / relay) and an enrollment code in one
     /// transaction. Prints the OTP to give to `dnclient enroll`.
     Create(HostCreateArgs),
-    /// Edit a host — update tags, and (in future) other mutable fields.
+    /// Edit a host — rename it, assign a role, or add/remove tags.
     Edit(HostEditArgs),
     /// Delete a host. Asks for confirmation unless --yes is passed.
     Delete(HostDeleteArgs),
@@ -153,6 +153,9 @@ struct HostEditArgs {
     /// Rename the host.
     #[arg(long)]
     name: Option<String>,
+    /// Assign a firewall role (role-…). Find ids with `dn roles list`.
+    #[arg(long, value_name = "ROLE_ID")]
+    role: Option<String>,
     /// Add a tag (key:value). Repeatable.
     #[arg(long, value_name = "TAG")]
     add_tag: Vec<String>,
@@ -570,13 +573,20 @@ fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyhow::R
 /// resolved, matching `validate_create_preflight`'s contract.
 fn validate_edit_preflight(args: &HostEditArgs) -> anyhow::Result<()> {
     validate_host_id(&args.host_id)?;
-    if args.name.is_none() && args.add_tag.is_empty() && args.remove_tag.is_empty() {
-        bail!("nothing to edit — pass --name, --add-tag, or --remove-tag");
+    if args.name.is_none()
+        && args.role.is_none()
+        && args.add_tag.is_empty()
+        && args.remove_tag.is_empty()
+    {
+        bail!("nothing to edit — pass --name, --role, --add-tag, or --remove-tag");
     }
     if let Some(n) = &args.name
         && n.trim().is_empty()
     {
         bail!("--name must not be empty");
+    }
+    if let Some(r) = &args.role {
+        validate_role_id(r.trim())?;
     }
     for raw in &args.add_tag {
         parse_tag(raw.trim())?;
@@ -589,24 +599,20 @@ fn validate_edit_preflight(args: &HostEditArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Edit a host via read-modify-write: GET the current host, apply deltas,
-/// PUT the full object back. Removes run before adds so
+/// Apply the edit deltas to a fetched host object and return the full body
+/// to PUT back, plus any `--remove-tag` values that were not on the host
+/// (the caller decides whether to warn). Removes run before adds so
 /// `--remove-tag old:x --add-tag old:y` replaces in one call.
-fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::Result<()> {
-    let id = args.host_id.as_str();
-    let res = client.get_host(id)?;
-    let data = res
-        .get("data")
-        .ok_or_else(|| anyhow!("host response missing 'data'"))?;
-
+fn build_edit_body(data: &Value, args: &HostEditArgs) -> anyhow::Result<(Value, Vec<String>)> {
     let mut tags = extract_tags(data);
+    let mut missing = Vec::new();
 
     for raw in &args.remove_tag {
         let tag = raw.trim();
         let before = tags.len();
         tags.retain(|t| t != tag);
-        if tags.len() == before && !json {
-            eprintln!("warning: tag \"{tag}\" was not present on the host");
+        if tags.len() == before {
+            missing.push(tag.to_string());
         }
     }
     for raw in &args.add_tag {
@@ -623,6 +629,30 @@ fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::Resul
     obj.insert("tags".into(), json!(tags));
     if let Some(new_name) = &args.name {
         obj.insert("name".into(), json!(new_name.trim()));
+    }
+    if let Some(role) = &args.role {
+        obj.insert("roleID".into(), json!(role.trim()));
+    }
+    Ok((body, missing))
+}
+
+/// Edit a host via read-modify-write: GET the current host, apply deltas,
+/// PUT the full object back (the v3 PUT is whole-object, not partial).
+fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::Result<()> {
+    let id = args.host_id.as_str();
+    let res = client.get_host(id)?;
+    let data = res
+        .get("data")
+        .ok_or_else(|| anyhow!("host response missing 'data'"))?;
+
+    let (body, missing_tags) = build_edit_body(data, args)?;
+    if !json {
+        for tag in &missing_tags {
+            eprintln!(
+                "warning: tag \"{}\" was not present on the host",
+                sanitize_for_display(tag)
+            );
+        }
     }
 
     if body == *data {
@@ -655,6 +685,16 @@ fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::Resul
         print!(" [{ips}]");
     }
     println!();
+    let role = updated
+        .get("data")
+        .and_then(|d| d.get("roleID"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if role.is_empty() {
+        println!("  Role: (none)");
+    } else {
+        println!("  Role: {}", sanitize_for_display(role));
+    }
     if final_tags.is_empty() {
         println!("  Tags: (none)");
     } else {
@@ -672,6 +712,22 @@ fn validate_host_id(id: &str) -> anyhow::Result<()> {
     }
     if let Some(c) = id.chars().find(|c| matches!(c, '?' | '#' | '/' | '\\')) {
         bail!("host id contains invalid character '{c}'");
+    }
+    Ok(())
+}
+
+/// Reject role IDs that are empty or contain URL-structural characters.
+/// The API is the authority on whether the id exists; this only keeps a
+/// typo from turning into a malformed request body.
+fn validate_role_id(id: &str) -> anyhow::Result<()> {
+    if id.is_empty() {
+        bail!("--role must not be empty");
+    }
+    if let Some(c) = id.chars().find(|c| matches!(c, '?' | '#' | '/' | '\\')) {
+        bail!("role id contains invalid character '{c}'");
+    }
+    if id.chars().any(char::is_whitespace) {
+        bail!("role id must not contain whitespace");
     }
     Ok(())
 }
@@ -1576,6 +1632,92 @@ mod tests {
             panic!("expected repeated add-tag to collect");
         };
         assert_eq!(args.add_tag, vec!["a:1", "b:2"]);
+    }
+
+    fn edit_args(role: Option<&str>, name: Option<&str>) -> HostEditArgs {
+        HostEditArgs {
+            host_id: "host-1".to_string(),
+            name: name.map(str::to_string),
+            role: role.map(str::to_string),
+            add_tag: Vec::new(),
+            remove_tag: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn parses_hosts_edit_with_role() {
+        let cli =
+            Cli::try_parse_from(["dn", "hosts", "edit", "host-1", "--role", "role-abc"]).unwrap();
+        let Command::Hosts {
+            command: HostsCommand::Edit(args),
+        } = cli.command
+        else {
+            panic!("expected `hosts edit --role` to parse into HostsCommand::Edit");
+        };
+        assert_eq!(args.role.as_deref(), Some("role-abc"));
+        assert!(validate_edit_preflight(&args).is_ok());
+    }
+
+    #[test]
+    fn edit_preflight_rejects_no_edits_and_names_role_flag() {
+        let err = validate_edit_preflight(&edit_args(None, None))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--role"), "{err}");
+    }
+
+    #[test]
+    fn edit_preflight_rejects_bad_role_ids() {
+        for bad in ["", "  ", "role/abc", "role?x", "role abc"] {
+            assert!(
+                validate_edit_preflight(&edit_args(Some(bad), None)).is_err(),
+                "expected {bad:?} to be rejected"
+            );
+        }
+        assert!(validate_edit_preflight(&edit_args(Some(" role-abc "), None)).is_ok());
+    }
+
+    #[test]
+    fn build_edit_body_sets_role_and_keeps_other_fields() {
+        let data = json!({
+            "id": "host-1",
+            "name": "web",
+            "roleID": "role-old",
+            "tags": ["env:prod"],
+            "listenPort": 0
+        });
+        let (body, missing) = build_edit_body(&data, &edit_args(Some(" role-new "), None)).unwrap();
+        assert!(missing.is_empty());
+        assert_eq!(body["roleID"], "role-new");
+        assert_eq!(body["name"], "web");
+        assert_eq!(body["tags"], json!(["env:prod"]));
+        assert_eq!(body["listenPort"], 0);
+    }
+
+    #[test]
+    fn build_edit_body_without_role_flag_leaves_role_untouched() {
+        let data = json!({"id": "host-1", "roleID": "role-old", "tags": []});
+        let (body, _) = build_edit_body(&data, &edit_args(None, Some("renamed"))).unwrap();
+        assert_eq!(body["roleID"], "role-old");
+        assert_eq!(body["name"], "renamed");
+    }
+
+    #[test]
+    fn build_edit_body_same_role_is_a_noop() {
+        let data = json!({"id": "host-1", "roleID": "role-a", "tags": ["a:1"]});
+        let (body, _) = build_edit_body(&data, &edit_args(Some("role-a"), None)).unwrap();
+        assert_eq!(body, data);
+    }
+
+    #[test]
+    fn build_edit_body_reports_missing_removed_tags() {
+        let mut args = edit_args(None, None);
+        args.remove_tag = vec!["gone:1".to_string(), "a:1".to_string()];
+        args.add_tag = vec!["a:2".to_string()];
+        let data = json!({"id": "host-1", "tags": ["a:1"]});
+        let (body, missing) = build_edit_body(&data, &args).unwrap();
+        assert_eq!(missing, vec!["gone:1"]);
+        assert_eq!(body["tags"], json!(["a:2"]));
     }
 
     #[test]

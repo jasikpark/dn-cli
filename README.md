@@ -101,9 +101,15 @@ device enrollment.
   `Delete host "<name>" (<id>; <ips>)? [y/N]`; `--yes` skips the lookup and the
   prompt, and is required with `--json` or when stdin isn't a terminal. Key
   permission: `hosts:delete`.
+- Edits: `hosts edit <HOST_ID>` — `--name`, `--role <ROLE_ID>`, `--add-tag`,
+  `--remove-tag` (repeatable). Reads the host, applies the changes, and PUTs
+  the whole object back via `/v3/hosts/{id}`; a no-op edit skips the write.
+  Key permissions: `hosts:read` and `hosts:update`.
+- Roles: `roles list` — id, name, rule and host counts. Pair it with
+  `hosts edit --role` to move a host off the default deny-all role.
 - Coming next: `roles create` and `roles add-rule` — the default role denies
   all traffic, so newly enrolled hosts share a network but can't talk to
-  each other until a permissive role lands.
+  each other until a permissive role exists and is assigned.
 
 ## License
 
