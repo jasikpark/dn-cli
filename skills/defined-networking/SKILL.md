@@ -114,18 +114,6 @@ either. An edit that changes nothing skips the write and returns the current
 host. Assigning a role changes what traffic the host can send and receive, so
 name the host and the role to the user before running it.
 
-### List roles — `dn roles list`
-
-```bash
-dn roles list --json
-```
-
-Returns `{ "data": [ role… ], "metadata": { … } }`. Each role has `id`
-(`role-…`), `name`, `description`, `firewallRulesCount`, and `hostCount`. Use
-it to find the id for `hosts create --role` or `hosts edit --role`, and to
-answer "does this account have a role that allows traffic yet" (a role with
-`firewallRulesCount` of 0 denies everything).
-
 ### Delete a host — `dn hosts delete`
 
 ```bash
@@ -138,6 +126,18 @@ fails with an error telling you to pass it — there is no prompt you can answer
 **You MUST confirm with the user before running this**, naming the host
 (`dn hosts list --json` gives the id → name mapping). Never infer which host to
 delete from context; one id per call.
+
+### List roles — `dn roles list`
+
+```bash
+dn roles list --json
+```
+
+Returns `{ "data": [ role… ], "metadata": { … } }`. Each role has `id`
+(`role-…`), `name`, `description`, `firewallRulesCount`, and `hostCount`. Use
+it to find the id for `hosts create --role` or `hosts edit --role`, and to
+answer "does this account have a role that allows traffic yet" (a role with
+`firewallRulesCount` of 0 denies everything).
 
 ## Safety
 
