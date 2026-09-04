@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.2 (2026-09-04)
+
+### Features
+
+- assign a role with dn hosts edit --role (#40)
+
 ## 0.2.1 (2026-09-01)
 
 ### Features
