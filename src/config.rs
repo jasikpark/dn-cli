@@ -236,10 +236,17 @@ impl KeySource {
         }
     }
 
-    /// Detect the active source from the environment and an optional file
-    /// reference, without resolving any secret.
-    pub fn detect(api_key_ref: Option<&str>) -> Result<Option<Self>> {
-        resolve_key_source(api_key_env().as_deref(), api_key_ref)
+    /// Load the active source without resolving any secret. Stored credentials
+    /// are only a fallback: a broken auth file must not block an environment
+    /// key or mask an invalid environment key.
+    pub fn load() -> Result<Option<Self>> {
+        match resolve_key_source(api_key_env().as_deref(), None)? {
+            Some(source) => Ok(Some(source)),
+            None => {
+                let auth = AuthFile::load()?;
+                resolve_key_source(None, auth.api_key_ref.as_deref())
+            }
+        }
     }
 }
 
@@ -422,9 +429,9 @@ impl Config {
     /// Resolve the API key (running `op read` if the source is a reference)
     /// and the base URL. Only commands that talk to the API call this.
     pub fn load() -> Result<Self> {
-        let auth = AuthFile::load()?;
+        let source = KeySource::load()?;
         let settings = FileConfig::load()?;
-        let source = KeySource::detect(auth.api_key_ref.as_deref())?.ok_or_else(|| {
+        let source = source.ok_or_else(|| {
             anyhow!(
                 "No API key configured. Run `dn auth login` (stores a 1Password secret \
                  reference) or set {API_KEY_ENV}."
