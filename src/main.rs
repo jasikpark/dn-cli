@@ -332,14 +332,13 @@ fn prompt_for_reference(json: bool) -> anyhow::Result<String> {
 }
 
 /// Read-only introspection: never resolves a secret and never fails on a
-/// misconfigured key — a bad reference or blank env var is reported as
-/// `source: "invalid"` so callers can branch on it.
+/// misconfigured key — unreadable credentials, a bad reference, or a blank
+/// env var is reported as `source: "invalid"` so callers can branch on it.
 fn auth_status(json: bool) -> anyhow::Result<()> {
-    let auth = AuthFile::load()?;
     let settings = FileConfig::load()?;
     let auth_path = auth_path()?;
     let api_url = api_url(&settings);
-    let source = KeySource::detect(auth.api_key_ref.as_deref());
+    let source = KeySource::load();
     let (label, reference, message) = match &source {
         Ok(Some(s)) => (s.label(), s.reference(), None),
         Ok(None) => ("none", None, None),
