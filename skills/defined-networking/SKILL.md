@@ -104,6 +104,7 @@ dn hosts edit <HOST_ID> --name <NEW_NAME> --add-tag env:prod --remove-tag env:de
 | flag | effect |
 |------|--------|
 | `--role <ROLE_ID>` | assign a firewall role — the way to unmute a host stuck on the default deny-all role |
+| `--clear-role` | unassign the role (sends `roleID: null`); mutually exclusive with `--role` |
 | `--name <NAME>` | rename |
 | `--add-tag k:v` / `--remove-tag k:v` | repeatable; removes run before adds |
 

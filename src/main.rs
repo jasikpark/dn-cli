@@ -154,8 +154,12 @@ struct HostEditArgs {
     #[arg(long)]
     name: Option<String>,
     /// Assign a firewall role (role-…). Find ids with `dn roles list`.
-    #[arg(long, value_name = "ROLE_ID")]
+    #[arg(long, value_name = "ROLE_ID", conflicts_with = "clear_role")]
     role: Option<String>,
+    /// Unassign the host's role (sends `roleID: null`). Mutually exclusive
+    /// with `--role`.
+    #[arg(long)]
+    clear_role: bool,
     /// Add a tag (key:value). Repeatable.
     #[arg(long, value_name = "TAG")]
     add_tag: Vec<String>,
@@ -575,10 +579,11 @@ fn validate_edit_preflight(args: &HostEditArgs) -> anyhow::Result<()> {
     validate_host_id(&args.host_id)?;
     if args.name.is_none()
         && args.role.is_none()
+        && !args.clear_role
         && args.add_tag.is_empty()
         && args.remove_tag.is_empty()
     {
-        bail!("nothing to edit — pass --name, --role, --add-tag, or --remove-tag");
+        bail!("nothing to edit — pass --name, --role, --clear-role, --add-tag, or --remove-tag");
     }
     if let Some(n) = &args.name
         && n.trim().is_empty()
@@ -632,6 +637,8 @@ fn build_edit_body(data: &Value, args: &HostEditArgs) -> anyhow::Result<(Value, 
     }
     if let Some(role) = &args.role {
         obj.insert("roleID".into(), json!(role.trim()));
+    } else if args.clear_role {
+        obj.insert("roleID".into(), Value::Null);
     }
     Ok((body, missing))
 }
@@ -1639,6 +1646,7 @@ mod tests {
             host_id: "host-1".to_string(),
             name: name.map(str::to_string),
             role: role.map(str::to_string),
+            clear_role: false,
             add_tag: Vec::new(),
             remove_tag: Vec::new(),
         }
@@ -1656,6 +1664,56 @@ mod tests {
         };
         assert_eq!(args.role.as_deref(), Some("role-abc"));
         assert!(validate_edit_preflight(&args).is_ok());
+    }
+
+    #[test]
+    fn parses_hosts_edit_with_clear_role() {
+        let cli = Cli::try_parse_from(["dn", "hosts", "edit", "host-1", "--clear-role"]).unwrap();
+        let Command::Hosts {
+            command: HostsCommand::Edit(args),
+        } = cli.command
+        else {
+            panic!("expected `hosts edit --clear-role` to parse into HostsCommand::Edit");
+        };
+        assert!(args.clear_role);
+        assert!(args.role.is_none());
+        assert!(validate_edit_preflight(&args).is_ok());
+    }
+
+    #[test]
+    fn role_and_clear_role_conflict() {
+        let kind = Cli::try_parse_from([
+            "dn",
+            "hosts",
+            "edit",
+            "host-1",
+            "--role",
+            "role-a",
+            "--clear-role",
+        ])
+        .err()
+        .map(|e| e.kind());
+        assert_eq!(kind, Some(clap::error::ErrorKind::ArgumentConflict));
+    }
+
+    #[test]
+    fn build_edit_body_clear_role_sends_null() {
+        let mut args = edit_args(None, None);
+        args.clear_role = true;
+        let data = json!({"id": "host-1", "roleID": "role-old", "tags": ["a:1"]});
+        let (body, _) = build_edit_body(&data, &args).unwrap();
+        assert!(body["roleID"].is_null());
+        assert!(body.as_object().unwrap().contains_key("roleID"));
+        assert_eq!(body["tags"], json!(["a:1"]));
+    }
+
+    #[test]
+    fn build_edit_body_clear_role_on_unassigned_host_is_a_noop() {
+        let mut args = edit_args(None, None);
+        args.clear_role = true;
+        let data = json!({"id": "host-1", "roleID": null, "tags": []});
+        let (body, _) = build_edit_body(&data, &args).unwrap();
+        assert_eq!(body, data);
     }
 
     #[test]
