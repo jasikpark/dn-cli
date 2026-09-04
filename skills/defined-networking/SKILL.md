@@ -94,6 +94,26 @@ human view prints the same thing, plus a reminder that the default role denies
 all traffic, so a freshly enrolled host is on the network but can't reach
 anything yet.
 
+### Edit a host — `dn hosts edit`
+
+```bash
+dn hosts edit <HOST_ID> --role <ROLE_ID> --json
+dn hosts edit <HOST_ID> --name <NEW_NAME> --add-tag env:prod --remove-tag env:dev --json
+```
+
+| flag | effect |
+|------|--------|
+| `--role <ROLE_ID>` | assign a firewall role — the way to unmute a host stuck on the default deny-all role |
+| `--clear-role` | unassign the role (sends `roleID: null`); mutually exclusive with `--role` |
+| `--name <NAME>` | rename |
+| `--add-tag k:v` / `--remove-tag k:v` | repeatable; removes run before adds |
+
+Returns `{ "data": { host… } }` with the updated host. Get role ids from
+`dn roles list --json` and host ids from `dn hosts list --json`; never guess
+either. An edit that changes nothing skips the write and returns the current
+host. Assigning a role changes what traffic the host can send and receive, so
+name the host and the role to the user before running it.
+
 ### Delete a host — `dn hosts delete`
 
 ```bash
@@ -107,18 +127,32 @@ fails with an error telling you to pass it — there is no prompt you can answer
 (`dn hosts list --json` gives the id → name mapping). Never infer which host to
 delete from context; one id per call.
 
+### List roles — `dn roles list`
+
+```bash
+dn roles list --json
+```
+
+Returns `{ "data": [ role… ], "metadata": { … } }`. Each role has `id`
+(`role-…`), `name`, `description`, `firewallRulesCount`, and `hostCount`. Use
+it to find the id for `hosts create --role` or `hosts edit --role`, and to
+answer "does this account have a role that allows traffic yet" (a role with
+`firewallRulesCount` of 0 denies everything).
+
 ## Safety
 
 | operation | gate |
 |-----------|------|
-| `hosts list` | free — reads change nothing |
+| `hosts list`, `roles list` | free — reads change nothing |
+| `hosts edit` | a write: renaming and tagging are cosmetic, but `--role` changes the host's firewall. Confirm the host and role with the user first. |
 | `hosts create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name and the network with the user first. |
 | `hosts delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |
 
 ## Where this is going (not built yet)
 
-Roles are still missing: `roles create` / `roles add-rule`. The account's
-default role denies all traffic, so a host enrolled via `hosts create` is
-"enrolled but mute" until a role with firewall rules exists and is assigned.
-Until that ships, say so rather than promising two hosts will reach each
-other.
+Role writes are still missing: `roles create` / `roles add-rule`. The
+account's default role denies all traffic, so a host enrolled via
+`hosts create` is "enrolled but mute" until a role with firewall rules exists
+and is assigned. `dn roles list` shows whether such a role already exists,
+and `hosts edit --role` assigns it; creating the role itself still happens in
+the admin panel. Say so rather than promising two hosts will reach each other.
