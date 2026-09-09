@@ -15,6 +15,30 @@ Designed to be driven two ways:
 - **Interactively** by a human (tables; confirmations on destructive actions)
 - **Non-interactively** by an agent or script (`--json`, explicit flags, no prompts)
 
+## Install
+
+Prebuilt binaries for macOS (Apple Silicon and Intel), Linux (x64 and ARM64) and
+Windows (x64) ship with every [release](https://github.com/jasikpark/dn-cli/releases).
+
+Shell installer (macOS and Linux):
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jasikpark/dn-cli/releases/latest/download/dn-cli-installer.sh | sh
+```
+
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), which fetches
+the same prebuilt binary:
+
+```bash
+cargo binstall --git https://github.com/jasikpark/dn-cli dn-cli
+```
+
+Or build from source with a Rust toolchain:
+
+```bash
+cargo install --git https://github.com/jasikpark/dn-cli
+```
+
 ## Auth
 
 Store a 1Password *secret reference* to your API key once:
