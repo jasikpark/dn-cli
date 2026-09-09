@@ -2,7 +2,7 @@
 name = "dn-cli"
 version = "0.2.2"
 edition = "2024"
-description = "CLI for the Defined Networking API"
+description = "Unofficial CLI for the Defined Networking API"
 repository = "https://github.com/jasikpark/dn-cli"
 homepage = "https://github.com/jasikpark/dn-cli"
 readme = "README.md"
