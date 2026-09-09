@@ -489,13 +489,13 @@ mod tests {
 
     #[test]
     fn validate_op_ref_rejects_unsupported_name_characters_with_id_hint() {
-        let err = validate_op_ref("op://Personal/caleb@defined.net - DN API Key/credential")
+        let err = validate_op_ref("op://Personal/someone@example.com - DN API Key/credential")
             .unwrap_err()
             .to_string();
         assert!(err.contains("'@'"), "{err}");
         assert!(err.contains("item's ID"), "{err}");
         assert!(validate_op_ref("op://Personal/DN API: hosts/credential").is_err());
-        validate_op_ref("op://Personal/z3sn5zvnff527fab3zrfqz7ymu/credential").unwrap();
+        validate_op_ref("op://Personal/abcdefghijklmnopqrstuvwxyz/credential").unwrap();
         validate_op_ref("op://Personal/My_item.v2 - prod/one time password?attribute=otp").unwrap();
     }
 
@@ -511,8 +511,8 @@ mod tests {
 
     #[test]
     fn validate_op_ref_accepts_three_and_four_segments() {
-        validate_op_ref("op://Personal/z3sn/credential").unwrap();
-        validate_op_ref("op://Personal/z3sn/Section One/credential").unwrap();
+        validate_op_ref("op://Personal/item/credential").unwrap();
+        validate_op_ref("op://Personal/item/Section One/credential").unwrap();
         validate_op_ref("  op://v/i/f  ").unwrap();
     }
 
