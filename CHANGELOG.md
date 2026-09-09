@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.3 (2026-09-09)
+
+### Fixes
+
+- use environment credentials even when auth.json is malformed (#42)
+
 ## 0.2.2 (2026-09-04)
 
 ### Features
