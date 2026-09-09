@@ -105,10 +105,17 @@ PR that bumps `Cargo.toml` and writes `CHANGELOG.md`. Merging it pushes the
 This repo doubles as a [Claude Code](https://claude.com/claude-code) plugin
 (`.claude-plugin/plugin.json`). The `defined-networking` skill
 (`skills/defined-networking/SKILL.md`) teaches Claude to drive `dn` — checking
-`dn auth status --json` first and parsing `--json` output. Load it by installing the
-plugin, or symlink the skill into `~/.claude/skills/` for local use. The longer-
-term goal: *"I have this device, set it up on my network"* — conversational
-device enrollment.
+`dn auth status --json` first and parsing `--json` output. The repo is also a
+one-plugin marketplace, so install it with:
+
+```bash
+claude plugin marketplace add jasikpark/dn-cli
+claude plugin install dn-cli@dn-cli
+```
+
+For local development, `claude --plugin-dir /path/to/dn-cli` loads the checkout
+for one session. The longer-term goal: *"I have this device, set it up on my
+network"* — conversational device enrollment.
 
 ## Status
 

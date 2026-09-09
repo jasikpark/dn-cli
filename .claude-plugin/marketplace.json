@@ -1,0 +1,15 @@
+{
+  "name": "dn-cli",
+  "owner": { "name": "Caleb Jasik", "url": "https://jasik.xyz" },
+  "metadata": {
+    "description": "Unofficial CLI and Claude Code plugin for the Defined Networking API."
+  },
+  "plugins": [
+    {
+      "name": "dn-cli",
+      "source": "./",
+      "description": "Use the unofficial `dn` CLI to view and manage a Defined Networking (Nebula mesh VPN) network.",
+      "version": "0.1.0"
+    }
+  ]
+}
