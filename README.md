@@ -39,10 +39,6 @@ Or build from source with a Rust toolchain:
 cargo install --git https://github.com/jasikpark/dn-cli
 ```
 
-`dn-cli` is not on crates.io: that name belongs to an unrelated crate, so the
-`--git` forms above are the supported route
-([#49](https://github.com/jasikpark/dn-cli/issues/49)).
-
 ## Auth
 
 Store a 1Password *secret reference* to your API key once:
