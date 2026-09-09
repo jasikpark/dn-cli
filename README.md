@@ -1,6 +1,10 @@
 # dn-cli
 
-A CLI (`dn`) for the [Defined Networking](https://defined.net) API.
+An unofficial CLI (`dn`) for the [Defined Networking](https://defined.net) API.
+
+**This is not an officially supported Defined Networking product.** Defined
+Networking neither endorses nor supports it; report problems in this
+repository's issues.
 
 Rust + [clap](https://docs.rs/clap) + [ureq](https://docs.rs/ureq) (pure-Rust
 TLS via rustls, so the binary statically links cleanly for per-platform npm
@@ -114,4 +118,4 @@ device enrollment.
 ## License
 
 [FSL-1.1-Apache-2.0](./LICENSE.md) — source-available; converts to Apache-2.0
-two years after each release.
+two years after each release. Provided as is, without warranty of any kind.
