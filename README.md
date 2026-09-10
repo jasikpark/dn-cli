@@ -12,7 +12,8 @@ distribution later, à la `sentry-cli`).
 
 Designed to be driven two ways:
 
-- **Interactively** by a human (tables; confirmations on destructive actions)
+- **Interactively** by a human (tables that fit the terminal; confirmations on
+  destructive actions)
 - **Non-interactively** by an agent or script (`--json`, explicit flags, no prompts)
 
 ## Install
@@ -140,12 +141,12 @@ network"* — conversational device enrollment.
   `--add-tag`, `--remove-tag` (repeatable). Reads the host, applies the changes, and PUTs
   the whole object back via `/v3/hosts/{id}`; a no-op edit skips the write.
   Key permissions: `hosts:read` and `hosts:update`.
-- Roles: `roles list` — id, name, rule and host counts. Pair it with
-  `hosts edit --role` to move a host off the default deny-all role.
-- Networks: `networks list` — id, name, CIDRs, host count, whether managed
-  lighthouses and lighthouses-as-relays are on, curve and cert version. The
-  lighthouse settings live on the network, so this is where to look when the
-  hosts list shows no lighthouse. Key permission: `networks:list`.
+- Roles: `roles list` — id, name, description, rule and host counts. Pair it
+  with `hosts edit --role` to move a host off the default deny-all role.
+- Networks: `networks list` — id, name, description, CIDRs, host count, and
+  whether managed lighthouses and lighthouses-as-relays are on (curve and cert
+  version are in `--json`). The lighthouse settings live on the network, so this is where to
+  look when the hosts list shows no lighthouse. Key permission: `networks:list`.
 - Coming next: `roles create` and `roles add-rule` — the default role denies
   all traffic, so newly enrolled hosts share a network but can't talk to
   each other until a permissive role exists and is assigned.

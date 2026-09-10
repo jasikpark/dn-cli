@@ -1,6 +1,7 @@
 mod api;
 mod config;
 
+use std::ffi::OsStr;
 use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -424,6 +425,18 @@ fn auth_logout(json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The human role table. Ids and counts always render in full; the free-text
+/// columns give up width when the terminal is narrow. Name and description
+/// sit together, as in `gh repo list`, so a cut description lands inside the
+/// row rather than at the terminal's edge where it reads as overflow.
+const ROLE_COLUMNS: [Column; 5] = [
+    Column::fixed("ID"),
+    Column::flexible("NAME"),
+    Column::flexible("DESCRIPTION"),
+    Column::fixed("RULES"),
+    Column::fixed("HOSTS"),
+];
+
 fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
     let res = client.list_roles()?;
 
@@ -457,18 +470,15 @@ fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
             vec![
                 field("id"),
                 field("name"),
+                field("description"),
                 count("firewallRulesCount"),
                 count("hostCount"),
-                field("description"),
             ]
         })
         .collect();
     print!(
         "{}",
-        render_table(
-            &["ID", "NAME", "RULES", "HOSTS", "DESCRIPTION"],
-            &table_rows
-        )
+        render_table(&ROLE_COLUMNS, &table_rows, &Layout::detect())
     );
 
     if let Some(total) = res
@@ -500,20 +510,7 @@ fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
     let table_rows: Vec<Vec<String>> = rows.iter().map(network_row).collect();
     print!(
         "{}",
-        render_table(
-            &[
-                "ID",
-                "NAME",
-                "CIDRS",
-                "HOSTS",
-                "MANAGED LH",
-                "LH AS RELAYS",
-                "CURVE",
-                "CERT",
-                "DESCRIPTION",
-            ],
-            &table_rows
-        )
+        render_table(&NETWORK_COLUMNS, &table_rows, &Layout::detect())
     );
 
     if let Some(total) = res
@@ -573,7 +570,7 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
         .collect();
     print!(
         "{}",
-        render_table(&["ID", "NAME", "IP ADDRESSES"], &table_rows)
+        render_table(&HOST_COLUMNS, &table_rows, &Layout::detect())
     );
 
     if let Some(total) = res
@@ -1132,19 +1129,90 @@ fn render_host_create_human(res: &Value) -> String {
     out
 }
 
-/// Render rows as a left-aligned column table with a header row, padding each
-/// column to its widest cell. Columns are separated by two spaces; the final
-/// column is never padded (no trailing whitespace).
-///
-/// Widths are measured in terminal display columns (see [`display_width`]),
-/// so wide glyphs (emoji, CJK) and combining marks align — a host named
-/// `caleb-macbook-pro 💻` lines up with its plain-ASCII neighbours. Generic
-/// over column count so every list command shares it.
+/// Replace control characters (tabs, newlines, escapes) with spaces so an API
+/// value can't split a table row or drive the terminal.
 fn sanitize_for_display(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
 }
+
+/// One column of a human table. A flexible column gives up width when the
+/// table is wider than the terminal; a fixed one (ids, counts, flags, IP
+/// addresses) always renders in full, since a cut id is useless.
+#[derive(Clone, Copy)]
+struct Column {
+    header: &'static str,
+    flexible: bool,
+}
+
+impl Column {
+    const fn fixed(header: &'static str) -> Self {
+        Self {
+            header,
+            flexible: false,
+        }
+    }
+
+    const fn flexible(header: &'static str) -> Self {
+        Self {
+            header,
+            flexible: true,
+        }
+    }
+}
+
+/// How a table meets its output: the width to fit into, when stdout is a
+/// terminal of known size, and whether the header row is underlined.
+struct Layout {
+    width: Option<usize>,
+    underline_headers: bool,
+}
+
+impl Layout {
+    /// Fit and style only when stdout is a terminal, as `gh` does, so piped
+    /// output keeps every cell whole and carries no escape codes.
+    fn detect() -> Self {
+        if !std::io::stdout().is_terminal() {
+            return Self::plain();
+        }
+        let width = terminal_size::terminal_size().map(|(w, _)| usize::from(w.0));
+        Self::for_terminal(width, std::env::var_os("NO_COLOR").as_deref())
+    }
+
+    /// A terminal `width` columns wide. Per <https://no-color.org>, a
+    /// non-empty `NO_COLOR` turns the underline off; the fit stays, because
+    /// overflow is a layout problem rather than a colour one.
+    fn for_terminal(width: Option<usize>, no_color: Option<&OsStr>) -> Self {
+        Self {
+            width,
+            underline_headers: no_color.is_none_or(OsStr::is_empty),
+        }
+    }
+
+    /// No fitting and no styling: what a pipe gets.
+    const fn plain() -> Self {
+        Self {
+            width: None,
+            underline_headers: false,
+        }
+    }
+}
+
+/// Two spaces between columns.
+const COLUMN_GAP: &str = "  ";
+
+/// A flexible column never shrinks below this many display columns (or its
+/// header, if wider), so a very narrow terminal overflows instead of showing
+/// rows of nothing but `...`.
+const MIN_FLEXIBLE_WIDTH: usize = 8;
+
+/// ASCII rather than U+2026: the single-glyph ellipsis is East Asian
+/// Ambiguous width and misaligns on terminals that draw it two cells wide.
+const ELLIPSIS: &str = "...";
+
+const SGR_UNDERLINE: &str = "\x1b[4m";
+const SGR_RESET: &str = "\x1b[0m";
 
 /// Display width the way wcwidth-family terminals count it: one char at a
 /// time, so a variation selector adds nothing and `☁️` (U+2601 U+FE0F) is one
@@ -1157,12 +1225,25 @@ fn display_width(s: &str) -> usize {
     s.chars().filter_map(UnicodeWidthChar::width).sum()
 }
 
-fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
+/// Render rows as a left-aligned column table under a header row, padding
+/// each column to its widest cell with two spaces between columns. When the
+/// layout knows the terminal width and the table is wider, the flexible
+/// columns that don't fit share the spare width evenly (see
+/// [`fit_columns`]) and their cells are cut with `...`; a plain layout never
+/// cuts anything. Data rows carry no trailing
+/// whitespace; an underlined header pads every cell, the last one too, so
+/// the underline spans the column the way `gh` draws it.
+///
+/// Widths are measured in terminal display columns (see [`display_width`]),
+/// so wide glyphs (emoji, CJK) and combining marks align — a host named
+/// `caleb-macbook-pro 💻` lines up with its plain-ASCII neighbours. Generic
+/// over column count so every list command shares it.
+fn render_table(columns: &[Column], rows: &[Vec<String>], layout: &Layout) -> String {
     let rows: Vec<Vec<String>> = rows
         .iter()
         .map(|row| row.iter().map(|c| sanitize_for_display(c)).collect())
         .collect();
-    let mut widths: Vec<usize> = headers.iter().map(|h| display_width(h)).collect();
+    let mut widths: Vec<usize> = columns.iter().map(|c| display_width(c.header)).collect();
     for row in &rows {
         for (i, cell) in row.iter().enumerate() {
             if let Some(w) = widths.get_mut(i) {
@@ -1170,9 +1251,12 @@ fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
             }
         }
     }
+    if let Some(available) = layout.width {
+        fit_columns(columns, &mut widths, available);
+    }
 
     let mut out = String::new();
-    push_row(&mut out, headers, &widths);
+    push_header(&mut out, columns, &widths, layout.underline_headers);
     for row in rows {
         let cells: Vec<&str> = row.iter().map(String::as_str).collect();
         push_row(&mut out, &cells, &widths);
@@ -1180,24 +1264,121 @@ fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     out
 }
 
-/// Append one padded row (newline-terminated) to `out`. The last cell is
-/// emitted without trailing padding.
-fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
-    let last = cells.len().saturating_sub(1);
-    for (i, &cell) in cells.iter().enumerate() {
-        out.push_str(cell);
-        if i != last {
-            let pad = widths
+/// Shrink flexible columns until a row fits in `available` display columns,
+/// distributing width the way `gh` lays out its tables. Narrowest first, each
+/// flexible column takes the smaller of its natural width and an even share
+/// of what is left, so a column that fits keeps its width and widens the
+/// share for the wider ones, which then split the remainder evenly; no
+/// single column is crushed to make room for the others. Each stops at its
+/// header width or [`MIN_FLEXIBLE_WIDTH`], whichever is larger, so the table
+/// can still overflow a very narrow terminal; fixed columns are never touched.
+fn fit_columns(columns: &[Column], widths: &mut [usize], available: usize) {
+    let (flexible, fixed): (Vec<usize>, Vec<usize>) =
+        (0..columns.len()).partition(|&i| columns[i].flexible);
+    let taken: usize = fixed.iter().map(|&i| widths[i]).sum::<usize>()
+        + COLUMN_GAP.len() * widths.len().saturating_sub(1);
+    let mut remaining = available.saturating_sub(taken);
+    let mut flexible = flexible;
+    flexible.sort_by_key(|&i| widths[i]);
+    for (k, &i) in flexible.iter().enumerate() {
+        let share = remaining / (flexible.len() - k);
+        let floor = display_width(columns[i].header).max(MIN_FLEXIBLE_WIDTH);
+        widths[i] = share.max(floor).min(widths[i]);
+        remaining = remaining.saturating_sub(widths[i]);
+    }
+}
+
+/// Cut `cell` to at most `width` display columns, ending in [`ELLIPSIS`] when
+/// anything was removed. Zero-width characters (combining marks, variation
+/// selectors) stay with the base character they modify, and a wide glyph
+/// that would straddle the cut is dropped whole.
+fn truncate(cell: &str, width: usize) -> String {
+    if display_width(cell) <= width {
+        return cell.to_string();
+    }
+    // Below five columns the ellipsis would eat most of the cell; cut plainly.
+    let tail = if width >= ELLIPSIS.len() + 2 {
+        ELLIPSIS
+    } else {
+        ""
+    };
+    let budget = width - tail.len();
+    let mut used = 0;
+    let mut out: String = cell
+        .chars()
+        .take_while(|c| {
+            let w = c.width().unwrap_or(0);
+            if used + w > budget {
+                return false;
+            }
+            used += w;
+            true
+        })
+        .collect();
+    out.push_str(tail);
+    out
+}
+
+/// Append the header row. Headers are never cut: a flexible column's floor
+/// is its own header width. Padding the last header too is what lets the
+/// underline span the column; unstyled output leaves it bare so the line
+/// ends without trailing whitespace.
+fn push_header(out: &mut String, columns: &[Column], widths: &[usize], underline: bool) {
+    let last = columns.len().saturating_sub(1);
+    for (i, column) in columns.iter().enumerate() {
+        if i > 0 {
+            out.push_str(COLUMN_GAP);
+        }
+        let pad = if underline || i != last {
+            widths
                 .get(i)
                 .copied()
                 .unwrap_or(0)
-                .saturating_sub(display_width(cell));
-            out.push_str(&" ".repeat(pad));
-            out.push_str("  ");
+                .saturating_sub(display_width(column.header))
+        } else {
+            0
+        };
+        if underline {
+            out.push_str(SGR_UNDERLINE);
+        }
+        out.push_str(column.header);
+        out.push_str(&" ".repeat(pad));
+        if underline {
+            out.push_str(SGR_RESET);
         }
     }
     out.push('\n');
 }
+
+/// Append one data row: each cell cut to its column width and padded to it.
+/// Trailing whitespace is trimmed, so an empty last cell leaves no padding
+/// behind the cell before it.
+fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
+    let mut line = String::new();
+    for (i, &cell) in cells.iter().enumerate() {
+        if i > 0 {
+            line.push_str(COLUMN_GAP);
+        }
+        let width = widths.get(i).copied();
+        let cell = match width {
+            Some(width) => truncate(cell, width),
+            None => cell.to_string(),
+        };
+        line.push_str(&cell);
+        let pad = width.unwrap_or(0).saturating_sub(display_width(&cell));
+        line.push_str(&" ".repeat(pad));
+    }
+    out.push_str(line.trim_end());
+    out.push('\n');
+}
+
+/// The human host table. Only the name yields width: a cut id or IP is
+/// useless.
+const HOST_COLUMNS: [Column; 3] = [
+    Column::fixed("ID"),
+    Column::flexible("NAME"),
+    Column::fixed("IP ADDRESSES"),
+];
 
 /// The three columns the human host table renders. `id` and `name` fall back
 /// to an empty string when absent or non-string; the IP column joins the v2
@@ -1218,10 +1399,25 @@ fn host_fields(row: &Value) -> (&str, &str, String) {
     (field("id"), field("name"), ips)
 }
 
-/// The columns the human network table renders. Strings fall back to empty
-/// when absent or non-string; `cidrs` joins the overlay prefixes (an IPv6
-/// one and, on dual-stack networks, an IPv4 one) the way the host table joins
-/// IPs. Managed lighthouses are Defined's hosted fleet and never appear in
+/// The human network table, in [`network_row`] order: name and description
+/// together as in `gh repo list`, then the structured fields, so a cut
+/// description lands inside the row rather than at the terminal's edge.
+/// Curve and cert version stay in `--json` only: they rarely differ between
+/// networks and cost thirteen columns a typical terminal doesn't have.
+const NETWORK_COLUMNS: [Column; 7] = [
+    Column::fixed("ID"),
+    Column::flexible("NAME"),
+    Column::flexible("DESCRIPTION"),
+    Column::flexible("CIDRS"),
+    Column::fixed("HOSTS"),
+    Column::fixed("MANAGED LH"),
+    Column::fixed("LH AS RELAYS"),
+];
+
+/// The cells of one [`NETWORK_COLUMNS`] row. Strings fall back to empty when
+/// absent or non-string; `cidrs` joins the overlay prefixes (an IPv6 one and,
+/// on dual-stack networks, an IPv4 one) the way the host table joins IPs.
+/// Managed lighthouses are Defined's hosted fleet and never appear in
 /// `hosts list`, so this table is where that setting is visible; the API
 /// stores it inverted (`disableManagedLighthouses`) and the column reports it
 /// the way the admin panel does — whether managed lighthouses are on.
@@ -1259,21 +1455,14 @@ fn network_row(row: &Value) -> Vec<String> {
         .and_then(Value::as_bool)
         .map(yes_no)
         .unwrap_or_default();
-    let cert = row
-        .get("certVersion")
-        .and_then(Value::as_u64)
-        .map(|v| format!("v{v}"))
-        .unwrap_or_default();
     vec![
         field("id"),
         field("name"),
+        field("description"),
         cidrs,
         hosts,
         managed_lighthouses,
         lighthouses_as_relays,
-        field("curve"),
-        cert,
-        field("description"),
     ]
 }
 
@@ -1295,18 +1484,17 @@ mod tests {
             "curve": "25519",
             "certVersion": 2,
         });
+        // curve and certVersion are --json only; the human table drops them.
         assert_eq!(
             network_row(&row),
             [
                 "network-EXAMPLE",
                 "office",
+                "main site",
                 "fd00:c0:c0::/80, 100.100.0.0/22",
                 "14",
                 "yes",
                 "yes",
-                "25519",
-                "v2",
-                "main site",
             ]
         );
     }
@@ -1317,7 +1505,7 @@ mod tests {
         // must not echo it verbatim.
         let row = json!({"disableManagedLighthouses": true, "lighthousesAsRelays": false});
         let cells = network_row(&row);
-        assert_eq!((cells[4].as_str(), cells[5].as_str()), ("no", "no"));
+        assert_eq!((cells[5].as_str(), cells[6].as_str()), ("no", "no"));
     }
 
     #[test]
@@ -1326,12 +1514,11 @@ mod tests {
             "id": "network-EXAMPLE",
             "cidrs": 42,
             "hostCount": "many",
-            "certVersion": "2",
             "lighthousesAsRelays": "true",
         });
         assert_eq!(
             network_row(&row),
-            ["network-EXAMPLE", "", "", "", "", "", "", "", ""]
+            ["network-EXAMPLE", "", "", "", "", "", ""]
         );
     }
 
@@ -1375,7 +1562,7 @@ mod tests {
                 "10.0.0.2".to_string(),
             ],
         ];
-        let out = render_table(&["ID", "NAME", "IP"], &rows);
+        let out = render_table(&HOST_TEST_COLUMNS, &rows, &Layout::plain());
         assert_eq!(
             out,
             "ID      NAME         IP\n\
@@ -1384,6 +1571,210 @@ mod tests {
         );
         // Last column is never padded.
         assert!(out.lines().all(|l| !l.ends_with(' ')));
+    }
+
+    /// A three-column table shaped like the host list: only NAME yields.
+    const HOST_TEST_COLUMNS: [Column; 3] = [
+        Column::fixed("ID"),
+        Column::flexible("NAME"),
+        Column::fixed("IP"),
+    ];
+
+    /// Rows for the fit tests: a wide NAME and a wider DESCRIPTION either side
+    /// of a fixed HOSTS column.
+    const FIT_COLUMNS: [Column; 4] = [
+        Column::fixed("ID"),
+        Column::flexible("NAME"),
+        Column::fixed("HOSTS"),
+        Column::flexible("DESCRIPTION"),
+    ];
+
+    fn fit_rows() -> Vec<Vec<String>> {
+        vec![
+            vec![
+                "network-EXAMPLE".to_string(),
+                "office-wide-area-mesh".to_string(),
+                "14".to_string(),
+                "everything in the office building".to_string(),
+            ],
+            vec![
+                "network-SECOND".to_string(),
+                "lab".to_string(),
+                "2".to_string(),
+                "bench".to_string(),
+            ],
+        ]
+    }
+
+    #[test]
+    fn render_table_without_a_width_never_truncates() {
+        // 15 + 21 + 5 + 33 + 3 gaps of 2 = 80 columns.
+        let out = render_table(&FIT_COLUMNS, &fit_rows(), &Layout::plain());
+        assert_eq!(
+            out,
+            "ID               NAME                   HOSTS  DESCRIPTION\n\
+             network-EXAMPLE  office-wide-area-mesh  14     everything in the office building\n\
+             network-SECOND   lab                    2      bench\n"
+        );
+    }
+
+    /// A terminal `width` wide with NO_COLOR set: the fit without the
+    /// underline, so expected strings stay readable.
+    fn fitted(width: usize) -> Layout {
+        Layout::for_terminal(Some(width), Some(OsStr::new("1")))
+    }
+
+    #[test]
+    fn render_table_fit_splits_the_free_width_between_the_long_columns() {
+        // 60 less the fixed columns and gaps leaves 34; NAME (21) and
+        // DESCRIPTION (33) both exceed half of it, so each gets 17.
+        let out = render_table(&FIT_COLUMNS, &fit_rows(), &fitted(60));
+        assert_eq!(
+            out,
+            "ID               NAME               HOSTS  DESCRIPTION\n\
+             network-EXAMPLE  office-wide-ar...  14     everything in ...\n\
+             network-SECOND   lab                2      bench\n"
+        );
+        assert!(out.lines().all(|l| display_width(l) <= 60));
+    }
+
+    #[test]
+    fn render_table_fit_leaves_a_flexible_column_that_fits_its_share_alone() {
+        // NAME's widest cell (6) is under half the 24 free columns, so it
+        // keeps its natural width and DESCRIPTION takes the rest (18).
+        let rows = vec![
+            vec![
+                "network-EXAMPLE".to_string(),
+                "office".to_string(),
+                "14".to_string(),
+                "everything in the office building".to_string(),
+            ],
+            vec![
+                "network-SECOND".to_string(),
+                "lab".to_string(),
+                "2".to_string(),
+                "bench".to_string(),
+            ],
+        ];
+        let out = render_table(&FIT_COLUMNS, &rows, &fitted(50));
+        assert_eq!(
+            out,
+            "ID               NAME    HOSTS  DESCRIPTION\n\
+             network-EXAMPLE  office  14     everything in t...\n\
+             network-SECOND   lab     2      bench\n"
+        );
+        assert!(out.lines().all(|l| display_width(l) <= 50));
+    }
+
+    #[test]
+    fn render_table_fit_spares_a_short_column_wherever_it_sits() {
+        // Here DESCRIPTION (11, its header) is the short flexible column and
+        // NAME the long one, so NAME takes the 13 that DESCRIPTION leaves.
+        let rows = vec![
+            vec![
+                "network-EXAMPLE".to_string(),
+                "office-wide-area-mesh".to_string(),
+                "14".to_string(),
+                "bench".to_string(),
+            ],
+            vec![
+                "network-SECOND".to_string(),
+                "lab".to_string(),
+                "2".to_string(),
+                "hq".to_string(),
+            ],
+        ];
+        let out = render_table(&FIT_COLUMNS, &rows, &fitted(50));
+        assert_eq!(
+            out,
+            "ID               NAME           HOSTS  DESCRIPTION\n\
+             network-EXAMPLE  office-wid...  14     bench\n\
+             network-SECOND   lab            2      hq\n"
+        );
+        assert!(out.lines().all(|l| display_width(l) <= 50));
+    }
+
+    #[test]
+    fn render_table_overflows_rather_than_cutting_fixed_columns() {
+        // Both flexible columns are at their floors (NAME 8, DESCRIPTION its
+        // header), so the row stays 45 wide instead of chopping the id.
+        let out = render_table(&FIT_COLUMNS, &fit_rows(), &fitted(20));
+        assert_eq!(
+            out,
+            "ID               NAME      HOSTS  DESCRIPTION\n\
+             network-EXAMPLE  offic...  14     everythi...\n\
+             network-SECOND   lab       2      bench\n"
+        );
+    }
+
+    #[test]
+    fn render_table_underlines_every_header_cell_across_its_column() {
+        let layout = Layout::for_terminal(None, None);
+        let rows = vec![
+            vec!["a".to_string(), "main site".to_string()],
+            vec!["b".to_string(), String::new()],
+        ];
+        let columns = [Column::fixed("ID"), Column::flexible("DESCRIPTION")];
+        let out = render_table(&columns, &rows, &layout);
+        assert_eq!(
+            out,
+            "\x1b[4mID\x1b[0m  \x1b[4mDESCRIPTION\x1b[0m\n\
+             a   main site\n\
+             b\n"
+        );
+    }
+
+    #[test]
+    fn render_table_underline_covers_the_padding_of_a_widened_header() {
+        let layout = Layout::for_terminal(None, None);
+        let rows = vec![vec!["network-EXAMPLE".to_string(), "x".to_string()]];
+        let columns = [Column::fixed("ID"), Column::fixed("C")];
+        let out = render_table(&columns, &rows, &layout);
+        assert_eq!(
+            out,
+            "\x1b[4mID             \x1b[0m  \x1b[4mC\x1b[0m\n\
+             network-EXAMPLE  x\n"
+        );
+    }
+
+    #[test]
+    fn layout_honours_no_color() {
+        assert!(Layout::for_terminal(Some(80), None).underline_headers);
+        assert!(Layout::for_terminal(Some(80), Some(OsStr::new(""))).underline_headers);
+        let no_color = Layout::for_terminal(Some(80), Some(OsStr::new("1")));
+        assert!(!no_color.underline_headers);
+        // The fit is layout, not colour: it survives NO_COLOR.
+        assert_eq!(no_color.width, Some(80));
+    }
+
+    #[test]
+    fn truncate_leaves_a_fitting_cell_alone() {
+        assert_eq!(truncate("bench", 5), "bench");
+        assert_eq!(truncate("bench", 80), "bench");
+    }
+
+    #[test]
+    fn truncate_keeps_zero_width_marks_with_their_base() {
+        // "e" + COMBINING ACUTE ACCENT is one display column; the accent must
+        // survive the cut alongside its base.
+        assert_eq!(
+            truncate("caf\u{65}\u{301}teria-wing", 8),
+            "caf\u{65}\u{301}t..."
+        );
+    }
+
+    #[test]
+    fn truncate_drops_a_wide_glyph_that_would_straddle_the_cut() {
+        // 💻 is two columns; with three columns of budget after "ab" only one
+        // is left, so the glyph goes and the cell comes up one column short.
+        assert_eq!(truncate("ab💻cdef", 6), "ab...");
+        assert_eq!(truncate("a💻bcdef", 6), "a💻...");
+    }
+
+    #[test]
+    fn truncate_skips_the_ellipsis_when_there_is_no_room_for_it() {
+        assert_eq!(truncate("abcdefgh", 4), "abcd");
+        assert_eq!(truncate("abcdefgh", 5), "ab...");
     }
 
     fn args(
@@ -1984,7 +2375,7 @@ mod tests {
             vec!["a".to_string(), "laptop 💻".to_string(), "x".to_string()],
             vec!["b".to_string(), "pc".to_string(), "y".to_string()],
         ];
-        let out = render_table(&["ID", "NAME", "C"], &rows);
+        let out = render_table(&GLYPH_COLUMNS, &rows, &Layout::plain());
         let last_col_offsets: Vec<usize> = out
             .lines()
             .map(|line| display_width(line) - 1) // every last cell here is 1 column wide
@@ -2008,13 +2399,30 @@ mod tests {
             ],
             vec!["b".to_string(), "Net".to_string(), "y".to_string()],
         ];
-        let out = render_table(&["ID", "NAME", "C"], &rows);
+        let out = render_table(&GLYPH_COLUMNS, &rows, &Layout::plain());
         assert_eq!(
             out,
             "ID  NAME     C\n\
              a   Cloud \u{2601}\u{fe0f}  x\n\
              b   Net      y\n"
         );
+    }
+
+    const GLYPH_COLUMNS: [Column; 3] = [
+        Column::fixed("ID"),
+        Column::flexible("NAME"),
+        Column::fixed("C"),
+    ];
+
+    #[test]
+    fn render_table_trims_padding_before_an_empty_last_cell() {
+        let rows = vec![
+            vec!["a".to_string(), "main site".to_string()],
+            vec!["b".to_string(), String::new()],
+        ];
+        let columns = [Column::fixed("ID"), Column::flexible("DESCRIPTION")];
+        let out = render_table(&columns, &rows, &Layout::plain());
+        assert_eq!(out, "ID  DESCRIPTION\na   main site\nb\n");
     }
 
     mod sanitize {
@@ -2049,12 +2457,36 @@ mod tests {
                 cells in prop::collection::vec("[\\x00-\\x1f\\x20-\\x7e]*", 1..5),
             ) {
                 let rows = vec![cells];
-                let headers: Vec<&str> = (0..rows[0].len()).map(|_| "H").collect();
-                let out = render_table(&headers, &rows);
+                let columns: Vec<Column> = (0..rows[0].len()).map(|_| Column::flexible("H")).collect();
+                let out = render_table(&columns, &rows, &Layout::plain());
                 assert!(
                     !out.lines().any(|l| l.contains('\n') || l.contains('\r')),
                     "embedded newline broke table row: {out:?}"
                 );
+            }
+
+            #[test]
+            fn fitted_rows_never_exceed_the_terminal(
+                rows in prop::collection::vec(
+                    prop::collection::vec("[\\x20-\\x7e]{0,40}", 3),
+                    1..4,
+                ),
+                width in 30usize..120,
+            ) {
+                // Three flexible columns floor at 8 each: 24 + 2 gaps = 28,
+                // so every width here is reachable.
+                let columns = [
+                    Column::flexible("A"),
+                    Column::flexible("B"),
+                    Column::flexible("C"),
+                ];
+                let out = render_table(&columns, &rows, &fitted(width));
+                for line in out.lines() {
+                    assert!(
+                        display_width(line) <= width,
+                        "line wider than {width}: {line:?}"
+                    );
+                }
             }
         }
     }
