@@ -426,13 +426,15 @@ fn auth_logout(json: bool) -> anyhow::Result<()> {
 }
 
 /// The human role table. Ids and counts always render in full; the free-text
-/// columns give up width when the terminal is narrow.
+/// columns give up width when the terminal is narrow. Name and description
+/// sit together, as in `gh repo list`, so a cut description lands inside the
+/// row rather than at the terminal's edge where it reads as overflow.
 const ROLE_COLUMNS: [Column; 5] = [
     Column::fixed("ID"),
     Column::flexible("NAME"),
+    Column::flexible("DESCRIPTION"),
     Column::fixed("RULES"),
     Column::fixed("HOSTS"),
-    Column::flexible("DESCRIPTION"),
 ];
 
 fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
@@ -468,9 +470,9 @@ fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
             vec![
                 field("id"),
                 field("name"),
+                field("description"),
                 count("firewallRulesCount"),
                 count("hostCount"),
-                field("description"),
             ]
         })
         .collect();
@@ -1225,9 +1227,10 @@ fn display_width(s: &str) -> usize {
 
 /// Render rows as a left-aligned column table under a header row, padding
 /// each column to its widest cell with two spaces between columns. When the
-/// layout knows the terminal width and the table is wider, flexible columns
-/// shrink rightmost-first and their cells are cut with `...` until it fits;
-/// a plain layout never cuts anything. Data rows carry no trailing
+/// layout knows the terminal width and the table is wider, the flexible
+/// columns that don't fit share the spare width evenly (see
+/// [`fit_columns`]) and their cells are cut with `...`; a plain layout never
+/// cuts anything. Data rows carry no trailing
 /// whitespace; an underlined header pads every cell, the last one too, so
 /// the underline spans the column the way `gh` draws it.
 ///
@@ -1261,26 +1264,52 @@ fn render_table(columns: &[Column], rows: &[Vec<String>], layout: &Layout) -> St
     out
 }
 
-/// Shrink flexible columns, rightmost first, until a row fits in `available`
-/// display columns. Each stops at its header width or [`MIN_FLEXIBLE_WIDTH`],
-/// whichever is larger, so the table can still overflow a very narrow
-/// terminal; fixed columns are never touched.
+/// Shrink flexible columns until a row fits in `available` display columns,
+/// distributing width the way `gh` lays out its tables: a flexible column
+/// narrower than an even share of the free width keeps its natural width,
+/// and the columns still too wide split what is left evenly, so no single
+/// column is crushed to make room for the others. Each stops at its header
+/// width or [`MIN_FLEXIBLE_WIDTH`], whichever is larger, so the table can
+/// still overflow a very narrow terminal; fixed columns are never touched.
 fn fit_columns(columns: &[Column], widths: &mut [usize], available: usize) {
-    let row_width = |widths: &[usize]| {
-        widths.iter().sum::<usize>() + COLUMN_GAP.len() * widths.len().saturating_sub(1)
+    let gaps = COLUMN_GAP.len() * widths.len().saturating_sub(1);
+    if widths.iter().sum::<usize>() + gaps <= available {
+        return;
+    }
+    let mut long: Vec<usize> = (0..columns.len())
+        .filter(|&i| columns[i].flexible)
+        .collect();
+    // Width left for the columns in `long` once every other column has its own.
+    let free = |widths: &[usize], long: &[usize]| {
+        let taken: usize = widths
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !long.contains(i))
+            .map(|(_, w)| w)
+            .sum();
+        available.saturating_sub(taken + gaps)
     };
-    for (i, column) in columns.iter().enumerate().rev() {
-        if !column.flexible {
-            continue;
-        }
-        let excess = row_width(widths).saturating_sub(available);
-        if excess == 0 {
+    // Release the columns that fit their share. Each release widens the share
+    // for the rest, so repeat until nothing more fits.
+    loop {
+        if long.is_empty() {
             return;
         }
-        let floor = display_width(column.header)
+        let share = free(widths, &long) / long.len();
+        let before = long.len();
+        long.retain(|&i| widths[i] > share);
+        if long.len() == before {
+            break;
+        }
+    }
+    let mut remaining = free(widths, &long);
+    for (k, &i) in long.iter().enumerate() {
+        let floor = display_width(columns[i].header)
             .max(MIN_FLEXIBLE_WIDTH)
             .min(widths[i]);
-        widths[i] = widths[i].saturating_sub(excess).max(floor);
+        let share = remaining / (long.len() - k);
+        widths[i] = share.max(floor).min(widths[i]);
+        remaining = remaining.saturating_sub(widths[i]);
     }
 }
 
@@ -1395,17 +1424,19 @@ fn host_fields(row: &Value) -> (&str, &str, String) {
     (field("id"), field("name"), ips)
 }
 
-/// The human network table, in [`network_row`] order. Curve and cert version
-/// stay in `--json` only: they rarely differ between networks and cost
-/// thirteen columns that push DESCRIPTION off a typical terminal.
+/// The human network table, in [`network_row`] order: name and description
+/// together as in `gh repo list`, then the structured fields, so a cut
+/// description lands inside the row rather than at the terminal's edge.
+/// Curve and cert version stay in `--json` only: they rarely differ between
+/// networks and cost thirteen columns a typical terminal doesn't have.
 const NETWORK_COLUMNS: [Column; 7] = [
     Column::fixed("ID"),
     Column::flexible("NAME"),
+    Column::flexible("DESCRIPTION"),
     Column::flexible("CIDRS"),
     Column::fixed("HOSTS"),
     Column::fixed("MANAGED LH"),
     Column::fixed("LH AS RELAYS"),
-    Column::flexible("DESCRIPTION"),
 ];
 
 /// The cells of one [`NETWORK_COLUMNS`] row. Strings fall back to empty when
@@ -1452,11 +1483,11 @@ fn network_row(row: &Value) -> Vec<String> {
     vec![
         field("id"),
         field("name"),
+        field("description"),
         cidrs,
         hosts,
         managed_lighthouses,
         lighthouses_as_relays,
-        field("description"),
     ]
 }
 
@@ -1484,11 +1515,11 @@ mod tests {
             [
                 "network-EXAMPLE",
                 "office",
+                "main site",
                 "fd00:c0:c0::/80, 100.100.0.0/22",
                 "14",
                 "yes",
                 "yes",
-                "main site",
             ]
         );
     }
@@ -1499,7 +1530,7 @@ mod tests {
         // must not echo it verbatim.
         let row = json!({"disableManagedLighthouses": true, "lighthousesAsRelays": false});
         let cells = network_row(&row);
-        assert_eq!((cells[4].as_str(), cells[5].as_str()), ("no", "no"));
+        assert_eq!((cells[5].as_str(), cells[6].as_str()), ("no", "no"));
     }
 
     #[test]
@@ -1619,29 +1650,45 @@ mod tests {
     }
 
     #[test]
-    fn render_table_fits_by_cutting_the_rightmost_flexible_column_first() {
+    fn render_table_fit_splits_the_free_width_between_the_long_columns() {
+        // 60 less the fixed columns and gaps leaves 34; NAME (21) and
+        // DESCRIPTION (33) both exceed half of it, so each gets 17.
         let out = render_table(&FIT_COLUMNS, &fit_rows(), &fitted(60));
         assert_eq!(
             out,
-            "ID               NAME                   HOSTS  DESCRIPTION\n\
-             network-EXAMPLE  office-wide-area-mesh  14     everything...\n\
-             network-SECOND   lab                    2      bench\n"
+            "ID               NAME               HOSTS  DESCRIPTION\n\
+             network-EXAMPLE  office-wide-ar...  14     everything in ...\n\
+             network-SECOND   lab                2      bench\n"
         );
         assert!(out.lines().all(|l| display_width(l) <= 60));
     }
 
     #[test]
-    fn render_table_fit_cascades_to_the_next_flexible_column() {
-        // DESCRIPTION stops at its header width (11), so the remaining excess
-        // comes out of NAME; the fixed columns are untouched.
-        let out = render_table(&FIT_COLUMNS, &fit_rows(), &fitted(48));
+    fn render_table_fit_leaves_a_flexible_column_that_fits_its_share_alone() {
+        // NAME's widest cell (6) is under half the 24 free columns, so it
+        // keeps its natural width and DESCRIPTION takes the rest (18).
+        let rows = vec![
+            vec![
+                "network-EXAMPLE".to_string(),
+                "office".to_string(),
+                "14".to_string(),
+                "everything in the office building".to_string(),
+            ],
+            vec![
+                "network-SECOND".to_string(),
+                "lab".to_string(),
+                "2".to_string(),
+                "bench".to_string(),
+            ],
+        ];
+        let out = render_table(&FIT_COLUMNS, &rows, &fitted(50));
         assert_eq!(
             out,
-            "ID               NAME         HOSTS  DESCRIPTION\n\
-             network-EXAMPLE  office-w...  14     everythi...\n\
-             network-SECOND   lab          2      bench\n"
+            "ID               NAME    HOSTS  DESCRIPTION\n\
+             network-EXAMPLE  office  14     everything in t...\n\
+             network-SECOND   lab     2      bench\n"
         );
-        assert!(out.lines().all(|l| display_width(l) <= 48));
+        assert!(out.lines().all(|l| display_width(l) <= 50));
     }
 
     #[test]
