@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.4 (2026-09-10)
+
+### Features
+
+- dn networks list (#52)
+
+### Fixes
+
+- count VS16 emoji as one column, like most terminals do (#53)
+
 ## 0.2.3 (2026-09-09)
 
 ### Fixes
