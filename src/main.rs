@@ -8,7 +8,7 @@ use anyhow::{Context, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::{Value, json};
-use unicode_width::UnicodeWidthChar;
+use tabwriter::TabWriter;
 
 use crate::api::{ApiError, Client};
 use crate::config::{
@@ -1132,71 +1132,45 @@ fn render_host_create_human(res: &Value) -> String {
     out
 }
 
-/// Render rows as a left-aligned column table with a header row, padding each
-/// column to its widest cell. Columns are separated by two spaces; the final
-/// column is never padded (no trailing whitespace).
-///
-/// Widths are measured in terminal display columns (see [`display_width`]),
-/// so wide glyphs (emoji, CJK) and combining marks align — a host named
-/// `caleb-macbook-pro 💻` lines up with its plain-ASCII neighbours. Generic
-/// over column count so every list command shares it.
+/// Replace control characters (tabs, newlines, escapes) with spaces so an API
+/// value can't split a table row or drive the terminal.
 fn sanitize_for_display(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
 }
 
-/// Display width the way wcwidth-family terminals count it: one char at a
-/// time, so a variation selector adds nothing and `☁️` (U+2601 U+FE0F) is one
-/// column. `UnicodeWidthStr::width` applies Unicode emoji presentation instead
-/// and calls that sequence two columns; Ghostty, Kitty and iTerm2 draw it that
-/// way, while Alacritty (and Zed's terminal built on it), Terminal.app,
-/// xterm.js and tmux draw one cell. No measure aligns on both sides; this one
-/// matches the wcwidth side.
-fn display_width(s: &str) -> usize {
-    s.chars().filter_map(UnicodeWidthChar::width).sum()
-}
-
+/// Render rows as a left-aligned column table with a header row, padding each
+/// column to its widest cell. Columns are separated by two spaces and no line
+/// carries trailing whitespace. Generic over column count so every list
+/// command shares it.
+///
+/// tabwriter measures width one char at a time with `UnicodeWidthChar`, the
+/// way wcwidth-family terminals count cells: emoji and CJK take two columns,
+/// combining marks none, and a variation selector adds nothing, so `☁️`
+/// (U+2601 U+FE0F) is one column. `UnicodeWidthStr::width` applies Unicode
+/// emoji presentation instead and calls that sequence two columns; Ghostty,
+/// Kitty and iTerm2 draw it that way, while Alacritty (and Zed's terminal
+/// built on it), Terminal.app, xterm.js and tmux draw one cell. No measure
+/// aligns on both sides; this one matches the wcwidth side.
 fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
-    let rows: Vec<Vec<String>> = rows
-        .iter()
-        .map(|row| row.iter().map(|c| sanitize_for_display(c)).collect())
-        .collect();
-    let mut widths: Vec<usize> = headers.iter().map(|h| display_width(h)).collect();
-    for row in &rows {
-        for (i, cell) in row.iter().enumerate() {
-            if let Some(w) = widths.get_mut(i) {
-                *w = (*w).max(display_width(cell));
-            }
-        }
+    let mut tw = TabWriter::new(Vec::new()).minwidth(0).padding(2);
+    let lines = std::iter::once(headers.join("\t")).chain(rows.iter().map(|row| {
+        let cells: Vec<String> = row.iter().map(|c| sanitize_for_display(c)).collect();
+        cells.join("\t")
+    }));
+    for line in lines {
+        writeln!(tw, "{line}").expect("writing to an in-memory buffer cannot fail");
     }
-
-    let mut out = String::new();
-    push_row(&mut out, headers, &widths);
-    for row in rows {
-        let cells: Vec<&str> = row.iter().map(String::as_str).collect();
-        push_row(&mut out, &cells, &widths);
-    }
-    out
-}
-
-/// Append one padded row (newline-terminated) to `out`. The last cell is
-/// emitted without trailing padding.
-fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
-    let last = cells.len().saturating_sub(1);
-    for (i, &cell) in cells.iter().enumerate() {
-        out.push_str(cell);
-        if i != last {
-            let pad = widths
-                .get(i)
-                .copied()
-                .unwrap_or(0)
-                .saturating_sub(display_width(cell));
-            out.push_str(&" ".repeat(pad));
-            out.push_str("  ");
-        }
-    }
-    out.push('\n');
+    let Ok(bytes) = tw.into_inner() else {
+        unreachable!("writing to an in-memory buffer cannot fail")
+    };
+    let table = String::from_utf8(bytes).expect("tabwriter output is UTF-8");
+    table
+        .lines()
+        .map(str::trim_end)
+        .map(|l| format!("{l}\n"))
+        .collect()
 }
 
 /// The three columns the human host table renders. `id` and `name` fall back
@@ -1976,23 +1950,30 @@ mod tests {
     }
 
     #[test]
-    fn render_table_aligns_wide_glyphs_by_display_width() {
-        // 💻 is one char but two display columns; a naive char/byte count would
-        // misalign the row after it. The final column must start at the same
-        // *display* offset on every line.
+    fn render_table_counts_wide_glyphs_as_two_columns() {
+        // 💻 is one char but two display columns; a naive char count would
+        // leave the column after it one cell short.
         let rows = vec![
             vec!["a".to_string(), "laptop 💻".to_string(), "x".to_string()],
             vec!["b".to_string(), "pc".to_string(), "y".to_string()],
         ];
         let out = render_table(&["ID", "NAME", "C"], &rows);
-        let last_col_offsets: Vec<usize> = out
-            .lines()
-            .map(|line| display_width(line) - 1) // every last cell here is 1 column wide
-            .collect();
-        assert!(
-            last_col_offsets.windows(2).all(|w| w[0] == w[1]),
-            "last column misaligned across rows: {last_col_offsets:?}"
+        assert_eq!(
+            out,
+            "ID  NAME       C\n\
+             a   laptop 💻  x\n\
+             b   pc         y\n"
         );
+    }
+
+    #[test]
+    fn render_table_trims_padding_before_an_empty_last_cell() {
+        let rows = vec![
+            vec!["a".to_string(), "main site".to_string()],
+            vec!["b".to_string(), String::new()],
+        ];
+        let out = render_table(&["ID", "DESCRIPTION"], &rows);
+        assert_eq!(out, "ID  DESCRIPTION\na   main site\nb\n");
     }
 
     #[test]
