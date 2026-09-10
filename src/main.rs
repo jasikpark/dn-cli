@@ -1265,49 +1265,24 @@ fn render_table(columns: &[Column], rows: &[Vec<String>], layout: &Layout) -> St
 }
 
 /// Shrink flexible columns until a row fits in `available` display columns,
-/// distributing width the way `gh` lays out its tables: a flexible column
-/// narrower than an even share of the free width keeps its natural width,
-/// and the columns still too wide split what is left evenly, so no single
-/// column is crushed to make room for the others. Each stops at its header
-/// width or [`MIN_FLEXIBLE_WIDTH`], whichever is larger, so the table can
-/// still overflow a very narrow terminal; fixed columns are never touched.
+/// distributing width the way `gh` lays out its tables. Narrowest first, each
+/// flexible column takes the smaller of its natural width and an even share
+/// of what is left, so a column that fits keeps its width and widens the
+/// share for the wider ones, which then split the remainder evenly; no
+/// single column is crushed to make room for the others. Each stops at its
+/// header width or [`MIN_FLEXIBLE_WIDTH`], whichever is larger, so the table
+/// can still overflow a very narrow terminal; fixed columns are never touched.
 fn fit_columns(columns: &[Column], widths: &mut [usize], available: usize) {
-    let gaps = COLUMN_GAP.len() * widths.len().saturating_sub(1);
-    if widths.iter().sum::<usize>() + gaps <= available {
-        return;
-    }
-    let mut long: Vec<usize> = (0..columns.len())
-        .filter(|&i| columns[i].flexible)
-        .collect();
-    // Width left for the columns in `long` once every other column has its own.
-    let free = |widths: &[usize], long: &[usize]| {
-        let taken: usize = widths
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !long.contains(i))
-            .map(|(_, w)| w)
-            .sum();
-        available.saturating_sub(taken + gaps)
-    };
-    // Release the columns that fit their share. Each release widens the share
-    // for the rest, so repeat until nothing more fits.
-    loop {
-        if long.is_empty() {
-            return;
-        }
-        let share = free(widths, &long) / long.len();
-        let before = long.len();
-        long.retain(|&i| widths[i] > share);
-        if long.len() == before {
-            break;
-        }
-    }
-    let mut remaining = free(widths, &long);
-    for (k, &i) in long.iter().enumerate() {
-        let floor = display_width(columns[i].header)
-            .max(MIN_FLEXIBLE_WIDTH)
-            .min(widths[i]);
-        let share = remaining / (long.len() - k);
+    let (flexible, fixed): (Vec<usize>, Vec<usize>) =
+        (0..columns.len()).partition(|&i| columns[i].flexible);
+    let taken: usize = fixed.iter().map(|&i| widths[i]).sum::<usize>()
+        + COLUMN_GAP.len() * widths.len().saturating_sub(1);
+    let mut remaining = available.saturating_sub(taken);
+    let mut flexible = flexible;
+    flexible.sort_by_key(|&i| widths[i]);
+    for (k, &i) in flexible.iter().enumerate() {
+        let share = remaining / (flexible.len() - k);
+        let floor = display_width(columns[i].header).max(MIN_FLEXIBLE_WIDTH);
         widths[i] = share.max(floor).min(widths[i]);
         remaining = remaining.saturating_sub(widths[i]);
     }
@@ -1687,6 +1662,34 @@ mod tests {
             "ID               NAME    HOSTS  DESCRIPTION\n\
              network-EXAMPLE  office  14     everything in t...\n\
              network-SECOND   lab     2      bench\n"
+        );
+        assert!(out.lines().all(|l| display_width(l) <= 50));
+    }
+
+    #[test]
+    fn render_table_fit_spares_a_short_column_wherever_it_sits() {
+        // Here DESCRIPTION (11, its header) is the short flexible column and
+        // NAME the long one, so NAME takes the 13 that DESCRIPTION leaves.
+        let rows = vec![
+            vec![
+                "network-EXAMPLE".to_string(),
+                "office-wide-area-mesh".to_string(),
+                "14".to_string(),
+                "bench".to_string(),
+            ],
+            vec![
+                "network-SECOND".to_string(),
+                "lab".to_string(),
+                "2".to_string(),
+                "hq".to_string(),
+            ],
+        ];
+        let out = render_table(&FIT_COLUMNS, &rows, &fitted(50));
+        assert_eq!(
+            out,
+            "ID               NAME           HOSTS  DESCRIPTION\n\
+             network-EXAMPLE  office-wid...  14     bench\n\
+             network-SECOND   lab            2      hq\n"
         );
         assert!(out.lines().all(|l| display_width(l) <= 50));
     }
