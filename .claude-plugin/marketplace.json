@@ -9,7 +9,7 @@
       "name": "dn-cli",
       "source": "./",
       "description": "Use the unofficial `dn` CLI to view and manage a Defined Networking (Nebula mesh VPN) network.",
-      "version": "0.1.0"
+      "version": "0.2.0"
     }
   ]
 }

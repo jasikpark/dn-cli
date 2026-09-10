@@ -1,6 +1,6 @@
 {
   "name": "dn-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Use the unofficial `dn` CLI to view and manage a Defined Networking (Nebula mesh VPN) network.",
   "author": { "name": "Caleb Jasik" },
   "homepage": "https://github.com/jasikpark/dn-cli",

@@ -78,7 +78,7 @@ Creates the host **and** its one-time enrollment code in a single call.
 
 | flag | when to pass it |
 |------|-----------------|
-| `--network <id>` | only when the account has more than one network — otherwise auto-picked |
+| `--network <id>` | only when the account has more than one network — otherwise auto-picked. Ids come from `dn networks list --json` |
 | `--role <id>` | to skip the account's default (deny-all) role |
 | `--lighthouse` | with `--static-address <host:port>` (repeatable) and `--listen-port <port>` |
 | `--relay` | with `--listen-port <port>` |
@@ -139,11 +139,32 @@ it to find the id for `hosts create --role` or `hosts edit --role`, and to
 answer "does this account have a role that allows traffic yet" (a role with
 `firewallRulesCount` of 0 denies everything).
 
+### List networks — `dn networks list`
+
+```bash
+dn networks list --json
+```
+
+Returns `{ "data": [ network… ], "metadata": { … } }`. Each network has `id`
+(`network-…`), `name`, `description`, `cidrs` (the overlay prefixes — an IPv6
+one and, on dual-stack networks, an IPv4 one), `hostCount`, `curve` (`25519`
+or `P256`), `certVersion`, and two lighthouse settings that live on the
+network, not on any host:
+
+| field | meaning |
+|-------|---------|
+| `disableManagedLighthouses` | `false` means Defined's managed lighthouses back the network. They are not hosts, so `hosts list` never shows them — a network with no lighthouse host is still fine when this is `false`. |
+| `lighthousesAsRelays` | `true` means the network's self-hosted lighthouses also act as relays. |
+
+Use it to find the id for `hosts create --network`, and to answer "how do my
+hosts find each other" or "do I have relays" — check these flags before
+concluding anything from the hosts list alone.
+
 ## Safety
 
 | operation | gate |
 |-----------|------|
-| `hosts list`, `roles list` | free — reads change nothing |
+| `hosts list`, `roles list`, `networks list` | free — reads change nothing |
 | `hosts edit` | a write: renaming and tagging are cosmetic, but `--role` changes the host's firewall. Confirm the host and role with the user first. |
 | `hosts create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name and the network with the user first. |
 | `hosts delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |

@@ -142,6 +142,10 @@ network"* — conversational device enrollment.
   Key permissions: `hosts:read` and `hosts:update`.
 - Roles: `roles list` — id, name, rule and host counts. Pair it with
   `hosts edit --role` to move a host off the default deny-all role.
+- Networks: `networks list` — id, name, CIDRs, host count, whether managed
+  lighthouses and lighthouses-as-relays are on, curve and cert version. The
+  lighthouse settings live on the network, so this is where to look when the
+  hosts list shows no lighthouse. Key permission: `networks:list`.
 - Coming next: `roles create` and `roles add-rule` — the default role denies
   all traffic, so newly enrolled hosts share a network but can't talk to
   each other until a permissive role exists and is assigned.

@@ -38,11 +38,22 @@ enum Command {
         #[command(subcommand)]
         command: HostsCommand,
     },
+    /// Inspect networks
+    Networks {
+        #[command(subcommand)]
+        command: NetworksCommand,
+    },
     /// Inspect firewall roles
     Roles {
         #[command(subcommand)]
         command: RolesCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum NetworksCommand {
+    /// List networks
+    List,
 }
 
 #[derive(Subcommand)]
@@ -99,8 +110,8 @@ enum HostsCommand {
 struct HostCreateArgs {
     /// Host name (1–255 chars)
     name: String,
-    /// Network ID. Omit if the account has exactly one network — it's
-    /// auto-picked, which is the common case at signup.
+    /// Network ID (see `dn networks list`). Omit if the account has exactly
+    /// one network — it's auto-picked, which is the common case at signup.
     #[arg(long)]
     network: Option<String>,
     /// Role ID to assign. Omit to use the account's default role (deny-all
@@ -228,6 +239,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 HostsCommand::Create(args) => hosts_create(&client, args, cli.json)?,
                 HostsCommand::Edit(args) => hosts_edit(&client, args, cli.json)?,
                 HostsCommand::Delete(args) => hosts_delete(&client, args, cli.json)?,
+            }
+        }
+        Command::Networks { command } => {
+            let client = Client::new(Config::load()?);
+            match command {
+                NetworksCommand::List => networks_list(&client, cli.json)?,
             }
         }
         Command::Roles { command } => {
@@ -450,6 +467,51 @@ fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
         "{}",
         render_table(
             &["ID", "NAME", "RULES", "HOSTS", "DESCRIPTION"],
+            &table_rows
+        )
+    );
+
+    if let Some(total) = res
+        .get("metadata")
+        .and_then(|m| m.get("totalCount"))
+        .and_then(Value::as_u64)
+    {
+        println!("\n{} shown / {total} total", rows.len());
+    }
+
+    Ok(())
+}
+
+fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
+    let res = client.list_networks()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&res)?);
+        return Ok(());
+    }
+
+    let empty: Vec<Value> = Vec::new();
+    let rows = res.get("data").and_then(Value::as_array).unwrap_or(&empty);
+    if rows.is_empty() {
+        println!("No networks found.");
+        return Ok(());
+    }
+
+    let table_rows: Vec<Vec<String>> = rows.iter().map(network_row).collect();
+    print!(
+        "{}",
+        render_table(
+            &[
+                "ID",
+                "NAME",
+                "CIDRS",
+                "HOSTS",
+                "MANAGED LH",
+                "LH AS RELAYS",
+                "CURVE",
+                "CERT",
+                "DESCRIPTION",
+            ],
             &table_rows
         )
     );
@@ -918,7 +980,7 @@ fn pick_network(networks: &Value) -> anyhow::Result<&Value> {
         )),
         (1, false) => Ok(&rows[0]),
         _ => Err(anyhow!(
-            "multiple networks found — pass --network <id> to disambiguate"
+            "multiple networks found — pass --network <id> to disambiguate (see `dn networks list`)"
         )),
     }
 }
@@ -1145,10 +1207,122 @@ fn host_fields(row: &Value) -> (&str, &str, String) {
     (field("id"), field("name"), ips)
 }
 
+/// The columns the human network table renders. Strings fall back to empty
+/// when absent or non-string; `cidrs` joins the overlay prefixes (an IPv6
+/// one and, on dual-stack networks, an IPv4 one) the way the host table joins
+/// IPs. Managed lighthouses are Defined's hosted fleet and never appear in
+/// `hosts list`, so this table is where that setting is visible; the API
+/// stores it inverted (`disableManagedLighthouses`) and the column reports it
+/// the way the admin panel does — whether managed lighthouses are on.
+fn network_row(row: &Value) -> Vec<String> {
+    let field = |key| {
+        row.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let yes_no = |enabled: bool| if enabled { "yes" } else { "no" }.to_string();
+    let cidrs = row
+        .get("cidrs")
+        .and_then(Value::as_array)
+        .map(|cidrs| {
+            cidrs
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    let hosts = row
+        .get("hostCount")
+        .and_then(Value::as_u64)
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    let managed_lighthouses = row
+        .get("disableManagedLighthouses")
+        .and_then(Value::as_bool)
+        .map(|disabled| yes_no(!disabled))
+        .unwrap_or_default();
+    let lighthouses_as_relays = row
+        .get("lighthousesAsRelays")
+        .and_then(Value::as_bool)
+        .map(yes_no)
+        .unwrap_or_default();
+    let cert = row
+        .get("certVersion")
+        .and_then(Value::as_u64)
+        .map(|v| format!("v{v}"))
+        .unwrap_or_default();
+    vec![
+        field("id"),
+        field("name"),
+        cidrs,
+        hosts,
+        managed_lighthouses,
+        lighthouses_as_relays,
+        field("curve"),
+        cert,
+        field("description"),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn network_row_renders_dual_stack_network() {
+        let row = json!({
+            "id": "network-EXAMPLE",
+            "name": "office",
+            "description": "main site",
+            "cidrs": ["fd00:c0:c0::/80", "100.100.0.0/22"],
+            "hostCount": 14,
+            "disableManagedLighthouses": false,
+            "lighthousesAsRelays": true,
+            "curve": "25519",
+            "certVersion": 2,
+        });
+        assert_eq!(
+            network_row(&row),
+            [
+                "network-EXAMPLE",
+                "office",
+                "fd00:c0:c0::/80, 100.100.0.0/22",
+                "14",
+                "yes",
+                "yes",
+                "25519",
+                "v2",
+                "main site",
+            ]
+        );
+    }
+
+    #[test]
+    fn network_row_reports_lighthouse_settings_off() {
+        // The API stores managed lighthouses as a *disable* flag; the table
+        // must not echo it verbatim.
+        let row = json!({"disableManagedLighthouses": true, "lighthousesAsRelays": false});
+        let cells = network_row(&row);
+        assert_eq!((cells[4].as_str(), cells[5].as_str()), ("no", "no"));
+    }
+
+    #[test]
+    fn network_row_defaults_missing_or_wrong_type() {
+        let row = json!({
+            "id": "network-EXAMPLE",
+            "cidrs": 42,
+            "hostCount": "many",
+            "certVersion": "2",
+            "lighthousesAsRelays": "true",
+        });
+        assert_eq!(
+            network_row(&row),
+            ["network-EXAMPLE", "", "", "", "", "", "", "", ""]
+        );
+    }
 
     #[test]
     fn host_fields_extracts_present_columns() {
