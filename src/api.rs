@@ -238,23 +238,40 @@ impl Client {
     /// List every host (v2 endpoint — dual-stack `ipAddresses`), following
     /// cursor pagination to completion.
     ///
+    /// TODO(write-phase): add ?networkID= filtering once the exact query
+    /// param is confirmed against the live API.
+    pub fn list_hosts(&self) -> Result<Value> {
+        self.list_all("/v2/hosts")
+    }
+
+    /// List every role, following cursor pagination to completion.
+    pub fn list_roles(&self) -> Result<Value> {
+        self.list_all("/v1/roles")
+    }
+
+    /// List every network, following cursor pagination to completion. Backs
+    /// `networks list`; `hosts create` auto-picks from it when the account
+    /// has exactly one network.
+    pub fn list_networks(&self) -> Result<Value> {
+        self.list_all("/v2/networks")
+    }
+
+    /// Fetch every page of a list endpoint and return one merged envelope.
+    ///
     /// The Defined API returns one page per call (`{ data, metadata }`); an
     /// agent consuming a single page would silently see only the first slice,
     /// so we walk the cursor and return one merged envelope. The last page's
     /// `metadata` (carrying `totalCount`) is preserved so the count still
     /// reflects the server's view.
-    ///
-    /// TODO(write-phase): add ?networkID= filtering once the exact query
-    /// param is confirmed against the live API.
-    pub fn list_hosts(&self) -> Result<Value> {
+    fn list_all(&self, path: &str) -> Result<Value> {
         let mut data: Vec<Value> = Vec::new();
         let mut metadata = Value::Null;
         let mut cursor: Option<String> = None;
 
         loop {
             let page = match &cursor {
-                Some(c) => self.get_with_query("/v2/hosts", &[("cursor", c)])?,
-                None => self.get("/v2/hosts")?,
+                Some(c) => self.get_with_query(path, &[("cursor", c)])?,
+                None => self.get(path)?,
             };
 
             if let Some(rows) = page.get("data").and_then(Value::as_array) {
@@ -275,48 +292,12 @@ impl Client {
         Ok(json!({ "data": data, "metadata": metadata }))
     }
 
-    /// List every role, following cursor pagination to completion.
-    pub fn list_roles(&self) -> Result<Value> {
-        let mut data: Vec<Value> = Vec::new();
-        let mut metadata = Value::Null;
-        let mut cursor: Option<String> = None;
-
-        loop {
-            let page = match &cursor {
-                Some(c) => self.get_with_query("/v1/roles", &[("cursor", c)])?,
-                None => self.get("/v1/roles")?,
-            };
-
-            if let Some(rows) = page.get("data").and_then(Value::as_array) {
-                data.extend(rows.iter().cloned());
-            }
-            if let Some(m) = page.get("metadata") {
-                metadata = m.clone();
-            }
-
-            match next_cursor(page.get("metadata")) {
-                Some(next) if Some(&next) != cursor.as_ref() => cursor = Some(next),
-                _ => break,
-            }
-        }
-
-        Ok(json!({ "data": data, "metadata": metadata }))
-    }
-
     /// Prove a key works with the least privilege the CLI relies on: a
     /// one-item `GET /v2/hosts` needs only `hosts:list`, so a key scoped
     /// exactly as the README suggests still passes.
     pub fn verify_key(&self) -> Result<()> {
         self.get_with_query("/v2/hosts", &[("pageSize", "1")])
             .map(|_| ())
-    }
-
-    /// Fetch the first page of networks. Used by `hosts create` to
-    /// auto-pick when the account has exactly one (the common case at signup)
-    /// — paginating to completion isn't worth it since accounts with enough
-    /// networks to exceed one page will pass `--network` explicitly anyway.
-    pub fn list_networks(&self) -> Result<Value> {
-        self.get("/v2/networks")
     }
 
     /// Fetch one network. `hosts create --network <id>` needs its `cidrs` to
