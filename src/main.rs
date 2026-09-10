@@ -8,7 +8,7 @@ use anyhow::{Context, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::{Value, json};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 
 use crate::api::{ApiError, Client};
 use crate::config::{
@@ -1136,14 +1136,25 @@ fn render_host_create_human(res: &Value) -> String {
 /// column to its widest cell. Columns are separated by two spaces; the final
 /// column is never padded (no trailing whitespace).
 ///
-/// Widths are measured in terminal display columns via `unicode-width`, so
-/// wide glyphs (emoji, CJK) and combining marks align correctly — a host named
+/// Widths are measured in terminal display columns (see [`display_width`]),
+/// so wide glyphs (emoji, CJK) and combining marks align — a host named
 /// `caleb-macbook-pro 💻` lines up with its plain-ASCII neighbours. Generic
-/// over column count so future list commands (networks, roles, …) can reuse it.
+/// over column count so every list command shares it.
 fn sanitize_for_display(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
+}
+
+/// Display width the way wcwidth-family terminals count it: one char at a
+/// time, so a variation selector adds nothing and `☁️` (U+2601 U+FE0F) is one
+/// column. `UnicodeWidthStr::width` applies Unicode emoji presentation instead
+/// and calls that sequence two columns; Ghostty, Kitty and iTerm2 draw it that
+/// way, while Alacritty (and Zed's terminal built on it), Terminal.app,
+/// xterm.js and tmux draw one cell. No measure aligns on both sides; this one
+/// matches the wcwidth side.
+fn display_width(s: &str) -> usize {
+    s.chars().filter_map(UnicodeWidthChar::width).sum()
 }
 
 fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
@@ -1151,11 +1162,11 @@ fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
         .iter()
         .map(|row| row.iter().map(|c| sanitize_for_display(c)).collect())
         .collect();
-    let mut widths: Vec<usize> = headers.iter().map(|h| h.width()).collect();
+    let mut widths: Vec<usize> = headers.iter().map(|h| display_width(h)).collect();
     for row in &rows {
         for (i, cell) in row.iter().enumerate() {
             if let Some(w) = widths.get_mut(i) {
-                *w = (*w).max(cell.as_str().width());
+                *w = (*w).max(display_width(cell));
             }
         }
     }
@@ -1180,7 +1191,7 @@ fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
                 .get(i)
                 .copied()
                 .unwrap_or(0)
-                .saturating_sub(cell.width());
+                .saturating_sub(display_width(cell));
             out.push_str(&" ".repeat(pad));
             out.push_str("  ");
         }
@@ -1976,11 +1987,33 @@ mod tests {
         let out = render_table(&["ID", "NAME", "C"], &rows);
         let last_col_offsets: Vec<usize> = out
             .lines()
-            .map(|line| line.width() - 1) // every last cell here is 1 column wide
+            .map(|line| display_width(line) - 1) // every last cell here is 1 column wide
             .collect();
         assert!(
             last_col_offsets.windows(2).all(|w| w[0] == w[1]),
             "last column misaligned across rows: {last_col_offsets:?}"
+        );
+    }
+
+    #[test]
+    fn render_table_counts_vs16_emoji_as_one_column() {
+        // ☁️ is U+2601 followed by VARIATION SELECTOR-16. wcwidth-family
+        // terminals draw it in one cell, so the row must be padded as if the
+        // name were seven columns wide, not eight.
+        let rows = vec![
+            vec![
+                "a".to_string(),
+                "Cloud \u{2601}\u{fe0f}".to_string(),
+                "x".to_string(),
+            ],
+            vec!["b".to_string(), "Net".to_string(), "y".to_string()],
+        ];
+        let out = render_table(&["ID", "NAME", "C"], &rows);
+        assert_eq!(
+            out,
+            "ID  NAME     C\n\
+             a   Cloud \u{2601}\u{fe0f}  x\n\
+             b   Net      y\n"
         );
     }
 
