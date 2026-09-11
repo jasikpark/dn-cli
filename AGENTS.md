@@ -15,24 +15,19 @@ Guidance for coding agents working in dn-cli.
 - Import types at top of file and use short names everywhere (e.g. `use std::sync::Arc;` then `Arc<T>`, never `std::sync::Arc<T>` inline)
 - Keep consts at top of file, right after imports
 - Explicit error handling with `Result<T, E>` over panics
-- Use `color_eyre` when the specific error is not as important
-- Use custom error types using `thiserror` for domain-specific errors
+- Use `anyhow` when the specific error is not as important
 - Place unit tests in the same file using `#[cfg(test)]` modules
-- Add dependencies to global `Cargo.toml`, and then set workspace=true in specific package
 - Try solving with existing dependencies before adding new ones
 - Prefer well-maintained crates from crates.io
-- Be mindful of allocations in hot paths
-- Prefer structured logging (wide logs with a bunch of useful fields)
 - Provide helpful error messages
-- Use #[test_case] when writing tests, and use snake_case for naming the tests
+- Use snake_case for naming tests
 - No need for bullshit tests (e.g. tautology)
 - Make sure tests are not flaky (no weird sleeps)
 - No inline magic numbers or strings
 - In tests const error/status messages and assert against the shared constant
 - Add #[derive(Copy)] only on structs with 1 primitive field
-- NO TRIVIAL COMMENTS
 
 ---
 
-The code guidelines above are copied verbatim from [maki](https://github.com/tontinton/maki)'s
-`AGENTS.md` (MIT, Copyright (c) 2026 Tony Solomonik).
+Adapted from [maki](https://github.com/tontinton/maki)'s `AGENTS.md`
+(MIT, Copyright (c) 2026 Tony Solomonik).
