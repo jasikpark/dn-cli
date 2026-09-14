@@ -150,6 +150,15 @@ network"* — conversational device enrollment.
   all traffic, so newly enrolled hosts share a network but can't talk to
   each other until a permissive role exists and is assigned.
 
+## Prior art
+
+- [quickvm/defined-mcp](https://github.com/quickvm/defined-mcp) — Python/`uv`
+  MCP server with broad hosts, roles, tags, networks, and routes coverage, plus
+  a `network-architect` Claude skill for auditing and firewall policy design.
+- [geoffbelknap/defined-mcp](https://github.com/geoffbelknap/defined-mcp) —
+  TypeScript MCP server published as `@defined-net/mcp-server`, with dry-run
+  previews on mutating tools, MCP resources and prompts, and `debug-host`.
+
 ## License
 
 [FSL-1.1-Apache-2.0](./LICENSE.md) — source-available; converts to Apache-2.0
