@@ -241,19 +241,34 @@ impl Client {
     /// TODO(write-phase): add ?networkID= filtering once the exact query
     /// param is confirmed against the live API.
     pub fn list_hosts(&self) -> Result<Value> {
-        self.list_all("/v2/hosts")
+        self.list_all("/v2/hosts", &[])
+    }
+
+    /// Search hosts by a free-text query, following cursor pagination to
+    /// completion. Wraps `GET /v2/hosts?filter.search=<q>` — a server-side
+    /// case-insensitive LIKE across a host's name, IP addresses, assigned
+    /// role name, and tags (the same surface the admin panel's host search
+    /// box drives). The API rejects a query shorter than two characters with
+    /// a 400 (`ERR_TOO_SHORT`); callers should preflight to spare the round
+    /// trip. Needs the `hosts:list` scope, same as `list_hosts`.
+    ///
+    /// `filter.search` is undocumented in the public OpenAPI spec (only the
+    /// structured `filter.*` params are), so this is pinned to the webclient's
+    /// observed behaviour rather than a published contract.
+    pub fn search_hosts(&self, query: &str) -> Result<Value> {
+        self.list_all("/v2/hosts", &[("filter.search", query)])
     }
 
     /// List every role, following cursor pagination to completion.
     pub fn list_roles(&self) -> Result<Value> {
-        self.list_all("/v1/roles")
+        self.list_all("/v1/roles", &[])
     }
 
     /// List every network, following cursor pagination to completion. Backs
     /// `networks list`; `hosts create` auto-picks from it when the account
     /// has exactly one network.
     pub fn list_networks(&self) -> Result<Value> {
-        self.list_all("/v2/networks")
+        self.list_all("/v2/networks", &[])
     }
 
     /// Fetch every page of a list endpoint and return one merged envelope.
@@ -263,16 +278,19 @@ impl Client {
     /// so we walk the cursor and return one merged envelope. The last page's
     /// `metadata` (carrying `totalCount`) is preserved so the count still
     /// reflects the server's view.
-    fn list_all(&self, path: &str) -> Result<Value> {
+    /// `params` are extra query pairs applied to every page (e.g. a
+    /// `filter.search` term); the cursor is threaded in on top of them.
+    fn list_all(&self, path: &str, params: &[(&str, &str)]) -> Result<Value> {
         let mut data: Vec<Value> = Vec::new();
         let mut metadata = Value::Null;
         let mut cursor: Option<String> = None;
 
         loop {
-            let page = match &cursor {
-                Some(c) => self.get_with_query(path, &[("cursor", c)])?,
-                None => self.get(path)?,
-            };
+            let mut query: Vec<(&str, &str)> = params.to_vec();
+            if let Some(c) = &cursor {
+                query.push(("cursor", c));
+            }
+            let page = self.get_with_query(path, &query)?;
 
             if let Some(rows) = page.get("data").and_then(Value::as_array) {
                 data.extend(rows.iter().cloned());

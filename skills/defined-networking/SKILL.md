@@ -68,6 +68,20 @@ Use this to answer questions like "what hosts do I have", "is <device> online"
 (check `metadata.lastSeenAt`), "which hosts need an update"
 (`metadata.updateAvailable`), or "which are lighthouses".
 
+### Search hosts — `dn hosts search`
+
+```bash
+dn hosts search <QUERY> --json
+```
+
+Returns the same `{ "data": [ host… ], "metadata": { … } }` shape as
+`hosts list`, but only the hosts matching `<QUERY>`. The match is server-side
+(`GET /v2/hosts?filter.search=`): a case-insensitive substring across each
+host's `name`, `ipAddresses`, assigned role name, and `tags`. The query must be
+at least two characters — a shorter one fails locally before any request. Prefer
+this over pulling the full list and filtering yourself when the user names a
+specific host, IP, role, or tag. Key permission: `hosts:list`.
+
 ### Create a host — `dn hosts create`
 
 ```bash
@@ -164,7 +178,7 @@ concluding anything from the hosts list alone.
 
 | operation | gate |
 |-----------|------|
-| `hosts list`, `roles list`, `networks list` | free — reads change nothing |
+| `hosts list`, `hosts search`, `roles list`, `networks list` | free — reads change nothing |
 | `hosts edit` | a write: renaming and tagging are cosmetic, but `--role` changes the host's firewall. Confirm the host and role with the user first. |
 | `hosts create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name and the network with the user first. |
 | `hosts delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |

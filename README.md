@@ -119,7 +119,12 @@ network"* — conversational device enrollment.
 
 ## Status
 
-- Reads: `hosts list`
+- Reads: `hosts list`, `hosts search <QUERY>` — the latter wraps the
+  `GET /v2/hosts?filter.search=` query, a server-side match across each host's
+  name, IP addresses, assigned role name, and tags (the same surface the admin
+  panel's search box drives). The query must be at least two characters. Key
+  permission: `hosts:list`. (`filter.search` is not in the public OpenAPI spec
+  yet, so it's pinned to the web client's observed behaviour.)
 - Auth: `auth login` / `auth status` / `auth logout` — stores a 1Password
   secret reference (never the key) in `~/.config/dn/config.json` and resolves
   it per call with `op read`.

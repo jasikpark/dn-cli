@@ -88,6 +88,9 @@ struct AuthLoginArgs {
 enum HostsCommand {
     /// List hosts
     List,
+    /// Search hosts by name, IP, role name, or tag (server-side, whole
+    /// account). The query must be at least two characters.
+    Search(HostSearchArgs),
     /// Create a host (or lighthouse / relay) and an enrollment code in one
     /// transaction. Prints the OTP to give to `dnclient enroll`.
     Create(HostCreateArgs),
@@ -95,6 +98,18 @@ enum HostsCommand {
     Edit(HostEditArgs),
     /// Delete a host. Asks for confirmation unless --yes is passed.
     Delete(HostDeleteArgs),
+}
+
+/// Arguments for `dn hosts search`. Wraps the `filter.search` query on
+/// `GET /v2/hosts` — a server-side match across a host's name, IPs, role
+/// name, and tags.
+#[derive(Args)]
+struct HostSearchArgs {
+    /// Search term (case-insensitive substring). At least two characters —
+    /// the API rejects a shorter query. Multiple words are joined with a
+    /// space, so `dn hosts search web server` searches for "web server".
+    #[arg(required = true, num_args = 1.., value_name = "QUERY")]
+    query: Vec<String>,
 }
 
 /// Arguments for `dn hosts create`. Mirrors the
@@ -225,6 +240,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     {
         validate_edit_preflight(args)?;
     }
+    if let Command::Hosts {
+        command: HostsCommand::Search(args),
+    } = &cli.command
+    {
+        validate_search_preflight(args)?;
+    }
 
     match &cli.command {
         Command::Auth { command } => match command {
@@ -236,6 +257,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             let client = Client::new(Config::load()?);
             match command {
                 HostsCommand::List => hosts_list(&client, cli.json)?,
+                HostsCommand::Search(args) => hosts_search(&client, args, cli.json)?,
                 HostsCommand::Create(args) => hosts_create(&client, args, cli.json)?,
                 HostsCommand::Edit(args) => hosts_edit(&client, args, cli.json)?,
                 HostsCommand::Delete(args) => hosts_delete(&client, args, cli.json)?,
@@ -551,16 +573,52 @@ fn report_error(err: &anyhow::Error, json: bool) {
 
 fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
     let res = client.list_hosts()?;
+    render_hosts(&res, json, "No hosts found.")
+}
 
+/// The `filter.search` term for `dn hosts search`, joined from the argv words
+/// and trimmed. The join means `dn hosts search web server` searches for the
+/// single phrase "web server" rather than erroring on an extra positional.
+fn search_query(args: &HostSearchArgs) -> String {
+    args.query.join(" ").trim().to_string()
+}
+
+/// Reject a query the API would reject anyway (fewer than two characters →
+/// 400 `ERR_TOO_SHORT`), before credentials are resolved or the wire is
+/// touched — the same preflight contract as create/edit. Two chars is counted
+/// in `char`s, not bytes, so a two-emoji query passes.
+fn validate_search_preflight(args: &HostSearchArgs) -> anyhow::Result<()> {
+    let query = search_query(args);
+    if query.chars().count() < 2 {
+        bail!("search query must be at least 2 characters");
+    }
+    Ok(())
+}
+
+fn hosts_search(client: &Client, args: &HostSearchArgs, json: bool) -> anyhow::Result<()> {
+    let query = search_query(args);
+    let res = client.search_hosts(&query)?;
+    render_hosts(
+        &res,
+        json,
+        &format!("No hosts match \"{}\".", sanitize_for_display(&query)),
+    )
+}
+
+/// Render a `{ data, metadata }` hosts envelope: pretty JSON in `--json`
+/// mode, otherwise the id/name/IP table (or `empty_msg` when there are no
+/// rows). Shared by `hosts list` and `hosts search` so the two can't drift on
+/// columns or the "N shown / M total" footer.
+fn render_hosts(res: &Value, json: bool, empty_msg: &str) -> anyhow::Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(&res)?);
+        println!("{}", serde_json::to_string_pretty(res)?);
         return Ok(());
     }
 
     let empty: Vec<Value> = Vec::new();
     let rows = res.get("data").and_then(Value::as_array).unwrap_or(&empty);
     if rows.is_empty() {
-        println!("No hosts found.");
+        println!("{empty_msg}");
         return Ok(());
     }
 
@@ -1708,6 +1766,83 @@ mod tests {
             panic!("expected `hosts create` to parse into HostsCommand::Create");
         };
         assert_eq!(args.name, "my-laptop");
+    }
+
+    #[test]
+    fn parses_hosts_search_with_a_single_word_query() {
+        let cli = Cli::try_parse_from(["dn", "hosts", "search", "laptop"]).unwrap();
+        let Command::Hosts {
+            command: HostsCommand::Search(args),
+        } = cli.command
+        else {
+            panic!("expected `hosts search` to parse into HostsCommand::Search");
+        };
+        assert_eq!(args.query, vec!["laptop".to_string()]);
+    }
+
+    #[test]
+    fn search_query_joins_multiple_words_with_a_space() {
+        // `dn hosts search web server` is one phrase, not a bad extra arg.
+        let cli = Cli::try_parse_from(["dn", "hosts", "search", "web", "server"]).unwrap();
+        let Command::Hosts {
+            command: HostsCommand::Search(args),
+        } = cli.command
+        else {
+            panic!("expected `hosts search` to parse into HostsCommand::Search");
+        };
+        assert_eq!(search_query(&args), "web server");
+    }
+
+    #[test]
+    fn hosts_search_requires_at_least_one_query_word() {
+        // No positional at all is a parse error (the arg is `required`).
+        assert!(Cli::try_parse_from(["dn", "hosts", "search"]).is_err());
+    }
+
+    fn search_args(query: &[&str]) -> HostSearchArgs {
+        HostSearchArgs {
+            query: query.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn search_preflight_accepts_a_two_character_query() {
+        assert!(validate_search_preflight(&search_args(&["ab"])).is_ok());
+    }
+
+    #[test]
+    fn search_preflight_rejects_a_one_character_query() {
+        let err = validate_search_preflight(&search_args(&["a"]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("at least 2 characters"));
+    }
+
+    #[test]
+    fn search_preflight_rejects_a_whitespace_only_query() {
+        // Trimming happens before the length check, so spaces don't pad a
+        // too-short query past the minimum.
+        assert!(validate_search_preflight(&search_args(&["  "])).is_err());
+    }
+
+    #[test]
+    fn search_preflight_counts_characters_not_bytes() {
+        // Two multi-byte chars are two characters, not four+ bytes' worth.
+        assert!(validate_search_preflight(&search_args(&["日本"])).is_ok());
+    }
+
+    #[test]
+    fn render_hosts_json_passes_the_envelope_through() {
+        let res = json!({"data": [{"id": "host-1"}], "metadata": {"totalCount": 1}});
+        // Just assert it doesn't error on the JSON path; the payload is the
+        // client's, rendered verbatim.
+        assert!(render_hosts(&res, true, "unused").is_ok());
+    }
+
+    #[test]
+    fn render_hosts_human_empty_uses_the_supplied_message() {
+        let res = json!({"data": [], "metadata": {}});
+        assert!(render_hosts(&res, false, "No hosts match \"x\".").is_ok());
     }
 
     #[test]
