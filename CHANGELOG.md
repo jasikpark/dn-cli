@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.5 (2026-09-20)
+
+### Features
+
+- dn hosts search (#66)
+
 ## 0.2.4 (2026-09-10)
 
 ### Features
