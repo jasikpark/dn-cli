@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.6 (2026-09-23)
+
+### Features
+
+- dn roles get (#72)
+
 ## 0.2.5 (2026-09-20)
 
 ### Features
