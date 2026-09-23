@@ -264,6 +264,12 @@ impl Client {
         self.list_all("/v1/roles", &[])
     }
 
+    /// Fetch one role with its `firewallRules`, which `list_roles` only
+    /// counts. Needs the `roles:read` scope.
+    pub fn get_role(&self, id: &str) -> Result<Value> {
+        self.get(&format!("/v1/roles/{id}"))
+    }
+
     /// List every network, following cursor pagination to completion. Backs
     /// `networks list`; `hosts create` auto-picks from it when the account
     /// has exactly one network.

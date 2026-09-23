@@ -147,6 +147,10 @@ network"* — conversational device enrollment.
   Key permissions: `hosts:read` and `hosts:update`.
 - Roles: `roles list` — id, name, rule and host counts. Pair it with
   `hosts edit --role` to move a host off the default deny-all role.
+  `roles get <ROLE_ID>` shows one role's inbound firewall rules — allowed
+  hosts, protocol, ports — in the admin panel's order. Key permission:
+  `roles:read`, plus `roles:list` to show role names in rules instead of
+  ids.
 - Networks: `networks list` — id, name, CIDRs, host count, whether managed
   lighthouses and lighthouses-as-relays are on, curve and cert version. The
   lighthouse settings live on the network, so this is where to look when the

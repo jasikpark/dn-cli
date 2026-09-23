@@ -153,6 +153,38 @@ it to find the id for `hosts create --role` or `hosts edit --role`, and to
 answer "does this account have a role that allows traffic yet" (a role with
 `firewallRulesCount` of 0 denies everything).
 
+### Show a role's firewall rules — `dn roles get`
+
+```bash
+dn roles get <ROLE_ID> --json
+```
+
+Returns `{ "data": role }` — `id`, `name`, `description`, `hostCount`, and
+`firewallRules`, an array of inbound rules (`roles list` has only a count).
+Each rule has `protocol` (`ANY`, `TCP`, `UDP`, `ICMP`), `portRange`
+(`{from, to}`, or `null` for every port; Nebula also treats a range starting
+at `0` as every port), `description`, and the allowed
+source: `allowedRoleID` (`null` for any host, with or without a role) and
+`allowedTags` (`null` or a list; a host must carry every tag). When both are
+set, a source host needs the role *and* all the tags. An empty
+`firewallRules` means the role itself allows no inbound traffic.
+
+A role is not a host's only source of inbound rules: each of a host's tags
+can carry firewall rules too, and the host accepts the union. `dn` doesn't read tag rules yet, so treat a role
+as a lower bound on what reaches a host — "no matching role rule" does not
+mean "unreachable", and a host with no role may still accept traffic through
+its tags. Say so when answering.
+
+Use it to answer "can host A reach port N/protocol P on host B": find B's
+role, then look for a rule whose protocol is P or `ANY`, whose port range
+covers N or is `null` (ICMP has no ports, so any ICMP rule covers it), and
+whose source matches A — A's role when `allowedRoleID` is set, and every tag
+in `allowedTags`. A match means yes; no match means "not through B's role".
+
+Without `--json`, rules print sorted the way the admin panel shows them, and
+a warning appears when one rule allows all hosts on any protocol and port,
+since that makes the rest redundant.
+
 ### List networks — `dn networks list`
 
 ```bash
@@ -178,7 +210,7 @@ concluding anything from the hosts list alone.
 
 | operation | gate |
 |-----------|------|
-| `hosts list`, `hosts search`, `roles list`, `networks list` | free — reads change nothing |
+| `hosts list`, `hosts search`, `roles list`, `roles get`, `networks list` | free — reads change nothing |
 | `hosts edit` | a write: renaming and tagging are cosmetic, but `--role` changes the host's firewall. Confirm the host and role with the user first. |
 | `hosts create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name and the network with the user first. |
 | `hosts delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |
