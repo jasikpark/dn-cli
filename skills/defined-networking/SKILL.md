@@ -197,8 +197,8 @@ list, answer "unknown" and name what couldn't be read — `--json` passes the
 response through without checking it.
 
 Without `--json`, rules print sorted the way the admin panel shows them, and
-a warning appears when one rule allows all hosts on any protocol and port,
-since that makes the rest redundant.
+a warning appears when a rule allows all hosts on any protocol and port,
+since every host with the role then accepts all inbound traffic.
 
 ### Show a tag's firewall rules — `dn tags get`
 
@@ -211,9 +211,10 @@ Returns `{ "data": tag }` — `name`, `description`, `hostCount`, `priority`,
 rules added to every host carrying the tag, in the same shape as a role's.
 An empty `firewallRules` means the tag adds nothing; the host's role and
 other tags still apply. Human output shows the description, host count,
-priority, and the rule table laid out like `roles get`, and warns on any rule
-allowing all hosts on any protocol and port, since it opens every host with
-the tag; use `--json` for config overrides and route subscriptions. Key
+priority, and the rule table laid out like `roles get`, with the same
+allow-everything warning. It also warns when the server returns a different
+tag than the one asked for, or when `firewallRulesCount` disagrees with the
+rules listed. Use `--json` for config overrides and route subscriptions. Key
 permission: `tags:read`.
 
 ### List networks — `dn networks list`
