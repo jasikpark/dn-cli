@@ -5,7 +5,15 @@
 # the tag push and handles the build + npm publish + GitHub Release.
 
 [package]
-versioned_files = ["Cargo.toml", "Cargo.lock"]
+# The plugin manifests version in lockstep with the crate: Claude Code only
+# refreshes an installed plugin when its version changes, and the skill
+# documents the commands of the matching `dn` release.
+versioned_files = [
+    "Cargo.toml",
+    "Cargo.lock",
+    { path = ".claude-plugin/plugin.json", regex = '"version": "(?<version>\d+\.\d+\.\d+)"' },
+    { path = ".claude-plugin/marketplace.json", regex = '"version": "(?<version>\d+\.\d+\.\d+)"' },
+]
 changelog = "CHANGELOG.md"
 
 [github]
