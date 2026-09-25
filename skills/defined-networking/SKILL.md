@@ -180,13 +180,17 @@ unreachable — a host with no role may still accept traffic through its
 tags.
 
 Use it to answer "can host A reach port N/protocol P on host B": find B's
-role and tags, then look across their rules for one whose protocol is P or `ANY`, whose port range
-covers N or is `null` (ICMP has no ports, so any ICMP rule covers it), and
-whose source matches A — A's role when `allowedRoleID` is set, and every tag
-in `allowedTags`. A match means yes. "No" needs a successful read of B's
-role and of every tag on B: if any `roles get` or `tags get` fails (a
-missing `tags:read` permission, a 404), answer "unknown" and name what
-couldn't be read.
+role and tags, then look across their rules for one whose protocol is P or
+`ANY`, whose port range covers N or is `null`, and whose source matches A —
+A's role when `allowedRoleID` is set, and every tag in `allowedTags`. For
+P = ICMP, ports don't apply but the range still matters: an `ICMP` rule
+always matches, while an `ANY` rule matches only when its range is `null` or
+starts at `0` (`ANY` on port 22 does not allow ping). A match means yes.
+"No" needs a successful read of B's role (if it has one) and of every tag on
+B: if any `roles get` or `tags get` fails (a missing `tags:read` permission,
+a 404), or returns a `data` that isn't an object or has no `firewallRules`
+list, answer "unknown" and name what couldn't be read — `--json` passes the
+response through without checking it.
 
 Without `--json`, rules print sorted the way the admin panel shows them, and
 a warning appears when one rule allows all hosts on any protocol and port,
@@ -202,8 +206,11 @@ Returns `{ "data": tag }` — `name`, `description`, `hostCount`, `priority`,
 `configOverrides`, `routeSubscriptions`, and `firewallRules`, the inbound
 rules added to every host carrying the tag, in the same shape as a role's.
 An empty `firewallRules` means the tag adds nothing; the host's role and
-other tags still apply. Human output matches `roles get`. Key permission:
-`tags:read`.
+other tags still apply. Human output shows the description, host count,
+priority, and the rule table laid out like `roles get`, and warns on any rule
+allowing all hosts on any protocol and port, since it opens every host with
+the tag; use `--json` for config overrides and route subscriptions. Key
+permission: `tags:read`.
 
 ### List networks — `dn networks list`
 
@@ -232,7 +239,7 @@ concluding anything from the hosts list alone.
 |-----------|------|
 | `hosts list`, `hosts search`, `roles list`, `roles get`, `tags get`, `networks list` | free — reads change nothing |
 | `hosts edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
-| `hosts create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name and the network with the user first. |
+| `hosts create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `hosts edit`, a role or tag sets the new host's firewall. |
 | `hosts delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |
 
 ## Where this is going (not built yet)

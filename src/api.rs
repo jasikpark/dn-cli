@@ -446,7 +446,7 @@ fn tag_path(name: &str) -> String {
 
 /// Percent-encode one URL path segment: everything but RFC 3986 unreserved
 /// characters and `:` (tag names are `key:value`). Tag values may hold any
-/// non-whitespace character, so a raw `/`, `?`, `#` or `%` would otherwise
+/// character, so a raw `/`, `?`, `#` or `%` would otherwise
 /// change which resource is requested.
 fn encode_path_segment(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

@@ -667,12 +667,12 @@ fn render_tag(
 ) -> anyhow::Result<String> {
     let rules = checked_firewall_rules(data)?;
 
-    let name = data
-        .get("name")
-        .and_then(Value::as_str)
-        .filter(|n| !n.trim().is_empty())
-        .unwrap_or(requested);
-    let mut out = format!("{}\n", sanitize_for_display(name));
+    let name = sanitize_for_display(data.get("name").and_then(Value::as_str).unwrap_or_default());
+    let name = match name.trim() {
+        "" => sanitize_for_display(requested),
+        _ => name,
+    };
+    let mut out = format!("{name}\n");
     push_description_and_hosts(&mut out, data);
     if let Some(n) = data.get("priority").and_then(Value::as_i64) {
         out.push_str(&format!("Priority: {n}\n"));
@@ -2711,8 +2711,13 @@ mod tests {
 
     #[test]
     fn render_tag_falls_back_to_requested_name() {
-        let out = render_tag(&json!({"firewallRules": []}), "env:dev", &HashMap::new()).unwrap();
-        assert!(out.starts_with("env:dev\n"), "{out}");
+        for data in [
+            json!({"firewallRules": []}),
+            json!({"name": "\u{7}", "firewallRules": []}),
+        ] {
+            let out = render_tag(&data, "env:dev", &HashMap::new()).unwrap();
+            assert!(out.starts_with("env:dev\n"), "{out}");
+        }
     }
 
     #[test]
