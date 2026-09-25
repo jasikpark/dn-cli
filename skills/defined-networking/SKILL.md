@@ -170,20 +170,32 @@ set, a source host needs the role *and* all the tags. An empty
 `firewallRules` means the role itself allows no inbound traffic.
 
 A role is not a host's only source of inbound rules: each of a host's tags
-can carry firewall rules too, and the host accepts the union. `dn` doesn't read tag rules yet, so treat a role
-as a lower bound on what reaches a host — "no matching role rule" does not
-mean "unreachable", and a host with no role may still accept traffic through
-its tags. Say so when answering.
+can carry firewall rules too, and the host accepts the union. Read them with
+`dn tags get` (below) for each tag on the host before calling it
+unreachable — a host with no role may still accept traffic through its
+tags.
 
 Use it to answer "can host A reach port N/protocol P on host B": find B's
-role, then look for a rule whose protocol is P or `ANY`, whose port range
+role and tags, then look across their rules for one whose protocol is P or `ANY`, whose port range
 covers N or is `null` (ICMP has no ports, so any ICMP rule covers it), and
 whose source matches A — A's role when `allowedRoleID` is set, and every tag
-in `allowedTags`. A match means yes; no match means "not through B's role".
+in `allowedTags`. A match means yes; no match across the role and every tag means no.
 
 Without `--json`, rules print sorted the way the admin panel shows them, and
 a warning appears when one rule allows all hosts on any protocol and port,
 since that makes the rest redundant.
+
+### Show a tag's firewall rules — `dn tags get`
+
+```bash
+dn tags get <KEY:VALUE> --json
+```
+
+Returns `{ "data": tag }` — `name`, `description`, `hostCount`, `priority`,
+`configOverrides`, `routeSubscriptions`, and `firewallRules`, the inbound
+rules added to every host carrying the tag, in the same shape as a role's.
+An empty `firewallRules` means the tag adds nothing; the host's role and
+other tags still apply. Human output matches `roles get`.
 
 ### List networks — `dn networks list`
 
@@ -210,7 +222,7 @@ concluding anything from the hosts list alone.
 
 | operation | gate |
 |-----------|------|
-| `hosts list`, `hosts search`, `roles list`, `roles get`, `networks list` | free — reads change nothing |
+| `hosts list`, `hosts search`, `roles list`, `roles get`, `tags get`, `networks list` | free — reads change nothing |
 | `hosts edit` | a write: renaming and tagging are cosmetic, but `--role` changes the host's firewall. Confirm the host and role with the user first. |
 | `hosts create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name and the network with the user first. |
 | `hosts delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |

@@ -270,6 +270,12 @@ impl Client {
         self.get(&format!("/v1/roles/{id}"))
     }
 
+    /// Fetch one tag (`key:value`) with its `firewallRules`, config
+    /// overrides and route subscriptions. Needs the `tags:read` scope.
+    pub fn get_tag(&self, name: &str) -> Result<Value> {
+        self.get(&format!("/v1/tags/{}", encode_path_segment(name)))
+    }
+
     /// List every network, following cursor pagination to completion. Backs
     /// `networks list`; `hosts create` auto-picks from it when the account
     /// has exactly one network.
@@ -434,9 +440,32 @@ fn next_cursor(metadata: Option<&Value>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Percent-encode one URL path segment: everything but RFC 3986 unreserved
+/// characters and `:` (tag names are `key:value`). Tag values may hold any
+/// non-whitespace character, so a raw `/`, `?`, `#` or `%` would otherwise
+/// change which resource is requested.
+fn encode_path_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b':') {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encode_path_segment_keeps_tag_colon_and_escapes_url_structure() {
+        assert_eq!(encode_path_segment("env:prod"), "env:prod");
+        assert_eq!(encode_path_segment("a:b/c?d#e%f"), "a:b%2Fc%3Fd%23e%25f");
+        assert_eq!(encode_path_segment("k:é"), "k:%C3%A9");
+    }
 
     #[test]
     fn from_response_parses_structured_errors() {
