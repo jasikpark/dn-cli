@@ -105,9 +105,10 @@ Returns `{ "data": { "host": { … }, "enrollmentCode": { "code", "lifetimeSecon
 Hand the user the code and the exact command to run on the device —
 `dnclient enroll <code>` — and tell them it expires (`lifetimeSeconds`). The
 human view prints the same thing, plus a reminder that the default role denies
-all traffic, so a freshly enrolled host is on the network but can't reach
-anything yet — unless one of its `--tags` carries firewall rules
-(`dn tags get`).
+all inbound traffic: nothing can reach a freshly enrolled host until its role
+or one of its `--tags` allows it (`dn tags get`). What the new host can reach
+depends on the other hosts' rules — run the reachability check under
+`roles get` rather than assuming either way.
 
 ### Edit a host — `dn hosts edit`
 
@@ -118,7 +119,7 @@ dn hosts edit <HOST_ID> --name <NEW_NAME> --add-tag env:prod --remove-tag env:de
 
 | flag | effect |
 |------|--------|
-| `--role <ROLE_ID>` | assign a firewall role — one way to unmute a host stuck on the default deny-all role (a tag with firewall rules is the other) |
+| `--role <ROLE_ID>` | assign a firewall role — one way to open a host stuck on the default deny-all role to inbound traffic (a tag with firewall rules is the other) |
 | `--clear-role` | unassign the role (sends `roleID: null`); mutually exclusive with `--role` |
 | `--name <NAME>` | rename |
 | `--add-tag k:v` / `--remove-tag k:v` | repeatable; removes run before adds |
@@ -181,11 +182,14 @@ tags.
 
 Use it to answer "can host A reach port N/protocol P on host B": find B's
 role and tags, then look across their rules for one whose protocol is P or
-`ANY`, whose port range covers N or is `null`, and whose source matches A —
+`ANY`, whose port range covers N, is `null`, or starts at `0`, and whose
+source matches A —
 A's role when `allowedRoleID` is set, and every tag in `allowedTags`. For
 P = ICMP, ports don't apply but the range still matters: an `ICMP` rule
 always matches, while an `ANY` rule matches only when its range is `null` or
-starts at `0` (`ANY` on port 22 does not allow ping). A match means yes.
+starts at `0` (`ANY` on port 22 does not allow ping). A match means yes,
+provided neither A nor B `isBlocked` — a blocked host is off the mesh
+whatever the rules say.
 "No" needs a successful read of B's role (if it has one) and of every tag on
 B: if any `roles get` or `tags get` fails (a missing `tags:read` permission,
 a 404), or returns a `data` that isn't an object or has no `firewallRules`
@@ -245,8 +249,8 @@ concluding anything from the hosts list alone.
 ## Where this is going (not built yet)
 
 Role writes are still missing: `roles create` / `roles add-rule`. The
-account's default role denies all traffic, so a host enrolled via
-`hosts create` is "enrolled but mute" until a role with firewall rules exists
-and is assigned, or it carries a tag with firewall rules. `dn roles list` shows whether such a role already exists,
-and `hosts edit --role` assigns it; creating the role itself still happens in
+account's default role denies all inbound traffic, so nothing can reach a
+host enrolled via `hosts create` until a role with firewall rules exists
+and is assigned, or it carries a tag with firewall rules. `dn roles list`
+shows whether such a role already exists, and `hosts edit --role` assigns it; creating the role itself still happens in
 the admin panel. Say so rather than promising two hosts will reach each other.

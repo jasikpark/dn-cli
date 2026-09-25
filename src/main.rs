@@ -1554,10 +1554,10 @@ fn render_host_create_human(res: &Value) -> String {
         out.push_str(&format!("  dnclient enroll {code}\n"));
     }
     out.push('\n');
-    out.push_str("Note: the default role denies all traffic. New hosts will be on the\n");
-    out.push_str("network but unable to reach each other until a role with firewall rules\n");
-    out.push_str("is created and assigned (see `dn roles list`), unless one of their tags\n");
-    out.push_str("carries firewall rules (see `dn tags get`).\n");
+    out.push_str("Note: the default role denies all inbound traffic. New hosts will be on\n");
+    out.push_str("the network but unable to reach each other until a role with firewall\n");
+    out.push_str("rules is created and assigned (see `dn roles list`), unless one of their\n");
+    out.push_str("tags carries firewall rules (see `dn tags get`).\n");
     out
 }
 
