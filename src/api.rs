@@ -253,7 +253,7 @@ impl Client {
     /// trip. Needs the `hosts:list` scope, same as `list_hosts`.
     ///
     /// `filter.search` is undocumented in the public OpenAPI spec (only the
-    /// structured `filter.*` params are), so this is pinned to the webclient's
+    /// structured `filter.*` params are), so this is pinned to the admin panel's
     /// observed behaviour rather than a published contract.
     pub fn search_hosts(&self, query: &str) -> Result<Value> {
         self.list_all("/v2/hosts", &[("filter.search", query)])
