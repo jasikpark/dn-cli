@@ -253,7 +253,7 @@ impl Client {
     /// trip. Needs the `hosts:list` scope, same as `list_hosts`.
     ///
     /// `filter.search` is undocumented in the public OpenAPI spec (only the
-    /// structured `filter.*` params are), so this is pinned to the webclient's
+    /// structured `filter.*` params are), so this is pinned to the admin panel's
     /// observed behaviour rather than a published contract.
     pub fn search_hosts(&self, query: &str) -> Result<Value> {
         self.list_all("/v2/hosts", &[("filter.search", query)])
@@ -268,6 +268,12 @@ impl Client {
     /// counts. Needs the `roles:read` scope.
     pub fn get_role(&self, id: &str) -> Result<Value> {
         self.get(&format!("/v1/roles/{id}"))
+    }
+
+    /// Fetch one tag (`key:value`) with its `firewallRules`, config
+    /// overrides and route subscriptions. Needs the `tags:read` scope.
+    pub fn get_tag(&self, name: &str) -> Result<Value> {
+        self.get(&tag_path(name))
     }
 
     /// List every network, following cursor pagination to completion. Backs
@@ -434,9 +440,44 @@ fn next_cursor(metadata: Option<&Value>) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn tag_path(name: &str) -> String {
+    format!("/v1/tags/{}", encode_path_segment(name))
+}
+
+/// Percent-encode one URL path segment: everything but RFC 3986 unreserved
+/// characters and `:` (tag names are `key:value`). Tag values may hold any
+/// character, so a raw `/`, `?`, `#` or `%` would otherwise
+/// change which resource is requested.
+fn encode_path_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b':') {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encode_path_segment_keeps_tag_colon_and_escapes_url_structure() {
+        assert_eq!(encode_path_segment("env:prod"), "env:prod");
+        assert_eq!(encode_path_segment("a:b/c?d#e%f"), "a:b%2Fc%3Fd%23e%25f");
+        assert_eq!(encode_path_segment("k:é"), "k:%C3%A9");
+    }
+
+    #[test]
+    fn tag_path_keeps_the_name_in_one_segment() {
+        assert_eq!(
+            tag_path("a:b/../../hosts"),
+            "/v1/tags/a:b%2F..%2F..%2Fhosts"
+        );
+    }
 
     #[test]
     fn from_response_parses_structured_errors() {

@@ -49,6 +49,11 @@ enum Command {
         #[command(subcommand)]
         command: RolesCommand,
     },
+    /// Inspect tags
+    Tags {
+        #[command(subcommand)]
+        command: TagsCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -69,6 +74,18 @@ enum RolesCommand {
 struct RoleGetArgs {
     /// Role id (role-…). Find ids with `dn roles list`.
     role_id: String,
+}
+
+#[derive(Subcommand)]
+enum TagsCommand {
+    /// Show one tag and the inbound firewall rules it adds to its hosts
+    Get(TagGetArgs),
+}
+
+#[derive(Args)]
+struct TagGetArgs {
+    /// Tag name in `key:value` form, e.g. `env:prod`
+    tag: String,
 }
 
 #[derive(Subcommand)]
@@ -261,6 +278,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     {
         validate_role_id(args.role_id.trim())?;
     }
+    if let Command::Tags {
+        command: TagsCommand::Get(args),
+    } = &cli.command
+    {
+        parse_tag(args.tag.trim())?;
+    }
 
     match &cli.command {
         Command::Auth { command } => match command {
@@ -289,6 +312,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             match command {
                 RolesCommand::List => roles_list(&client, cli.json)?,
                 RolesCommand::Get(args) => roles_get(&client, args, cli.json)?,
+            }
+        }
+        Command::Tags { command } => {
+            let client = Client::new(Config::load()?);
+            match command {
+                TagsCommand::Get(args) => tags_get(&client, args, cli.json)?,
             }
         }
     }
@@ -533,28 +562,47 @@ fn roles_get(client: &Client, args: &RoleGetArgs, json: bool) -> anyhow::Result<
         .get("data")
         .filter(|d| d.is_object())
         .ok_or_else(|| anyhow!("unexpected response: missing role data"))?;
+    let role_names = rule_role_names(client, data);
+    print!("{}", render_role(data, &role_names)?);
+    Ok(())
+}
 
-    // Rules name other roles by id; resolve them the way the admin panel
-    // does. The lookup needs `roles:list`, so a failure degrades to raw ids.
+fn tags_get(client: &Client, args: &TagGetArgs, json: bool) -> anyhow::Result<()> {
+    let name = args.tag.trim();
+    let res = client.get_tag(name)?;
+
+    if json {
+        return print_json(&res);
+    }
+
+    let data = res
+        .get("data")
+        .filter(|d| d.is_object())
+        .ok_or_else(|| anyhow!("unexpected response: missing tag data"))?;
+    let role_names = rule_role_names(client, data);
+    print!("{}", render_tag(data, name, &role_names)?);
+    Ok(())
+}
+
+/// Role names for the roles `data.firewallRules` allow, resolved the way
+/// the admin panel does. The lookup needs `roles:list`, so a failure
+/// degrades to raw ids; no rule naming a role skips it.
+fn rule_role_names(client: &Client, data: &Value) -> HashMap<String, String> {
     let references_roles = data
         .get("firewallRules")
         .and_then(Value::as_array)
         .is_some_and(|rules| rules.iter().any(|r| r["allowedRoleID"].is_string()));
-    let role_names = if references_roles {
-        match client.list_roles() {
-            Ok(r) => role_names_by_id(&r),
-            Err(e) => {
-                let e = sanitize_for_display(&format!("{e:#}"));
-                eprintln!("note: showing role ids, not names (roles list failed: {e})");
-                HashMap::new()
-            }
+    if !references_roles {
+        return HashMap::new();
+    }
+    match client.list_roles() {
+        Ok(r) => role_names_by_id(&r),
+        Err(e) => {
+            let e = sanitize_for_display(&format!("{e:#}"));
+            eprintln!("note: showing role ids, not names (roles list failed: {e})");
+            HashMap::new()
         }
-    } else {
-        HashMap::new()
-    };
-
-    print!("{}", render_role(data, &role_names)?);
-    Ok(())
+    }
 }
 
 /// Map role id to role name from a `list_roles` response.
@@ -581,14 +629,7 @@ fn role_names_by_id(res: &Value) -> HashMap<String, String> {
 /// rule than the API holds.
 fn render_role(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Result<String> {
     let field = |key| data.get(key).and_then(Value::as_str).unwrap_or_default();
-    let rules = data
-        .get("firewallRules")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("unexpected response: firewallRules missing or not a list"))?;
-    for (i, rule) in rules.iter().enumerate() {
-        check_firewall_rule(rule)
-            .map_err(|e| anyhow!("unexpected response: firewall rule {i}: {e}"))?;
-    }
+    let rules = checked_firewall_rules(data)?;
 
     let mut out = String::new();
     let id = sanitize_for_display(field("id"));
@@ -596,13 +637,8 @@ fn render_role(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Re
         name if name.is_empty() => out.push_str(&format!("{id}\n")),
         name => out.push_str(&format!("{name} ({id})\n")),
     }
-    let description = sanitize_for_display(field("description"));
-    if !description.trim().is_empty() {
-        out.push_str(&format!("{description}\n"));
-    }
-    if let Some(n) = data.get("hostCount").and_then(Value::as_u64) {
-        out.push_str(&format!("Hosts: {n}\n"));
-    }
+    push_description_and_hosts(&mut out, data);
+    push_rules_count_mismatch(&mut out, data, rules);
 
     if rules.is_empty() {
         out.push_str(
@@ -611,14 +647,112 @@ fn render_role(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Re
         );
         return Ok(out);
     }
+    push_allow_everything_warning(&mut out, rules, "role");
+    push_firewall_rules(&mut out, rules, role_names);
+    Ok(out)
+}
 
-    if rules.len() > 1 && rules.iter().any(is_allow_everything_rule) {
-        out.push_str(
-            "\nWarning: a rule allows all hosts on any protocol and port, \
-             so the more specific rules have no effect.\n",
-        );
+/// Render a tag and the inbound firewall rules it adds to every host that
+/// carries it, with the same layout and strictness as [`render_role`].
+/// A response without a name falls back to `requested`, the name asked for.
+fn render_tag(
+    data: &Value,
+    requested: &str,
+    role_names: &HashMap<String, String>,
+) -> anyhow::Result<String> {
+    let rules = checked_firewall_rules(data)?;
+
+    let returned = data.get("name").and_then(Value::as_str).unwrap_or_default();
+    let shown = sanitize_for_display(returned);
+    let mut out = match shown.trim() {
+        "" => format!("{}\n", sanitize_for_display(requested)),
+        _ => format!("{shown}\n"),
+    };
+    if !shown.trim().is_empty() && returned != requested {
+        out.push_str(&format!(
+            "Warning: asked for \"{}\", but the server returned this tag.\n",
+            sanitize_for_display(requested)
+        ));
     }
+    push_description_and_hosts(&mut out, data);
+    if let Some(n) = data.get("priority").and_then(Value::as_i64) {
+        out.push_str(&format!("Priority: {n}\n"));
+    }
+    push_rules_count_mismatch(&mut out, data, rules);
 
+    if rules.is_empty() {
+        out.push_str(
+            "\nNo firewall rules: this tag adds no inbound traffic. \
+             The host's role and other tags still apply.\n",
+        );
+        return Ok(out);
+    }
+    push_allow_everything_warning(&mut out, rules, "tag");
+    push_firewall_rules(&mut out, rules, role_names);
+    Ok(out)
+}
+
+/// Rules add up across a host's role and tags, so one allow-everything rule
+/// opens the host whatever else applies — worth saying even when it's alone.
+/// `holder` names what carries the rules: "role" or "tag".
+fn push_allow_everything_warning(out: &mut String, rules: &[Value], holder: &str) {
+    if !rules.iter().any(is_allow_everything_rule) {
+        return;
+    }
+    out.push_str(&format!(
+        "\nWarning: a rule allows all hosts on any protocol and port, \
+         so every host with this {holder} accepts all inbound traffic.\n"
+    ));
+    if rules.len() > 1 {
+        out.push_str("The more specific rules have no effect.\n");
+    }
+}
+
+/// Flag a `firewallRulesCount` that disagrees with the rules listed, since
+/// the table would then show fewer (or more) rules than the API holds.
+fn push_rules_count_mismatch(out: &mut String, data: &Value, rules: &[Value]) {
+    let Some(count) = data.get("firewallRulesCount").and_then(Value::as_u64) else {
+        return;
+    };
+    if count != rules.len() as u64 {
+        out.push_str(&format!(
+            "\nWarning: the response counts {count} firewall rules but lists {}; \
+             this view may be incomplete.\n",
+            rules.len()
+        ));
+    }
+}
+
+/// `data.firewallRules`, failing on a missing or non-list value or on a
+/// rule [`check_firewall_rule`] rejects.
+fn checked_firewall_rules(data: &Value) -> anyhow::Result<&Vec<Value>> {
+    let rules = data
+        .get("firewallRules")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("unexpected response: firewallRules missing or not a list"))?;
+    for (i, rule) in rules.iter().enumerate() {
+        check_firewall_rule(rule)
+            .map_err(|e| anyhow!("unexpected response: firewall rule {i}: {e}"))?;
+    }
+    Ok(rules)
+}
+
+fn push_description_and_hosts(out: &mut String, data: &Value) {
+    let description = data
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let description = sanitize_for_display(description);
+    if !description.trim().is_empty() {
+        out.push_str(&format!("{description}\n"));
+    }
+    if let Some(n) = data.get("hostCount").and_then(Value::as_u64) {
+        out.push_str(&format!("Hosts: {n}\n"));
+    }
+}
+
+/// The rule table, sorted like the admin panel.
+fn push_firewall_rules(out: &mut String, rules: &[Value], role_names: &HashMap<String, String>) {
     let mut sorted: Vec<&Value> = rules.iter().collect();
     sorted.sort_by(|a, b| compare_firewall_rules(a, b));
     let rows: Vec<Vec<String>> = sorted
@@ -630,7 +764,6 @@ fn render_role(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Re
         &["ALLOWED HOSTS", "PROTOCOL", "PORTS", "DESCRIPTION"],
         &rows,
     ));
-    Ok(out)
 }
 
 /// Check the shape of one firewall rule: `protocol` one of `ANY`, `TCP`,
@@ -723,7 +856,7 @@ fn is_allow_everything_rule(rule: &Value) -> bool {
         && rule_tags(rule).is_empty()
 }
 
-/// One `roles get` table row: allowed hosts, protocol, ports, description.
+/// One `roles get` / `tags get` table row: allowed hosts, protocol, ports, description.
 ///
 /// Allowed hosts reads like the admin panel — `All hosts` or `"<role>" hosts`,
 /// then `tagged "a" + "b"` when tags narrow it (a host needs every tag).
@@ -830,7 +963,8 @@ fn report_error(err: &anyhow::Error, json: bool) {
         }
     }
 
-    eprintln!("error: {err:#}");
+    // API error messages are server-controlled, so strip terminal escapes.
+    eprintln!("error: {}", sanitize_for_display(&format!("{err:#}")));
 }
 
 fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
@@ -1126,20 +1260,27 @@ fn validate_role_id(id: &str) -> anyhow::Result<()> {
 /// leading/trailing whitespace on either part.
 fn parse_tag(s: &str) -> anyhow::Result<(String, String)> {
     let s = s.trim();
+    let shown = sanitize_for_display(s);
     let (k, v) = s
         .split_once(':')
-        .ok_or_else(|| anyhow!("invalid tag \"{s}\" — expected key:value"))?;
+        .ok_or_else(|| anyhow!("invalid tag \"{shown}\" — expected key:value"))?;
     if k.is_empty() || v.is_empty() {
-        bail!("invalid tag \"{s}\" — key and value must both be non-empty");
+        bail!("invalid tag \"{shown}\" — key and value must both be non-empty");
     }
     if k != k.trim() || v != v.trim() {
         bail!("tag key and value must not have leading/trailing whitespace");
     }
     if k.chars().count() > 20 {
-        bail!("tag key \"{k}\" exceeds 20-character limit");
+        bail!(
+            "tag key \"{}\" exceeds 20-character limit",
+            sanitize_for_display(k)
+        );
     }
     if v.chars().count() > 50 {
-        bail!("tag value \"{v}\" exceeds 50-character limit");
+        bail!(
+            "tag value \"{}\" exceeds 50-character limit",
+            sanitize_for_display(v)
+        );
     }
     Ok((k.to_string(), v.to_string()))
 }
@@ -1447,9 +1588,10 @@ fn render_host_create_human(res: &Value) -> String {
         out.push_str(&format!("  dnclient enroll {code}\n"));
     }
     out.push('\n');
-    out.push_str("Note: the default role denies all traffic. New hosts will be on the\n");
-    out.push_str("network but unable to reach each other until a role with firewall rules\n");
-    out.push_str("is created and assigned (see `dn roles list`).\n");
+    out.push_str("Note: the default role denies all inbound traffic. New hosts will be on\n");
+    out.push_str("the network but unable to reach each other until a role with firewall\n");
+    out.push_str("rules is created and assigned (see `dn roles list`), unless one of their\n");
+    out.push_str("tags carries firewall rules (see `dn tags get`).\n");
     out
 }
 
@@ -2403,6 +2545,11 @@ mod tests {
         let out = render_role(&data, &HashMap::new()).unwrap();
         assert!(out.starts_with("Servers (role-A)\nHosts: 2\n"), "{out}");
         assert!(out.contains("Warning: a rule allows all hosts"), "{out}");
+        assert!(out.contains("every host with this role"), "{out}");
+        assert!(
+            out.contains("The more specific rules have no effect."),
+            "{out}"
+        );
     }
 
     #[test]
@@ -2487,12 +2634,16 @@ mod tests {
     }
 
     #[test]
-    fn render_role_skips_allow_everything_warning_for_a_lone_rule() {
+    fn render_role_warns_on_a_lone_allow_everything_rule() {
         let data = json!({
             "id": "role-A", "name": "A", "firewallRules": [rule(None, &[], "ANY", None)],
         });
         let out = render_role(&data, &HashMap::new()).unwrap();
-        assert!(!out.contains("Warning"), "{out}");
+        assert!(
+            out.contains("every host with this role accepts all inbound traffic"),
+            "{out}"
+        );
+        assert!(!out.contains("more specific"), "{out}");
     }
 
     #[test]
@@ -2553,6 +2704,105 @@ mod tests {
             panic!("expected roles get");
         };
         assert_eq!(args.role_id, "role-ABC");
+    }
+
+    #[test]
+    fn parses_tags_get() {
+        let cli = Cli::try_parse_from(["dn", "tags", "get", "env:prod"]).unwrap();
+        let Command::Tags {
+            command: TagsCommand::Get(args),
+        } = cli.command
+        else {
+            panic!("expected tags get");
+        };
+        assert_eq!(args.tag, "env:prod");
+    }
+
+    #[test]
+    fn render_tag_shows_header_and_sorted_rules() {
+        let tag = json!({
+            "name": "env:prod",
+            "description": "Production hosts",
+            "hostCount": 3,
+            "priority": 6,
+            "firewallRules": [
+                rule(Some("role-ADM"), &[], "TCP", Some((22, 22))),
+                rule(None, &[], "ICMP", None),
+            ],
+        });
+        let names = HashMap::from([("role-ADM".to_string(), "Admins".to_string())]);
+        let out = render_tag(&tag, "env:prod", &names).unwrap();
+        assert!(
+            out.starts_with("env:prod\nProduction hosts\nHosts: 3\nPriority: 6\n\n"),
+            "{out}"
+        );
+        let icmp = out.find("All hosts").unwrap();
+        let ssh = out.find("\"Admins\" hosts").unwrap();
+        assert!(icmp < ssh, "ICMP sorts before TCP:\n{out}");
+    }
+
+    #[test]
+    fn render_tag_empty_rules_defers_to_role_and_rejects_missing_rules() {
+        let empty = json!({"name": "env:dev", "firewallRules": []});
+        assert_eq!(
+            render_tag(&empty, "env:dev", &HashMap::new()).unwrap(),
+            "env:dev\n\nNo firewall rules: this tag adds no inbound traffic. \
+             The host's role and other tags still apply.\n"
+        );
+        assert!(render_tag(&json!({"name": "env:dev"}), "env:dev", &HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn render_tag_falls_back_to_requested_name() {
+        for data in [
+            json!({"firewallRules": []}),
+            json!({"name": "\u{7}", "firewallRules": []}),
+        ] {
+            let out = render_tag(&data, "env:dev", &HashMap::new()).unwrap();
+            assert!(out.starts_with("env:dev\n"), "{out}");
+        }
+    }
+
+    #[test]
+    fn render_tag_flags_a_name_other_than_the_one_requested() {
+        let tag = json!({"name": "env:other", "firewallRules": []});
+        let out = render_tag(&tag, "env:prod", &HashMap::new()).unwrap();
+        assert!(
+            out.starts_with("env:other\nWarning: asked for \"env:prod\""),
+            "{out}"
+        );
+        let same = json!({"name": "env:prod", "firewallRules": []});
+        let out = render_tag(&same, "env:prod", &HashMap::new()).unwrap();
+        assert!(!out.contains("Warning"), "{out}");
+    }
+
+    #[test]
+    fn render_tag_flags_a_rules_count_mismatch() {
+        let tag = json!({"name": "env:prod", "firewallRulesCount": 2, "firewallRules": []});
+        let out = render_tag(&tag, "env:prod", &HashMap::new()).unwrap();
+        assert!(out.contains("counts 2 firewall rules but lists 0"), "{out}");
+        let tag = json!({
+            "name": "env:prod", "firewallRulesCount": 1,
+            "firewallRules": [rule(None, &[], "ICMP", None)],
+        });
+        let out = render_tag(&tag, "env:prod", &HashMap::new()).unwrap();
+        assert!(!out.contains("Warning"), "{out}");
+    }
+
+    #[test]
+    fn parse_tag_errors_strip_terminal_escapes() {
+        let err = parse_tag("\u{1b}[31mnocolon").unwrap_err().to_string();
+        assert!(!err.contains('\u{1b}'), "{err:?}");
+    }
+
+    #[test]
+    fn render_tag_warns_on_a_lone_allow_everything_rule() {
+        let tag = json!({"name": "env:prod", "firewallRules": [rule(None, &[], "ANY", None)]});
+        let out = render_tag(&tag, "env:prod", &HashMap::new()).unwrap();
+        assert!(
+            out.contains("every host with this tag accepts all inbound traffic"),
+            "{out}"
+        );
     }
 
     #[test]

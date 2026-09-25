@@ -151,6 +151,9 @@ network"* — conversational device enrollment.
   hosts, protocol, ports — in the admin panel's order. Key permission:
   `roles:read`, plus `roles:list` to show role names in rules instead of
   ids.
+- Tags: `tags get <KEY:VALUE>` shows the inbound firewall rules a tag adds
+  to every host carrying it, laid out like `roles get`. Key permission:
+  `tags:read`, plus `roles:list` for role names.
 - Networks: `networks list` — id, name, CIDRs, host count, whether managed
   lighthouses and lighthouses-as-relays are on, curve and cert version. The
   lighthouse settings live on the network, so this is where to look when the
