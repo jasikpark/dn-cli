@@ -35,35 +35,39 @@ enum Command {
         command: AuthCommand,
     },
     /// Inspect and manage Nebula hosts
-    Hosts {
+    #[command(alias = "hosts")]
+    Host {
         #[command(subcommand)]
-        command: HostsCommand,
+        command: HostCommand,
     },
     /// Inspect networks
-    Networks {
+    #[command(alias = "networks")]
+    Network {
         #[command(subcommand)]
-        command: NetworksCommand,
+        command: NetworkCommand,
     },
     /// Inspect firewall roles
-    Roles {
+    #[command(alias = "roles")]
+    Role {
         #[command(subcommand)]
-        command: RolesCommand,
+        command: RoleCommand,
     },
     /// Inspect tags
-    Tags {
+    #[command(alias = "tags")]
+    Tag {
         #[command(subcommand)]
-        command: TagsCommand,
+        command: TagCommand,
     },
 }
 
 #[derive(Subcommand)]
-enum NetworksCommand {
+enum NetworkCommand {
     /// List networks
     List,
 }
 
 #[derive(Subcommand)]
-enum RolesCommand {
+enum RoleCommand {
     /// List firewall roles
     List,
     /// Show one role and its inbound firewall rules
@@ -72,12 +76,12 @@ enum RolesCommand {
 
 #[derive(Args)]
 struct RoleGetArgs {
-    /// Role id (role-…). Find ids with `dn roles list`.
+    /// Role id (role-…). Find ids with `dn role list`.
     role_id: String,
 }
 
 #[derive(Subcommand)]
-enum TagsCommand {
+enum TagCommand {
     /// Show one tag and the inbound firewall rules it adds to its hosts
     Get(TagGetArgs),
 }
@@ -111,7 +115,7 @@ struct AuthLoginArgs {
 }
 
 #[derive(Subcommand)]
-enum HostsCommand {
+enum HostCommand {
     /// List hosts
     List,
     /// Search hosts by name, IP, role name, or tag (server-side, whole
@@ -126,19 +130,19 @@ enum HostsCommand {
     Delete(HostDeleteArgs),
 }
 
-/// Arguments for `dn hosts search`. Wraps the `filter.search` query on
+/// Arguments for `dn host search`. Wraps the `filter.search` query on
 /// `GET /v2/hosts` — a server-side match across a host's name, IPs, role
 /// name, and tags.
 #[derive(Args)]
 struct HostSearchArgs {
     /// Search term (case-insensitive substring). At least two characters —
     /// the API rejects a shorter query. Multiple words are joined with a
-    /// space, so `dn hosts search web server` searches for "web server".
+    /// space, so `dn host search web server` searches for "web server".
     #[arg(required = true, num_args = 1.., value_name = "QUERY")]
     query: Vec<String>,
 }
 
-/// Arguments for `dn hosts create`. Mirrors the
+/// Arguments for `dn host create`. Mirrors the
 /// `POST /v2/host-and-enrollment-code` request body, plus a `--network`
 /// override for the auto-pick fallback.
 ///
@@ -151,7 +155,7 @@ struct HostSearchArgs {
 struct HostCreateArgs {
     /// Host name (1–255 chars)
     name: String,
-    /// Network ID (see `dn networks list`). Omit if the account has exactly
+    /// Network ID (see `dn network list`). Omit if the account has exactly
     /// one network — it's auto-picked, which is the common case at signup.
     #[arg(long)]
     network: Option<String>,
@@ -205,7 +209,7 @@ struct HostEditArgs {
     /// Rename the host.
     #[arg(long)]
     name: Option<String>,
-    /// Assign a firewall role (role-…). Find ids with `dn roles list`.
+    /// Assign a firewall role (role-…). Find ids with `dn role list`.
     #[arg(long, value_name = "ROLE_ID", conflicts_with = "clear_role")]
     role: Option<String>,
     /// Unassign the host's role (sends `roleID: null`). Mutually exclusive
@@ -252,34 +256,34 @@ fn main() -> ExitCode {
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
     // Run all client-side validation before resolving credentials or touching
-    // the network, so `dn hosts create --lighthouse` (missing required flags)
+    // the network, so `dn host create --lighthouse` (missing required flags)
     // reports the actual problem instead of hiding behind a credentials error.
-    if let Command::Hosts {
-        command: HostsCommand::Create(args),
+    if let Command::Host {
+        command: HostCommand::Create(args),
     } = &cli.command
     {
         validate_create_preflight(args)?;
     }
-    if let Command::Hosts {
-        command: HostsCommand::Edit(args),
+    if let Command::Host {
+        command: HostCommand::Edit(args),
     } = &cli.command
     {
         validate_edit_preflight(args)?;
     }
-    if let Command::Hosts {
-        command: HostsCommand::Search(args),
+    if let Command::Host {
+        command: HostCommand::Search(args),
     } = &cli.command
     {
         validate_search_preflight(args)?;
     }
-    if let Command::Roles {
-        command: RolesCommand::Get(args),
+    if let Command::Role {
+        command: RoleCommand::Get(args),
     } = &cli.command
     {
         validate_role_id(args.role_id.trim())?;
     }
-    if let Command::Tags {
-        command: TagsCommand::Get(args),
+    if let Command::Tag {
+        command: TagCommand::Get(args),
     } = &cli.command
     {
         parse_tag(args.tag.trim())?;
@@ -291,33 +295,33 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             AuthCommand::Status => auth_status(cli.json)?,
             AuthCommand::Logout => auth_logout(cli.json)?,
         },
-        Command::Hosts { command } => {
+        Command::Host { command } => {
             let client = Client::new(Config::load()?);
             match command {
-                HostsCommand::List => hosts_list(&client, cli.json)?,
-                HostsCommand::Search(args) => hosts_search(&client, args, cli.json)?,
-                HostsCommand::Create(args) => hosts_create(&client, args, cli.json)?,
-                HostsCommand::Edit(args) => hosts_edit(&client, args, cli.json)?,
-                HostsCommand::Delete(args) => hosts_delete(&client, args, cli.json)?,
+                HostCommand::List => hosts_list(&client, cli.json)?,
+                HostCommand::Search(args) => hosts_search(&client, args, cli.json)?,
+                HostCommand::Create(args) => hosts_create(&client, args, cli.json)?,
+                HostCommand::Edit(args) => hosts_edit(&client, args, cli.json)?,
+                HostCommand::Delete(args) => hosts_delete(&client, args, cli.json)?,
             }
         }
-        Command::Networks { command } => {
+        Command::Network { command } => {
             let client = Client::new(Config::load()?);
             match command {
-                NetworksCommand::List => networks_list(&client, cli.json)?,
+                NetworkCommand::List => networks_list(&client, cli.json)?,
             }
         }
-        Command::Roles { command } => {
+        Command::Role { command } => {
             let client = Client::new(Config::load()?);
             match command {
-                RolesCommand::List => roles_list(&client, cli.json)?,
-                RolesCommand::Get(args) => roles_get(&client, args, cli.json)?,
+                RoleCommand::List => roles_list(&client, cli.json)?,
+                RoleCommand::Get(args) => roles_get(&client, args, cli.json)?,
             }
         }
-        Command::Tags { command } => {
+        Command::Tag { command } => {
             let client = Client::new(Config::load()?);
             match command {
-                TagsCommand::Get(args) => tags_get(&client, args, cli.json)?,
+                TagCommand::Get(args) => tags_get(&client, args, cli.json)?,
             }
         }
     }
@@ -856,7 +860,7 @@ fn is_allow_everything_rule(rule: &Value) -> bool {
         && rule_tags(rule).is_empty()
 }
 
-/// One `roles get` / `tags get` table row: allowed hosts, protocol, ports, description.
+/// One `role get` / `tag get` table row: allowed hosts, protocol, ports, description.
 ///
 /// Allowed hosts reads like the admin panel — `All hosts` or `"<role>" hosts`,
 /// then `tagged "a" + "b"` when tags narrow it (a host needs every tag).
@@ -972,8 +976,8 @@ fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
     render_hosts(&res, json, "No hosts found.")
 }
 
-/// The `filter.search` term for `dn hosts search`, joined from the argv words
-/// and trimmed. The join means `dn hosts search web server` searches for the
+/// The `filter.search` term for `dn host search`, joined from the argv words
+/// and trimmed. The join means `dn host search web server` searches for the
 /// single phrase "web server" rather than erroring on an extra positional.
 fn search_query(args: &HostSearchArgs) -> String {
     args.query.join(" ").trim().to_string()
@@ -1003,7 +1007,7 @@ fn hosts_search(client: &Client, args: &HostSearchArgs, json: bool) -> anyhow::R
 
 /// Render a `{ data, metadata }` hosts envelope: pretty JSON in `--json`
 /// mode, otherwise the id/name/IP table (or `empty_msg` when there are no
-/// rows). Shared by `hosts list` and `hosts search` so the two can't drift on
+/// rows). Shared by `host list` and `host search` so the two can't drift on
 /// columns or the "N shown / M total" footer.
 fn render_hosts(res: &Value, json: bool, empty_msg: &str) -> anyhow::Result<()> {
     if json {
@@ -1348,7 +1352,7 @@ fn hosts_delete(client: &Client, args: &HostDeleteArgs, json: bool) -> anyhow::R
     Ok(())
 }
 
-/// How `dn hosts delete` should confirm a deletion.
+/// How `dn host delete` should confirm a deletion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeleteConfirmation {
     /// Delete straight away: no lookup, no prompt. Only `hosts:delete` is
@@ -1442,12 +1446,12 @@ fn pick_network(networks: &Value) -> anyhow::Result<&Value> {
         )),
         (1, false) => Ok(&rows[0]),
         _ => Err(anyhow!(
-            "multiple networks found — pass --network <id> to disambiguate (see `dn networks list`)"
+            "multiple networks found — pass --network <id> to disambiguate (see `dn network list`)"
         )),
     }
 }
 
-/// Whether `hosts create` should have the server pick an IPv4: neither an
+/// Whether `host create` should have the server pick an IPv4: neither an
 /// explicit `--ipv4` nor `--no-ipv4` has settled it.
 fn wants_auto_ipv4(args: &HostCreateArgs) -> bool {
     args.ipv4.is_none() && !args.no_ipv4
@@ -1590,8 +1594,8 @@ fn render_host_create_human(res: &Value) -> String {
     out.push('\n');
     out.push_str("Note: the default role denies all inbound traffic. New hosts will be on\n");
     out.push_str("the network but unable to reach each other until a role with firewall\n");
-    out.push_str("rules is created and assigned (see `dn roles list`), unless one of their\n");
-    out.push_str("tags carries firewall rules (see `dn tags get`).\n");
+    out.push_str("rules is created and assigned (see `dn role list`), unless one of their\n");
+    out.push_str("tags carries firewall rules (see `dn tag get`).\n");
     out
 }
 
@@ -1685,7 +1689,7 @@ fn host_fields(row: &Value) -> (&str, &str, String) {
 /// when absent or non-string; `cidrs` joins the overlay prefixes (an IPv6
 /// one and, on dual-stack networks, an IPv4 one) the way the host table joins
 /// IPs. Managed lighthouses are Defined's hosted fleet and never appear in
-/// `hosts list`, so this table is where that setting is visible; the API
+/// `host list`, so this table is where that setting is visible; the API
 /// stores it inverted (`disableManagedLighthouses`) and the column reports it
 /// the way the admin panel does — whether managed lighthouses are on.
 fn network_row(row: &Value) -> Vec<String> {
@@ -2150,12 +2154,12 @@ mod tests {
 
     #[test]
     fn parses_hosts_delete_with_short_yes() {
-        let cli = Cli::try_parse_from(["dn", "hosts", "delete", "host-1", "-y"]).unwrap();
-        let Command::Hosts {
-            command: HostsCommand::Delete(args),
+        let cli = Cli::try_parse_from(["dn", "host", "delete", "host-1", "-y"]).unwrap();
+        let Command::Host {
+            command: HostCommand::Delete(args),
         } = cli.command
         else {
-            panic!("expected `hosts delete` to parse into HostsCommand::Delete");
+            panic!("expected `host delete` to parse into HostCommand::Delete");
         };
         assert_eq!(args.host_id, "host-1");
         assert!(args.yes);
@@ -2163,37 +2167,37 @@ mod tests {
 
     #[test]
     fn parses_hosts_create_with_positional_name() {
-        let cli = Cli::try_parse_from(["dn", "hosts", "create", "my-laptop"]).unwrap();
-        let Command::Hosts {
-            command: HostsCommand::Create(args),
+        let cli = Cli::try_parse_from(["dn", "host", "create", "my-laptop"]).unwrap();
+        let Command::Host {
+            command: HostCommand::Create(args),
         } = cli.command
         else {
-            panic!("expected `hosts create` to parse into HostsCommand::Create");
+            panic!("expected `host create` to parse into HostCommand::Create");
         };
         assert_eq!(args.name, "my-laptop");
     }
 
     #[test]
     fn parses_hosts_search_with_a_single_word_query() {
-        let cli = Cli::try_parse_from(["dn", "hosts", "search", "laptop"]).unwrap();
-        let Command::Hosts {
-            command: HostsCommand::Search(args),
+        let cli = Cli::try_parse_from(["dn", "host", "search", "laptop"]).unwrap();
+        let Command::Host {
+            command: HostCommand::Search(args),
         } = cli.command
         else {
-            panic!("expected `hosts search` to parse into HostsCommand::Search");
+            panic!("expected `host search` to parse into HostCommand::Search");
         };
         assert_eq!(args.query, vec!["laptop".to_string()]);
     }
 
     #[test]
     fn search_query_joins_multiple_words_with_a_space() {
-        // `dn hosts search web server` is one phrase, not a bad extra arg.
-        let cli = Cli::try_parse_from(["dn", "hosts", "search", "web", "server"]).unwrap();
-        let Command::Hosts {
-            command: HostsCommand::Search(args),
+        // `dn host search web server` is one phrase, not a bad extra arg.
+        let cli = Cli::try_parse_from(["dn", "host", "search", "web", "server"]).unwrap();
+        let Command::Host {
+            command: HostCommand::Search(args),
         } = cli.command
         else {
-            panic!("expected `hosts search` to parse into HostsCommand::Search");
+            panic!("expected `host search` to parse into HostCommand::Search");
         };
         assert_eq!(search_query(&args), "web server");
     }
@@ -2201,7 +2205,7 @@ mod tests {
     #[test]
     fn hosts_search_requires_at_least_one_query_word() {
         // No positional at all is a parse error (the arg is `required`).
-        assert!(Cli::try_parse_from(["dn", "hosts", "search"]).is_err());
+        assert!(Cli::try_parse_from(["dn", "host", "search"]).is_err());
     }
 
     fn search_args(query: &[&str]) -> HostSearchArgs {
@@ -2332,11 +2336,11 @@ mod tests {
             "old:stale",
         ])
         .unwrap();
-        let Command::Hosts {
-            command: HostsCommand::Edit(args),
+        let Command::Host {
+            command: HostCommand::Edit(args),
         } = cli.command
         else {
-            panic!("expected `hosts edit` to parse into HostsCommand::Edit");
+            panic!("expected `host edit` to parse into HostCommand::Edit");
         };
         assert_eq!(args.host_id, "host-1");
         assert_eq!(args.add_tag, vec!["dns:cloudflare"]);
@@ -2356,8 +2360,8 @@ mod tests {
             "b:2",
         ])
         .unwrap();
-        let Command::Hosts {
-            command: HostsCommand::Edit(args),
+        let Command::Host {
+            command: HostCommand::Edit(args),
         } = cli.command
         else {
             panic!("expected repeated add-tag to collect");
@@ -2379,12 +2383,12 @@ mod tests {
     #[test]
     fn parses_hosts_edit_with_role() {
         let cli =
-            Cli::try_parse_from(["dn", "hosts", "edit", "host-1", "--role", "role-abc"]).unwrap();
-        let Command::Hosts {
-            command: HostsCommand::Edit(args),
+            Cli::try_parse_from(["dn", "host", "edit", "host-1", "--role", "role-abc"]).unwrap();
+        let Command::Host {
+            command: HostCommand::Edit(args),
         } = cli.command
         else {
-            panic!("expected `hosts edit --role` to parse into HostsCommand::Edit");
+            panic!("expected `host edit --role` to parse into HostCommand::Edit");
         };
         assert_eq!(args.role.as_deref(), Some("role-abc"));
         assert!(validate_edit_preflight(&args).is_ok());
@@ -2392,12 +2396,12 @@ mod tests {
 
     #[test]
     fn parses_hosts_edit_with_clear_role() {
-        let cli = Cli::try_parse_from(["dn", "hosts", "edit", "host-1", "--clear-role"]).unwrap();
-        let Command::Hosts {
-            command: HostsCommand::Edit(args),
+        let cli = Cli::try_parse_from(["dn", "host", "edit", "host-1", "--clear-role"]).unwrap();
+        let Command::Host {
+            command: HostCommand::Edit(args),
         } = cli.command
         else {
-            panic!("expected `hosts edit --clear-role` to parse into HostsCommand::Edit");
+            panic!("expected `host edit --clear-role` to parse into HostCommand::Edit");
         };
         assert!(args.clear_role);
         assert!(args.role.is_none());
@@ -2696,26 +2700,59 @@ mod tests {
 
     #[test]
     fn parses_roles_get() {
-        let cli = Cli::try_parse_from(["dn", "roles", "get", "role-ABC"]).unwrap();
-        let Command::Roles {
-            command: RolesCommand::Get(args),
+        let cli = Cli::try_parse_from(["dn", "role", "get", "role-ABC"]).unwrap();
+        let Command::Role {
+            command: RoleCommand::Get(args),
         } = cli.command
         else {
-            panic!("expected roles get");
+            panic!("expected role get");
         };
         assert_eq!(args.role_id, "role-ABC");
     }
 
     #[test]
     fn parses_tags_get() {
-        let cli = Cli::try_parse_from(["dn", "tags", "get", "env:prod"]).unwrap();
-        let Command::Tags {
-            command: TagsCommand::Get(args),
+        let cli = Cli::try_parse_from(["dn", "tag", "get", "env:prod"]).unwrap();
+        let Command::Tag {
+            command: TagCommand::Get(args),
         } = cli.command
         else {
-            panic!("expected tags get");
+            panic!("expected tag get");
         };
         assert_eq!(args.tag, "env:prod");
+    }
+
+    #[test]
+    fn plural_command_names_still_parse() {
+        // The old plural names stay as aliases so existing scripts keep working.
+        let cli = Cli::try_parse_from(["dn", "hosts", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Host {
+                command: HostCommand::List
+            }
+        ));
+        let cli = Cli::try_parse_from(["dn", "networks", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Network {
+                command: NetworkCommand::List
+            }
+        ));
+        let cli = Cli::try_parse_from(["dn", "roles", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Role {
+                command: RoleCommand::List
+            }
+        ));
+        let cli = Cli::try_parse_from(["dn", "tags", "get", "env:prod"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Tag {
+                command: TagCommand::Get(_)
+            }
+        ));
     }
 
     #[test]
@@ -2861,10 +2898,10 @@ mod tests {
 
     #[test]
     fn commas_in_tag_values_are_preserved() {
-        let cli = Cli::try_parse_from(["dn", "hosts", "edit", "host-1", "--add-tag", "list:a,b,c"])
+        let cli = Cli::try_parse_from(["dn", "host", "edit", "host-1", "--add-tag", "list:a,b,c"])
             .unwrap();
-        let Command::Hosts {
-            command: HostsCommand::Edit(args),
+        let Command::Host {
+            command: HostCommand::Edit(args),
         } = cli.command
         else {
             panic!("expected comma in value to survive");

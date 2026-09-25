@@ -63,7 +63,7 @@ const TAG: &str = r#"{"data":{"name":"env:prod","hostCount":2,"firewallRulesCoun
 #[test]
 fn tags_get_names_rule_roles_from_the_roles_list() {
     let (url, seen) = serve(TAG);
-    let out = dn(&url, &["tags", "get", "env:prod"]);
+    let out = dn(&url, &["tag", "get", "env:prod"]);
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.starts_with("env:prod\nHosts: 2\n"), "{stdout}");
@@ -76,7 +76,7 @@ fn tags_get_names_rule_roles_from_the_roles_list() {
 #[test]
 fn tags_get_json_passes_the_response_through_without_a_roles_lookup() {
     let (url, seen) = serve(TAG);
-    let out = dn(&url, &["--json", "tags", "get", "env:prod"]);
+    let out = dn(&url, &["--json", "tag", "get", "env:prod"]);
     assert!(out.status.success(), "{out:?}");
     let got: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let want: serde_json::Value = serde_json::from_str(TAG).unwrap();
@@ -87,7 +87,7 @@ fn tags_get_json_passes_the_response_through_without_a_roles_lookup() {
 #[test]
 fn tags_get_rejects_non_object_data() {
     let (url, _) = serve(r#"{"data":[]}"#);
-    let out = dn(&url, &["tags", "get", "env:prod"]);
+    let out = dn(&url, &["tag", "get", "env:prod"]);
     assert!(!out.status.success(), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("missing tag data"),
@@ -98,7 +98,7 @@ fn tags_get_rejects_non_object_data() {
 #[test]
 fn tags_get_rejects_a_malformed_tag_before_any_request() {
     let (url, seen) = serve(TAG);
-    let out = dn(&url, &["tags", "get", "nocolon"]);
+    let out = dn(&url, &["tag", "get", "nocolon"]);
     assert!(!out.status.success(), "{out:?}");
     assert!(seen.lock().unwrap().is_empty());
 }
