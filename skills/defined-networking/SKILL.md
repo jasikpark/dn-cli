@@ -43,10 +43,10 @@ non-zero exit, read the JSON error envelope: `status` is the HTTP code and
 
 ## Commands
 
-### List hosts — `dn hosts list`
+### List hosts — `dn host list`
 
 ```bash
-dn hosts list --json
+dn host list --json
 ```
 
 Returns `{ "data": [ host… ], "metadata": { … } }`, following cursor pagination
@@ -68,31 +68,31 @@ Use this to answer questions like "what hosts do I have", "is <device> online"
 (check `metadata.lastSeenAt`), "which hosts need an update"
 (`metadata.updateAvailable`), or "which are lighthouses".
 
-### Search hosts — `dn hosts search`
+### Search hosts — `dn host search`
 
 ```bash
-dn hosts search <QUERY> --json
+dn host search <QUERY> --json
 ```
 
 Returns the same `{ "data": [ host… ], "metadata": { … } }` shape as
-`hosts list`, but only the hosts matching `<QUERY>`. The match is server-side
+`host list`, but only the hosts matching `<QUERY>`. The match is server-side
 (`GET /v2/hosts?filter.search=`): a case-insensitive substring across each
 host's `name`, `ipAddresses`, assigned role name, and `tags`. The query must be
 at least two characters — a shorter one fails locally before any request. Prefer
 this over pulling the full list and filtering yourself when the user names a
 specific host, IP, role, or tag. Key permission: `hosts:list`.
 
-### Create a host — `dn hosts create`
+### Create a host — `dn host create`
 
 ```bash
-dn hosts create <NAME> --json
+dn host create <NAME> --json
 ```
 
 Creates the host **and** its one-time enrollment code in a single call.
 
 | flag | when to pass it |
 |------|-----------------|
-| `--network <id>` | only when the account has more than one network — otherwise auto-picked. Ids come from `dn networks list --json` |
+| `--network <id>` | only when the account has more than one network — otherwise auto-picked. Ids come from `dn network list --json` |
 | `--role <id>` | to skip the account's default (deny-all) role |
 | `--lighthouse` | with `--static-address <host:port>` (repeatable) and `--listen-port <port>` |
 | `--relay` | with `--listen-port <port>` |
@@ -106,15 +106,15 @@ Hand the user the code and the exact command to run on the device —
 `dnclient enroll <code>` — and tell them it expires (`lifetimeSeconds`). The
 human view prints the same thing, plus a reminder that the default role denies
 all inbound traffic: nothing can reach a freshly enrolled host until its role
-or one of its `--tags` allows it (`dn tags get`). What the new host can reach
+or one of its `--tags` allows it (`dn tag get`). What the new host can reach
 depends on the other hosts' rules — run the reachability check under
-`roles get` rather than assuming either way.
+`role get` rather than assuming either way.
 
-### Edit a host — `dn hosts edit`
+### Edit a host — `dn host edit`
 
 ```bash
-dn hosts edit <HOST_ID> --role <ROLE_ID> --json
-dn hosts edit <HOST_ID> --name <NEW_NAME> --add-tag env:prod --remove-tag env:dev --json
+dn host edit <HOST_ID> --role <ROLE_ID> --json
+dn host edit <HOST_ID> --name <NEW_NAME> --add-tag env:prod --remove-tag env:dev --json
 ```
 
 | flag | effect |
@@ -125,47 +125,47 @@ dn hosts edit <HOST_ID> --name <NEW_NAME> --add-tag env:prod --remove-tag env:de
 | `--add-tag k:v` / `--remove-tag k:v` | repeatable; removes run before adds |
 
 Returns `{ "data": { host… } }` with the updated host. Get role ids from
-`dn roles list --json` and host ids from `dn hosts list --json`; never guess
+`dn role list --json` and host ids from `dn host list --json`; never guess
 either. An edit that changes nothing skips the write and returns the current
 host. Assigning a role or adding/removing a tag changes what traffic the host
 can send and receive — a tag brings its own inbound rules and makes the host
 match other rules' `allowedTags` — so name the host and the role or tag to the
 user before running it.
 
-### Delete a host — `dn hosts delete`
+### Delete a host — `dn host delete`
 
 ```bash
-dn hosts delete <HOST_ID> --yes --json
+dn host delete <HOST_ID> --yes --json
 ```
 
 Returns `{ "id": "host-…", "deleted": true }`. Without `--yes`, a `--json` run
 fails with an error telling you to pass it — there is no prompt you can answer.
 
 **You MUST confirm with the user before running this**, naming the host
-(`dn hosts list --json` gives the id → name mapping). Never infer which host to
+(`dn host list --json` gives the id → name mapping). Never infer which host to
 delete from context; one id per call.
 
-### List roles — `dn roles list`
+### List roles — `dn role list`
 
 ```bash
-dn roles list --json
+dn role list --json
 ```
 
 Returns `{ "data": [ role… ], "metadata": { … } }`. Each role has `id`
 (`role-…`), `name`, `description`, `firewallRulesCount`, and `hostCount`. Use
-it to find the id for `hosts create --role` or `hosts edit --role`, and to
+it to find the id for `host create --role` or `host edit --role`, and to
 answer "does this account have a role that allows traffic yet" (a role with
 `firewallRulesCount` of 0 allows nothing itself; a host's tags can still
 allow traffic).
 
-### Show a role's firewall rules — `dn roles get`
+### Show a role's firewall rules — `dn role get`
 
 ```bash
-dn roles get <ROLE_ID> --json
+dn role get <ROLE_ID> --json
 ```
 
 Returns `{ "data": role }` — `id`, `name`, `description`, `hostCount`, and
-`firewallRules`, an array of inbound rules (`roles list` has only a count).
+`firewallRules`, an array of inbound rules (`role list` has only a count).
 Each rule has `protocol` (`ANY`, `TCP`, `UDP`, `ICMP`), `portRange`
 (`{from, to}`, or `null` for every port; Nebula also treats a range starting
 at `0` as every port), `description`, and the allowed
@@ -176,7 +176,7 @@ set, a source host needs the role *and* all the tags. An empty
 
 A role is not a host's only source of inbound rules: each of a host's tags
 can carry firewall rules too, and the host accepts the union. Read them with
-`dn tags get` (below) for each tag on the host before calling it
+`dn tag get` (below) for each tag on the host before calling it
 unreachable — a host with no role may still accept traffic through its
 tags.
 
@@ -191,7 +191,7 @@ starts at `0` (`ANY` on port 22 does not allow ping). A match means yes,
 provided neither A nor B `isBlocked` — a blocked host is off the mesh
 whatever the rules say.
 "No" needs a successful read of B's role (if it has one) and of every tag on
-B: if any `roles get` or `tags get` fails (a missing `tags:read` permission,
+B: if any `role get` or `tag get` fails (a missing `tags:read` permission,
 a 404), or returns a `data` that isn't an object or has no `firewallRules`
 list, answer "unknown" and name what couldn't be read — `--json` passes the
 response through without checking it.
@@ -200,10 +200,10 @@ Without `--json`, rules print sorted the way the admin panel shows them, and
 a warning appears when a rule allows all hosts on any protocol and port,
 since every host with the role then accepts all inbound traffic.
 
-### Show a tag's firewall rules — `dn tags get`
+### Show a tag's firewall rules — `dn tag get`
 
 ```bash
-dn tags get <KEY:VALUE> --json
+dn tag get <KEY:VALUE> --json
 ```
 
 Returns `{ "data": tag }` — `name`, `description`, `hostCount`, `priority`,
@@ -211,16 +211,16 @@ Returns `{ "data": tag }` — `name`, `description`, `hostCount`, `priority`,
 rules added to every host carrying the tag, in the same shape as a role's.
 An empty `firewallRules` means the tag adds nothing; the host's role and
 other tags still apply. Human output shows the description, host count,
-priority, and the rule table laid out like `roles get`, with the same
+priority, and the rule table laid out like `role get`, with the same
 allow-everything warning. It also warns when the server returns a different
 tag than the one asked for, or when `firewallRulesCount` disagrees with the
 rules listed. Use `--json` for config overrides and route subscriptions. Key
 permission: `tags:read`.
 
-### List networks — `dn networks list`
+### List networks — `dn network list`
 
 ```bash
-dn networks list --json
+dn network list --json
 ```
 
 Returns `{ "data": [ network… ], "metadata": { … } }`. Each network has `id`
@@ -231,10 +231,10 @@ network, not on any host:
 
 | field | meaning |
 |-------|---------|
-| `disableManagedLighthouses` | `false` means Defined's managed lighthouses back the network. They are not hosts, so `hosts list` never shows them — a network with no lighthouse host is still fine when this is `false`. |
+| `disableManagedLighthouses` | `false` means Defined's managed lighthouses back the network. They are not hosts, so `host list` never shows them — a network with no lighthouse host is still fine when this is `false`. |
 | `lighthousesAsRelays` | `true` means the network's self-hosted lighthouses also act as relays. |
 
-Use it to find the id for `hosts create --network`, and to answer "how do my
+Use it to find the id for `host create --network`, and to answer "how do my
 hosts find each other" or "do I have relays" — check these flags before
 concluding anything from the hosts list alone.
 
@@ -242,16 +242,16 @@ concluding anything from the hosts list alone.
 
 | operation | gate |
 |-----------|------|
-| `hosts list`, `hosts search`, `roles list`, `roles get`, `tags get`, `networks list` | free — reads change nothing |
-| `hosts edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
-| `hosts create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `hosts edit`, a role or tag sets the new host's firewall. |
-| `hosts delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |
+| `host list`, `host search`, `role list`, `role get`, `tag get`, `network list` | free — reads change nothing |
+| `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
+| `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
+| `host delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |
 
 ## Where this is going (not built yet)
 
-Role writes are still missing: `roles create` / `roles add-rule`. The
+Role writes are still missing: `role create` / `role add-rule`. The
 account's default role denies all inbound traffic, so nothing can reach a
-host enrolled via `hosts create` until a role with firewall rules exists
-and is assigned, or it carries a tag with firewall rules. `dn roles list`
-shows whether such a role already exists, and `hosts edit --role` assigns it; creating the role itself still happens in
+host enrolled via `host create` until a role with firewall rules exists
+and is assigned, or it carries a tag with firewall rules. `dn role list`
+shows whether such a role already exists, and `host edit --role` assigns it; creating the role itself still happens in
 the admin panel. Say so rather than promising two hosts will reach each other.

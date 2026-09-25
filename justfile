@@ -1,5 +1,5 @@
 # Run the CLI from source. Auth comes from `dn auth login` or DEFINED_API_KEY.
-# Usage:  just run hosts list [--json]
+# Usage:  just run host list [--json]
 run *args:
     cargo run -- {{args}}
 

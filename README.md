@@ -69,13 +69,13 @@ latter the same way. Override the base URL with `DEFINED_API_URL` (defaults to
 With [`just`](https://github.com/casey/just):
 
 ```bash
-just run hosts list --json
+just run host list --json
 ```
 
 Or directly:
 
 ```bash
-cargo run -- hosts list --json
+cargo run -- host list --json
 cargo build --release
 ```
 
@@ -119,7 +119,7 @@ network"* — conversational device enrollment.
 
 ## Status
 
-- Reads: `hosts list`, `hosts search <QUERY>` — the latter wraps the
+- Reads: `host list`, `host search <QUERY>` — the latter wraps the
   `GET /v2/hosts?filter.search=` query, a server-side match across each host's
   name, IP addresses, assigned role name, and tags (the same surface the admin
   panel's search box drives). The query must be at least two characters. Key
@@ -128,7 +128,7 @@ network"* — conversational device enrollment.
 - Auth: `auth login` / `auth status` / `auth logout` — stores a 1Password
   secret reference (never the key) in `~/.config/dn/config.json` and resolves
   it per call with `op read`.
-- Writes: `hosts create` (host / lighthouse / relay) — wraps the
+- Writes: `host create` (host / lighthouse / relay) — wraps the
   `POST /v2/host-and-enrollment-code` one-shot endpoint, so the OTP comes
   back in the same response and the human view prints the `dnclient enroll`
   command to copy. Network is auto-picked when the account has exactly one.
@@ -136,29 +136,29 @@ network"* — conversational device enrollment.
   leaves dual-stack hosts v6-only — and `--no-ipv4` skips that for a v6-only
   host. Key permissions: `hosts:create`, `hosts:enroll`, and `networks:list`
   (auto-pick) or `networks:read` (`--network <id>`).
-- Deletes: `hosts delete <HOST_ID>` — wraps `DELETE /v1/hosts/{id}`. An
+- Deletes: `host delete <HOST_ID>` — wraps `DELETE /v1/hosts/{id}`. An
   interactive run looks the host up first (`hosts:read`) and asks
   `Delete host "<name>" (<id>; <ips>)? [y/N]`; `--yes` skips the lookup and the
   prompt, and is required with `--json` or when stdin isn't a terminal. Key
   permission: `hosts:delete`.
-- Edits: `hosts edit <HOST_ID>` — `--name`, `--role <ROLE_ID>` / `--clear-role`,
+- Edits: `host edit <HOST_ID>` — `--name`, `--role <ROLE_ID>` / `--clear-role`,
   `--add-tag`, `--remove-tag` (repeatable). Reads the host, applies the changes, and PUTs
   the whole object back via `/v3/hosts/{id}`; a no-op edit skips the write.
   Key permissions: `hosts:read` and `hosts:update`.
-- Roles: `roles list` — id, name, rule and host counts. Pair it with
-  `hosts edit --role` to move a host off the default deny-all role.
-  `roles get <ROLE_ID>` shows one role's inbound firewall rules — allowed
+- Roles: `role list` — id, name, rule and host counts. Pair it with
+  `host edit --role` to move a host off the default deny-all role.
+  `role get <ROLE_ID>` shows one role's inbound firewall rules — allowed
   hosts, protocol, ports — in the admin panel's order. Key permission:
   `roles:read`, plus `roles:list` to show role names in rules instead of
   ids.
-- Tags: `tags get <KEY:VALUE>` shows the inbound firewall rules a tag adds
-  to every host carrying it, laid out like `roles get`. Key permission:
+- Tags: `tag get <KEY:VALUE>` shows the inbound firewall rules a tag adds
+  to every host carrying it, laid out like `role get`. Key permission:
   `tags:read`, plus `roles:list` for role names.
-- Networks: `networks list` — id, name, CIDRs, host count, whether managed
+- Networks: `network list` — id, name, CIDRs, host count, whether managed
   lighthouses and lighthouses-as-relays are on, curve and cert version. The
   lighthouse settings live on the network, so this is where to look when the
   hosts list shows no lighthouse. Key permission: `networks:list`.
-- Coming next: `roles create` and `roles add-rule` — the default role denies
+- Coming next: `role create` and `role add-rule` — the default role denies
   all traffic, so newly enrolled hosts share a network but can't talk to
   each other until a permissive role exists and is assigned.
 
