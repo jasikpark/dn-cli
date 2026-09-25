@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.7 (2026-09-25)
+
+### Features
+
+- dn tags get (#76)
+
+### Fixes
+
+- version the plugin manifests with each release (#77)
+
 ## 0.2.6 (2026-09-23)
 
 ### Features
