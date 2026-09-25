@@ -106,7 +106,8 @@ Hand the user the code and the exact command to run on the device —
 `dnclient enroll <code>` — and tell them it expires (`lifetimeSeconds`). The
 human view prints the same thing, plus a reminder that the default role denies
 all traffic, so a freshly enrolled host is on the network but can't reach
-anything yet.
+anything yet — unless one of its `--tags` carries firewall rules
+(`dn tags get`).
 
 ### Edit a host — `dn hosts edit`
 
@@ -117,7 +118,7 @@ dn hosts edit <HOST_ID> --name <NEW_NAME> --add-tag env:prod --remove-tag env:de
 
 | flag | effect |
 |------|--------|
-| `--role <ROLE_ID>` | assign a firewall role — the way to unmute a host stuck on the default deny-all role |
+| `--role <ROLE_ID>` | assign a firewall role — one way to unmute a host stuck on the default deny-all role (a tag with firewall rules is the other) |
 | `--clear-role` | unassign the role (sends `roleID: null`); mutually exclusive with `--role` |
 | `--name <NAME>` | rename |
 | `--add-tag k:v` / `--remove-tag k:v` | repeatable; removes run before adds |
@@ -125,8 +126,10 @@ dn hosts edit <HOST_ID> --name <NEW_NAME> --add-tag env:prod --remove-tag env:de
 Returns `{ "data": { host… } }` with the updated host. Get role ids from
 `dn roles list --json` and host ids from `dn hosts list --json`; never guess
 either. An edit that changes nothing skips the write and returns the current
-host. Assigning a role changes what traffic the host can send and receive, so
-name the host and the role to the user before running it.
+host. Assigning a role or adding/removing a tag changes what traffic the host
+can send and receive — a tag brings its own inbound rules and makes the host
+match other rules' `allowedTags` — so name the host and the role or tag to the
+user before running it.
 
 ### Delete a host — `dn hosts delete`
 
@@ -151,7 +154,8 @@ Returns `{ "data": [ role… ], "metadata": { … } }`. Each role has `id`
 (`role-…`), `name`, `description`, `firewallRulesCount`, and `hostCount`. Use
 it to find the id for `hosts create --role` or `hosts edit --role`, and to
 answer "does this account have a role that allows traffic yet" (a role with
-`firewallRulesCount` of 0 denies everything).
+`firewallRulesCount` of 0 allows nothing itself; a host's tags can still
+allow traffic).
 
 ### Show a role's firewall rules — `dn roles get`
 
@@ -179,7 +183,10 @@ Use it to answer "can host A reach port N/protocol P on host B": find B's
 role and tags, then look across their rules for one whose protocol is P or `ANY`, whose port range
 covers N or is `null` (ICMP has no ports, so any ICMP rule covers it), and
 whose source matches A — A's role when `allowedRoleID` is set, and every tag
-in `allowedTags`. A match means yes; no match across the role and every tag means no.
+in `allowedTags`. A match means yes. "No" needs a successful read of B's
+role and of every tag on B: if any `roles get` or `tags get` fails (a
+missing `tags:read` permission, a 404), answer "unknown" and name what
+couldn't be read.
 
 Without `--json`, rules print sorted the way the admin panel shows them, and
 a warning appears when one rule allows all hosts on any protocol and port,
@@ -195,7 +202,8 @@ Returns `{ "data": tag }` — `name`, `description`, `hostCount`, `priority`,
 `configOverrides`, `routeSubscriptions`, and `firewallRules`, the inbound
 rules added to every host carrying the tag, in the same shape as a role's.
 An empty `firewallRules` means the tag adds nothing; the host's role and
-other tags still apply. Human output matches `roles get`.
+other tags still apply. Human output matches `roles get`. Key permission:
+`tags:read`.
 
 ### List networks — `dn networks list`
 
@@ -223,7 +231,7 @@ concluding anything from the hosts list alone.
 | operation | gate |
 |-----------|------|
 | `hosts list`, `hosts search`, `roles list`, `roles get`, `tags get`, `networks list` | free — reads change nothing |
-| `hosts edit` | a write: renaming and tagging are cosmetic, but `--role` changes the host's firewall. Confirm the host and role with the user first. |
+| `hosts edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
 | `hosts create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name and the network with the user first. |
 | `hosts delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |
 
@@ -232,6 +240,6 @@ concluding anything from the hosts list alone.
 Role writes are still missing: `roles create` / `roles add-rule`. The
 account's default role denies all traffic, so a host enrolled via
 `hosts create` is "enrolled but mute" until a role with firewall rules exists
-and is assigned. `dn roles list` shows whether such a role already exists,
+and is assigned, or it carries a tag with firewall rules. `dn roles list` shows whether such a role already exists,
 and `hosts edit --role` assigns it; creating the role itself still happens in
 the admin panel. Say so rather than promising two hosts will reach each other.

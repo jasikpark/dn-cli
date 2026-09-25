@@ -581,7 +581,7 @@ fn tags_get(client: &Client, args: &TagGetArgs, json: bool) -> anyhow::Result<()
         .filter(|d| d.is_object())
         .ok_or_else(|| anyhow!("unexpected response: missing tag data"))?;
     let role_names = rule_role_names(client, data);
-    print!("{}", render_tag(data, &role_names)?);
+    print!("{}", render_tag(data, name, &role_names)?);
     Ok(())
 }
 
@@ -647,16 +647,31 @@ fn render_role(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Re
         );
         return Ok(out);
     }
+    if rules.len() > 1 && rules.iter().any(is_allow_everything_rule) {
+        out.push_str(
+            "\nWarning: a rule allows all hosts on any protocol and port, \
+             so the more specific rules have no effect.\n",
+        );
+    }
     push_firewall_rules(&mut out, rules, role_names);
     Ok(out)
 }
 
 /// Render a tag and the inbound firewall rules it adds to every host that
 /// carries it, with the same layout and strictness as [`render_role`].
-fn render_tag(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Result<String> {
+/// A response without a name falls back to `requested`, the name asked for.
+fn render_tag(
+    data: &Value,
+    requested: &str,
+    role_names: &HashMap<String, String>,
+) -> anyhow::Result<String> {
     let rules = checked_firewall_rules(data)?;
 
-    let name = data.get("name").and_then(Value::as_str).unwrap_or_default();
+    let name = data
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or(requested);
     let mut out = format!("{}\n", sanitize_for_display(name));
     push_description_and_hosts(&mut out, data);
     if let Some(n) = data.get("priority").and_then(Value::as_i64) {
@@ -669,6 +684,14 @@ fn render_tag(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Res
              The host's role and other tags still apply.\n",
         );
         return Ok(out);
+    }
+    // Rules add up across a host's role and tags, so one allow-everything
+    // tag rule opens the host whatever else applies — worth saying even alone.
+    if rules.iter().any(is_allow_everything_rule) {
+        out.push_str(
+            "\nWarning: a rule allows all hosts on any protocol and port, \
+             so every host with this tag accepts all inbound traffic.\n",
+        );
     }
     push_firewall_rules(&mut out, rules, role_names);
     Ok(out)
@@ -702,16 +725,8 @@ fn push_description_and_hosts(out: &mut String, data: &Value) {
     }
 }
 
-/// The allow-everything warning and the sorted rule table, for a non-empty
-/// rule list.
+/// The rule table, sorted like the admin panel.
 fn push_firewall_rules(out: &mut String, rules: &[Value], role_names: &HashMap<String, String>) {
-    if rules.len() > 1 && rules.iter().any(is_allow_everything_rule) {
-        out.push_str(
-            "\nWarning: a rule allows all hosts on any protocol and port, \
-             so the more specific rules have no effect.\n",
-        );
-    }
-
     let mut sorted: Vec<&Value> = rules.iter().collect();
     sorted.sort_by(|a, b| compare_firewall_rules(a, b));
     let rows: Vec<Vec<String>> = sorted
@@ -1541,7 +1556,8 @@ fn render_host_create_human(res: &Value) -> String {
     out.push('\n');
     out.push_str("Note: the default role denies all traffic. New hosts will be on the\n");
     out.push_str("network but unable to reach each other until a role with firewall rules\n");
-    out.push_str("is created and assigned (see `dn roles list`).\n");
+    out.push_str("is created and assigned (see `dn roles list`), unless one of their tags\n");
+    out.push_str("carries firewall rules (see `dn tags get`).\n");
     out
 }
 
@@ -2672,7 +2688,7 @@ mod tests {
             ],
         });
         let names = HashMap::from([("role-ADM".to_string(), "Admins".to_string())]);
-        let out = render_tag(&tag, &names).unwrap();
+        let out = render_tag(&tag, "env:prod", &names).unwrap();
         assert!(
             out.starts_with("env:prod\nProduction hosts\nHosts: 3\nPriority: 6\n\n"),
             "{out}"
@@ -2686,11 +2702,27 @@ mod tests {
     fn render_tag_empty_rules_defers_to_role_and_rejects_missing_rules() {
         let empty = json!({"name": "env:dev", "firewallRules": []});
         assert_eq!(
-            render_tag(&empty, &HashMap::new()).unwrap(),
+            render_tag(&empty, "env:dev", &HashMap::new()).unwrap(),
             "env:dev\n\nNo firewall rules: this tag adds no inbound traffic. \
              The host's role and other tags still apply.\n"
         );
-        assert!(render_tag(&json!({"name": "env:dev"}), &HashMap::new()).is_err());
+        assert!(render_tag(&json!({"name": "env:dev"}), "env:dev", &HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn render_tag_falls_back_to_requested_name() {
+        let out = render_tag(&json!({"firewallRules": []}), "env:dev", &HashMap::new()).unwrap();
+        assert!(out.starts_with("env:dev\n"), "{out}");
+    }
+
+    #[test]
+    fn render_tag_warns_on_a_lone_allow_everything_rule() {
+        let tag = json!({"name": "env:prod", "firewallRules": [rule(None, &[], "ANY", None)]});
+        let out = render_tag(&tag, "env:prod", &HashMap::new()).unwrap();
+        assert!(
+            out.contains("every host with this tag accepts all inbound traffic"),
+            "{out}"
+        );
     }
 
     #[test]

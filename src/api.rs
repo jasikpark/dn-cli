@@ -273,7 +273,7 @@ impl Client {
     /// Fetch one tag (`key:value`) with its `firewallRules`, config
     /// overrides and route subscriptions. Needs the `tags:read` scope.
     pub fn get_tag(&self, name: &str) -> Result<Value> {
-        self.get(&format!("/v1/tags/{}", encode_path_segment(name)))
+        self.get(&tag_path(name))
     }
 
     /// List every network, following cursor pagination to completion. Backs
@@ -440,6 +440,10 @@ fn next_cursor(metadata: Option<&Value>) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn tag_path(name: &str) -> String {
+    format!("/v1/tags/{}", encode_path_segment(name))
+}
+
 /// Percent-encode one URL path segment: everything but RFC 3986 unreserved
 /// characters and `:` (tag names are `key:value`). Tag values may hold any
 /// non-whitespace character, so a raw `/`, `?`, `#` or `%` would otherwise
@@ -465,6 +469,14 @@ mod tests {
         assert_eq!(encode_path_segment("env:prod"), "env:prod");
         assert_eq!(encode_path_segment("a:b/c?d#e%f"), "a:b%2Fc%3Fd%23e%25f");
         assert_eq!(encode_path_segment("k:é"), "k:%C3%A9");
+    }
+
+    #[test]
+    fn tag_path_keeps_the_name_in_one_segment() {
+        assert_eq!(
+            tag_path("a:b/../../hosts"),
+            "/v1/tags/a:b%2F..%2F..%2Fhosts"
+        );
     }
 
     #[test]
