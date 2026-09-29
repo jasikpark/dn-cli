@@ -270,6 +270,12 @@ impl Client {
         self.get(&format!("/v1/roles/{id}"))
     }
 
+    /// List every tag, following cursor pagination to completion. Tags list
+    /// only on v2; `GET /v1/tags` answers 405. Needs the `tags:list` scope.
+    pub fn list_tags(&self) -> Result<Value> {
+        self.list_all("/v2/tags", &[])
+    }
+
     /// Fetch one tag (`key:value`) with its `firewallRules`, config
     /// overrides and route subscriptions. Needs the `tags:read` scope.
     pub fn get_tag(&self, name: &str) -> Result<Value> {

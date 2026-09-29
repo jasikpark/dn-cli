@@ -82,6 +82,8 @@ struct RoleGetArgs {
 
 #[derive(Subcommand)]
 enum TagCommand {
+    /// List tags
+    List,
     /// Show one tag and the inbound firewall rules it adds to its hosts
     Get(TagGetArgs),
 }
@@ -321,6 +323,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Tag { command } => {
             let client = Client::new(Config::load()?);
             match command {
+                TagCommand::List => tags_list(&client, cli.json)?,
                 TagCommand::Get(args) => tags_get(&client, args, cli.json)?,
             }
         }
@@ -549,6 +552,52 @@ fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
     {
         println!("\n{} shown / {total} total", rows.len());
     }
+
+    Ok(())
+}
+
+fn tags_list(client: &Client, json: bool) -> anyhow::Result<()> {
+    let res = client.list_tags()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&res)?);
+        return Ok(());
+    }
+
+    let empty: Vec<Value> = Vec::new();
+    let rows = res.get("data").and_then(Value::as_array).unwrap_or(&empty);
+    if rows.is_empty() {
+        println!("No tags found.");
+        return Ok(());
+    }
+
+    let table_rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            let field = |key| {
+                row.get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let count = |key| {
+                row.get(key)
+                    .and_then(Value::as_u64)
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+            };
+            vec![
+                field("name"),
+                count("firewallRulesCount"),
+                count("hostCount"),
+                field("description"),
+            ]
+        })
+        .collect();
+    print!(
+        "{}",
+        render_table(&["NAME", "RULES", "HOSTS", "DESCRIPTION"], &table_rows)
+    );
 
     Ok(())
 }
@@ -2744,6 +2793,13 @@ mod tests {
             cli.command,
             Command::Role {
                 command: RoleCommand::List
+            }
+        ));
+        let cli = Cli::try_parse_from(["dn", "tags", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Tag {
+                command: TagCommand::List
             }
         ));
         let cli = Cli::try_parse_from(["dn", "tags", "get", "env:prod"]).unwrap();
