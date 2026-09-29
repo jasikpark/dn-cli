@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.9 (2026-09-29)
+
+### Features
+
+- add `dn tag list` (#85)
+
 ## 0.2.8 (2026-09-29)
 
 ### Features
