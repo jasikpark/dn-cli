@@ -102,3 +102,26 @@ fn tags_get_rejects_a_malformed_tag_before_any_request() {
     assert!(!out.status.success(), "{out:?}");
     assert!(seen.lock().unwrap().is_empty());
 }
+
+#[test]
+fn tags_get_json_keeps_the_api_key_order() {
+    let (url, _) = serve(TAG);
+    let out = dn(&url, &["--json", "tags", "get", "env:prod"]);
+    assert!(out.status.success(), "{out:?}");
+    let got: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let keys = |v: &serde_json::Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    assert_eq!(
+        keys(&got["data"]),
+        ["name", "hostCount", "firewallRulesCount", "firewallRules"]
+    );
+    assert_eq!(
+        keys(&got["data"]["firewallRules"][0]),
+        [
+            "protocol",
+            "portRange",
+            "allowedRoleID",
+            "allowedTags",
+            "description"
+        ]
+    );
+}
