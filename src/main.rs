@@ -571,6 +571,11 @@ fn tags_list(client: &Client, json: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Highest priority first, matching the admin panel's tag list.
+    let priority = |row: &Value| row.get("priority").and_then(Value::as_i64);
+    let mut rows: Vec<&Value> = rows.iter().collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(priority(row)));
+
     let table_rows: Vec<Vec<String>> = rows
         .iter()
         .map(|row| {
@@ -593,6 +598,7 @@ fn tags_list(client: &Client, json: bool) -> anyhow::Result<()> {
                 .unwrap_or(0);
             vec![
                 field("name"),
+                priority(row).map(|n| n.to_string()).unwrap_or_default(),
                 rules.to_string(),
                 count("hostCount"),
                 field("description"),
@@ -601,7 +607,10 @@ fn tags_list(client: &Client, json: bool) -> anyhow::Result<()> {
         .collect();
     print!(
         "{}",
-        render_table(&["NAME", "RULES", "HOSTS", "DESCRIPTION"], &table_rows)
+        render_table(
+            &["NAME", "PRIORITY", "RULES", "HOSTS", "DESCRIPTION"],
+            &table_rows
+        )
     );
 
     Ok(())

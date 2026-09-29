@@ -129,9 +129,9 @@ fn tags_get_json_keeps_the_api_key_order() {
 #[test]
 fn tags_list_reads_v2_and_prints_a_table() {
     let (url, seen) = serve(
-        r#"{"data":[{"name":"env:prod","description":"Production hosts",
-        "hostCount":10,"firewallRulesCount":2},
-        {"name":"env:dev","description":"","hostCount":3}],
+        r#"{"data":[{"name":"env:dev","description":"","priority":7,"hostCount":3},
+        {"name":"env:prod","description":"Production hosts","priority":9,
+        "hostCount":10,"firewallRulesCount":2}],
         "metadata":{"hasNextPage":false}}"#,
     );
     let out = dn(&url, &["tag", "list"]);
@@ -139,11 +139,15 @@ fn tags_list_reads_v2_and_prints_a_table() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     let mut lines = stdout.lines();
     let header: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
-    assert_eq!(header, ["NAME", "RULES", "HOSTS", "DESCRIPTION"]);
+    assert_eq!(
+        header,
+        ["NAME", "PRIORITY", "RULES", "HOSTS", "DESCRIPTION"]
+    );
+    // Highest priority first, whatever order the API sent.
     let row: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
-    assert_eq!(row, ["env:prod", "2", "10", "Production", "hosts"]);
+    assert_eq!(row, ["env:prod", "9", "2", "10", "Production", "hosts"]);
     // No `firewallRulesCount` key means the tag has no rules.
     let row: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
-    assert_eq!(row, ["env:dev", "0", "3"]);
+    assert_eq!(row, ["env:dev", "7", "0", "3"]);
     assert_eq!(seen.lock().unwrap()[0], "/v2/tags");
 }
