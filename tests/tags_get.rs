@@ -130,7 +130,9 @@ fn tags_get_json_keeps_the_api_key_order() {
 fn tags_list_reads_v2_and_prints_a_table() {
     let (url, seen) = serve(
         r#"{"data":[{"name":"env:prod","description":"Production hosts",
-        "hostCount":10,"firewallRulesCount":2}],"metadata":{"hasNextPage":false}}"#,
+        "hostCount":10,"firewallRulesCount":2},
+        {"name":"env:dev","description":"","hostCount":3}],
+        "metadata":{"hasNextPage":false}}"#,
     );
     let out = dn(&url, &["tag", "list"]);
     assert!(out.status.success(), "{out:?}");
@@ -140,5 +142,8 @@ fn tags_list_reads_v2_and_prints_a_table() {
     assert_eq!(header, ["NAME", "RULES", "HOSTS", "DESCRIPTION"]);
     let row: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
     assert_eq!(row, ["env:prod", "2", "10", "Production", "hosts"]);
+    // No `firewallRulesCount` key means the tag has no rules.
+    let row: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
+    assert_eq!(row, ["env:dev", "0", "3"]);
     assert_eq!(seen.lock().unwrap()[0], "/v2/tags");
 }

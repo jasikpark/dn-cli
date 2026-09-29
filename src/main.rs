@@ -586,9 +586,14 @@ fn tags_list(client: &Client, json: bool) -> anyhow::Result<()> {
                     .map(|n| n.to_string())
                     .unwrap_or_default()
             };
+            // The API omits `firewallRulesCount` on tags when it is zero.
+            let rules = row
+                .get("firewallRulesCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             vec![
                 field("name"),
-                count("firewallRulesCount"),
+                rules.to_string(),
                 count("hostCount"),
                 field("description"),
             ]
