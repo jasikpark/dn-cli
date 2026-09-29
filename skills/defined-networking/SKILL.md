@@ -200,6 +200,18 @@ Without `--json`, rules print sorted the way the admin panel shows them, and
 a warning appears when a rule allows all hosts on any protocol and port,
 since every host with the role then accepts all inbound traffic.
 
+### List tags — `dn tag list`
+
+```bash
+dn tag list --json
+```
+
+Returns `{ "data": [ tag… ], "metadata": { … } }`. Each tag has `name`
+(`key:value`), `description`, `priority`, `hostCount`, `firewallRulesCount`,
+`configOverrides`, and `routeSubscriptions`. Use it to find which tags carry
+firewall rules (`firewallRulesCount` above 0) before calling `dn tag get` on
+them. Key permission: `tags:list`.
+
 ### Show a tag's firewall rules — `dn tag get`
 
 ```bash
