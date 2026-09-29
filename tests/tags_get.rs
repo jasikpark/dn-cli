@@ -141,13 +141,13 @@ fn tags_list_reads_v2_and_prints_a_table() {
     let header: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
     assert_eq!(
         header,
-        ["NAME", "PRIORITY", "RULES", "HOSTS", "DESCRIPTION"]
+        ["NAME", "RULES", "HOSTS", "DESCRIPTION", "PRIORITY"]
     );
     // Highest priority first, whatever order the API sent.
     let row: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
-    assert_eq!(row, ["env:prod", "9", "2", "10", "Production", "hosts"]);
+    assert_eq!(row, ["env:prod", "2", "10", "Production", "hosts", "9"]);
     // No `firewallRulesCount` key means the tag has no rules.
     let row: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
-    assert_eq!(row, ["env:dev", "7", "0", "3"]);
+    assert_eq!(row, ["env:dev", "0", "3", "7"]);
     assert_eq!(seen.lock().unwrap()[0], "/v2/tags");
 }

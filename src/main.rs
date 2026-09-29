@@ -598,17 +598,17 @@ fn tags_list(client: &Client, json: bool) -> anyhow::Result<()> {
                 .unwrap_or(0);
             vec![
                 field("name"),
-                priority(row).map(|n| n.to_string()).unwrap_or_default(),
                 rules.to_string(),
                 count("hostCount"),
                 field("description"),
+                priority(row).map(|n| n.to_string()).unwrap_or_default(),
             ]
         })
         .collect();
     print!(
         "{}",
         render_table(
-            &["NAME", "PRIORITY", "RULES", "HOSTS", "DESCRIPTION"],
+            &["NAME", "RULES", "HOSTS", "DESCRIPTION", "PRIORITY"],
             &table_rows
         )
     );

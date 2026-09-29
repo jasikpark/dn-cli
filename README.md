@@ -151,7 +151,7 @@ network"* — conversational device enrollment.
   hosts, protocol, ports — in the admin panel's order. Key permission:
   `roles:read`, plus `roles:list` to show role names in rules instead of
   ids.
-- Tags: `tag list` — name, priority, rule and host counts, description,
+- Tags: `tag list` — name, rule and host counts, description, priority,
   highest priority first like the admin panel. Key permission: `tags:list`.
   `tag get <KEY:VALUE>` shows the inbound firewall rules a tag adds to every
   host carrying it, laid out like `role get`. Key permission: `tags:read`,
