@@ -25,7 +25,8 @@ pub struct Client {
 #[derive(Debug, Serialize)]
 pub struct ApiError {
     pub status: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always present (`null` when the response had no `X-Request-ID`), so
+    /// every `--json` error envelope carries the same keys.
     pub request_id: Option<String>,
     pub errors: Vec<ApiErrorDetail>,
     /// Raw body, kept only when it wasn't the expected `{errors:[...]}` shape

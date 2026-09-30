@@ -38,8 +38,18 @@ prompt on the user's machine; that is expected.
   "message", "path"? }] }` — plus a human hint on stderr.
 
 When **you** (Claude) call `dn`, always pass `--json` and parse stdout. On a
-non-zero exit, read the JSON error envelope: `status` is the HTTP code and
-`errors[].code` is the machine-stable Defined error code (e.g. `ERR_UNAUTHORIZED`).
+non-zero exit, read the JSON error envelope. It has the same keys whatever
+failed; branch on `errors[].code`:
+
+- **API errors** (exit 1): `status` is the HTTP code and `errors[].code` is the
+  machine-stable Defined error code (e.g. `ERR_UNAUTHORIZED`).
+- **Local errors** (exit 1): `status` and `request_id` are `null` because the
+  request never reached the API. `ERR_INVALID_ARGUMENT` is a flag or argument
+  `dn` rejected before sending anything; `ERR_LOCAL` is anything else
+  (credentials, config, network).
+- **Usage errors** (exit 2): `ERR_USAGE` — an unknown subcommand or flag, or a
+  missing argument. Check `dn <command> --help`: the installed `dn` may be
+  older than this skill.
 
 ## Commands
 

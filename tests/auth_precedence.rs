@@ -85,7 +85,10 @@ fn environment_auth_does_not_depend_on_stored_credentials() {
         let output = command.output().unwrap();
         assert!(!output.status.success());
         let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let error = payload["error"].as_str().unwrap();
+        assert!(payload["status"].is_null(), "{payload}");
+        assert!(payload["request_id"].is_null(), "{payload}");
+        assert_eq!(payload["errors"][0]["code"], "ERR_LOCAL");
+        let error = payload["errors"][0]["message"].as_str().unwrap();
         assert!(
             error.contains(expected),
             "expected {expected:?}, got {error:?}"

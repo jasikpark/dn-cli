@@ -7,7 +7,6 @@ use std::process::ExitCode;
 
 use anyhow::{Context, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
-use serde::Serialize;
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthChar;
 
@@ -236,17 +235,41 @@ struct HostDeleteArgs {
     yes: bool,
 }
 
-/// Generic JSON error envelope for non-API errors (config, network, parse).
-/// API errors serialize via [`ApiError`]'s own richer shape instead.
-#[derive(Serialize)]
-struct GenericError<'a> {
-    error: &'a str,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    causes: Vec<String>,
+/// Error codes for failures raised before (or without) an API response. They
+/// share the API's `ERR_*` namespace so agents branch on one field, and
+/// `status: null` tells them the request never reached the API.
+const ERR_USAGE: &str = "ERR_USAGE";
+const ERR_INVALID_ARGUMENT: &str = "ERR_INVALID_ARGUMENT";
+const ERR_LOCAL: &str = "ERR_LOCAL";
+
+/// A client-side validation failure, tagged so `--json` reports it as
+/// [`ERR_INVALID_ARGUMENT`] rather than the catch-all [`ERR_LOCAL`].
+#[derive(Debug)]
+struct InvalidArgument(anyhow::Error);
+
+impl std::fmt::Display for InvalidArgument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for InvalidArgument {}
+
+/// The API's error envelope for an error that never got an HTTP response, so
+/// `--json` callers parse one shape whatever failed.
+fn local_error_envelope(code: &str, message: &str) -> Value {
+    json!({
+        "status": null,
+        "request_id": null,
+        "errors": [{ "code": code, "message": message }],
+    })
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => report_usage_error(err, json_requested(std::env::args_os())),
+    };
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -256,7 +279,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: &Cli) -> anyhow::Result<()> {
+fn preflight(cli: &Cli) -> anyhow::Result<()> {
     // Run all client-side validation before resolving credentials or touching
     // the network, so `dn host create --lighthouse` (missing required flags)
     // reports the actual problem instead of hiding behind a credentials error.
@@ -290,6 +313,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     {
         parse_tag(args.tag.trim())?;
     }
+    Ok(())
+}
+
+fn run(cli: &Cli) -> anyhow::Result<()> {
+    preflight(cli).map_err(InvalidArgument)?;
 
     match &cli.command {
         Command::Auth { command } => match command {
@@ -1014,24 +1042,63 @@ fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
 /// Render an error per dn-cli's two-faces design (the axocli envelope-split
 /// pattern, reimplemented on anyhow): in `--json` mode emit a machine-readable
 /// envelope to stdout AND a human hint to stderr; otherwise just the human
-/// hint to stderr. Typed [`ApiError`]s get the rich structured shape; anything
-/// else gets the generic `{error, causes}` envelope.
+/// hint to stderr. Every envelope has the API's `{status, request_id, errors}`
+/// shape: typed [`ApiError`]s carry the server's own, and local failures get
+/// `status: null` and a local code (see [`error_envelope`]).
 fn report_error(err: &anyhow::Error, json: bool) {
-    if json {
-        let payload = match err.downcast_ref::<ApiError>() {
-            Some(api) => serde_json::to_string(api),
-            None => serde_json::to_string(&GenericError {
-                error: &err.to_string(),
-                causes: err.chain().skip(1).map(|c| c.to_string()).collect(),
-            }),
-        };
-        if let Ok(payload) = payload {
-            println!("{payload}");
-        }
+    if json && let Ok(payload) = serde_json::to_string(&error_envelope(err)) {
+        println!("{payload}");
     }
 
     // API error messages are server-controlled, so strip terminal escapes.
     eprintln!("error: {}", sanitize_for_display(&format!("{err:#}")));
+}
+
+fn error_envelope(err: &anyhow::Error) -> Value {
+    if let Some(api) = err.downcast_ref::<ApiError>()
+        && let Ok(value) = serde_json::to_value(api)
+    {
+        return value;
+    }
+    let code = if err.downcast_ref::<InvalidArgument>().is_some() {
+        ERR_INVALID_ARGUMENT
+    } else {
+        ERR_LOCAL
+    };
+    local_error_envelope(code, &format!("{err:#}"))
+}
+
+/// Whether `--json` appears among the raw arguments, for reporting an error
+/// clap raised before it could tell us. Arguments after `--` are positional.
+fn json_requested<I: IntoIterator<Item = std::ffi::OsString>>(args: I) -> bool {
+    args.into_iter()
+        .skip(1)
+        .take_while(|arg| arg != "--")
+        .any(|arg| arg == "--json")
+}
+
+/// Exit on a clap parse failure. `--help` and `--version` pass through
+/// untouched; a real usage error also gets an [`ERR_USAGE`] envelope on stdout
+/// under `--json`, so a caller parsing stdout reads the failure instead of
+/// empty input. Clap's own message still goes to stderr, and the exit code
+/// stays 2 so usage errors remain distinct from runtime failures (1).
+fn report_usage_error(err: clap::Error, json: bool) -> ! {
+    if json && err.use_stderr() {
+        println!("{}", local_error_envelope(ERR_USAGE, &usage_message(&err)));
+    }
+    err.exit()
+}
+
+/// Clap's headline for a usage error, without the `error: ` prefix or the
+/// usage and `--help` lines that follow it.
+fn usage_message(err: &clap::Error) -> String {
+    let rendered = err.render().to_string();
+    let first = rendered.lines().next().unwrap_or_default();
+    first
+        .strip_prefix("error: ")
+        .unwrap_or(first)
+        .trim()
+        .to_string()
 }
 
 fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
