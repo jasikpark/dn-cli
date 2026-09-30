@@ -42,11 +42,16 @@ non-zero exit, read the JSON error envelope. It has the same keys whatever
 failed; branch on `errors[].code`:
 
 - **API errors** (exit 1): `status` is the HTTP code and `errors[].code` is the
-  machine-stable Defined error code (e.g. `ERR_UNAUTHORIZED`).
+  machine-stable Defined error code (e.g. `ERR_UNAUTHORIZED`). A response
+  without that shape (e.g. a proxy's 502) becomes `ERR_HTTP_<status>` with the
+  raw body as the message. When `dn` knows more than the API said, the message
+  starts with it — e.g. which flag skips the call that failed.
 - **Local errors** (exit 1): `status` and `request_id` are `null` because the
-  request never reached the API. `ERR_INVALID_ARGUMENT` is a flag or argument
-  `dn` rejected before sending anything; `ERR_LOCAL` is anything else
-  (credentials, config, network).
+  request never reached the API.
+  - `ERR_INVALID_ARGUMENT`: `dn` rejected the arguments — a malformed value, or
+    a flag you must add (`--yes`, `--ref`, `--network`). Fix the command; the
+    message says how.
+  - `ERR_LOCAL`: anything else — credentials, config, or the network.
 - **Usage errors** (exit 2): `ERR_USAGE` — an unknown subcommand or flag, or a
   missing argument. Check `dn <command> --help`: the installed `dn` may be
   older than this skill.

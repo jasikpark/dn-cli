@@ -313,6 +313,27 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
     {
         parse_tag(args.tag.trim())?;
     }
+    if let Command::Host {
+        command: HostCommand::Delete(args),
+    } = &cli.command
+    {
+        validate_host_id(&args.host_id)?;
+        if delete_confirmation(args.yes, cli.json, std::io::stdin().is_terminal())
+            == DeleteConfirmation::Refuse
+        {
+            bail!(DELETE_NEEDS_YES);
+        }
+    }
+    if let Command::Auth {
+        command: AuthCommand::Login(args),
+    } = &cli.command
+    {
+        match &args.reference {
+            Some(reference) => validate_op_ref(&normalize_op_ref(reference))?,
+            None if cli.json || !std::io::stdin().is_terminal() => bail!(LOGIN_NEEDS_REF),
+            None => {}
+        }
+    }
     Ok(())
 }
 
@@ -365,7 +386,7 @@ const API_KEYS_URL: &str = "https://admin.defined.net/settings/api-keys/add";
 fn auth_login(args: &AuthLoginArgs, json: bool) -> anyhow::Result<()> {
     let reference = match &args.reference {
         Some(r) => normalize_op_ref(r),
-        None => prompt_for_reference(json)?,
+        None => prompt_for_reference()?,
     };
     validate_op_ref(&reference)?;
 
@@ -429,10 +450,11 @@ fn print_json(value: &Value) -> anyhow::Result<()> {
 
 /// Interactive-only: explain where to mint a key, then read the reference from
 /// stdin. Agents pass `--ref` instead — no prompt ever blocks a `--json` run.
-fn prompt_for_reference(json: bool) -> anyhow::Result<String> {
-    if json || !std::io::stdin().is_terminal() {
-        bail!("pass --ref when running non-interactively");
-    }
+const LOGIN_NEEDS_REF: &str = "pass --ref when running non-interactively";
+
+/// Ask for the secret reference. [`preflight`] has already refused a
+/// non-interactive run without `--ref`.
+fn prompt_for_reference() -> anyhow::Result<String> {
     let mut err = std::io::stderr();
     writeln!(
         err,
@@ -1056,8 +1078,26 @@ fn report_error(err: &anyhow::Error, json: bool) {
 
 fn error_envelope(err: &anyhow::Error) -> Value {
     if let Some(api) = err.downcast_ref::<ApiError>()
-        && let Ok(value) = serde_json::to_value(api)
+        && let Ok(mut value) = serde_json::to_value(api)
     {
+        // Context added on top of the API error (e.g. "pass --ipv4 or
+        // --no-ipv4") is often the actionable part, so lead each message
+        // with it, the way the stderr hint does.
+        let context: Vec<String> = err
+            .chain()
+            .take_while(|cause| !cause.is::<ApiError>())
+            .map(ToString::to_string)
+            .collect();
+        if !context.is_empty()
+            && let Some(errors) = value["errors"].as_array_mut()
+        {
+            let prefix = context.join(": ");
+            for error in errors {
+                if let Some(message) = error["message"].as_str() {
+                    error["message"] = json!(format!("{prefix}: {message}"));
+                }
+            }
+        }
         return value;
     }
     let code = if err.downcast_ref::<InvalidArgument>().is_some() {
@@ -1070,11 +1110,12 @@ fn error_envelope(err: &anyhow::Error) -> Value {
 
 /// Whether `--json` appears among the raw arguments, for reporting an error
 /// clap raised before it could tell us. Arguments after `--` are positional.
+/// `--json=<value>` counts too: clap rejects it, but the caller wants JSON.
 fn json_requested<I: IntoIterator<Item = std::ffi::OsString>>(args: I) -> bool {
     args.into_iter()
         .skip(1)
         .take_while(|arg| arg != "--")
-        .any(|arg| arg == "--json")
+        .any(|arg| arg == "--json" || arg.to_str().is_some_and(|a| a.starts_with("--json=")))
 }
 
 /// Exit on a clap parse failure. `--help` and `--version` pass through
@@ -1089,16 +1130,22 @@ fn report_usage_error(err: clap::Error, json: bool) -> ! {
     err.exit()
 }
 
-/// Clap's headline for a usage error, without the `error: ` prefix or the
-/// usage and `--help` lines that follow it.
+/// Clap's headline for a usage error on one line, without the `error: `
+/// prefix or the tips and usage after the first blank line. A headline can
+/// span lines ("the following required arguments were not provided:" then
+/// one indented line per argument), so those are joined.
 fn usage_message(err: &clap::Error) -> String {
     let rendered = err.render().to_string();
-    let first = rendered.lines().next().unwrap_or_default();
-    first
-        .strip_prefix("error: ")
-        .unwrap_or(first)
-        .trim()
-        .to_string()
+    let headline = rendered
+        .lines()
+        .map(str::trim)
+        .take_while(|line| !line.is_empty() && !line.starts_with("Usage:"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    match headline.strip_prefix("error: ") {
+        Some(rest) => rest.to_string(),
+        None => headline,
+    }
 }
 
 fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
@@ -1444,9 +1491,7 @@ fn hosts_delete(client: &Client, args: &HostDeleteArgs, json: bool) -> anyhow::R
 
     match delete_confirmation(args.yes, json, std::io::stdin().is_terminal()) {
         DeleteConfirmation::Skip => {}
-        DeleteConfirmation::Refuse => bail!(
-            "pass --yes to delete without a confirmation prompt when running non-interactively"
-        ),
+        DeleteConfirmation::Refuse => bail!(DELETE_NEEDS_YES),
         DeleteConfirmation::Prompt => {
             let res = client.get_host(id).with_context(|| {
                 format!(
@@ -1481,6 +1526,9 @@ fn hosts_delete(client: &Client, args: &HostDeleteArgs, json: bool) -> anyhow::R
     }
     Ok(())
 }
+
+const DELETE_NEEDS_YES: &str =
+    "pass --yes to delete without a confirmation prompt when running non-interactively";
 
 /// How `dn host delete` should confirm a deletion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1575,9 +1623,10 @@ fn pick_network(networks: &Value) -> anyhow::Result<&Value> {
             "no networks found in this account — create one in the web client first"
         )),
         (1, false) => Ok(&rows[0]),
-        _ => Err(anyhow!(
+        _ => Err(InvalidArgument(anyhow!(
             "multiple networks found — pass --network <id> to disambiguate (see `dn network list`)"
-        )),
+        ))
+        .into()),
     }
 }
 
@@ -2005,6 +2054,18 @@ mod tests {
             tags: Vec::new(),
             code_lifetime: None,
         }
+    }
+
+    #[test]
+    fn json_requested_scans_flags_before_double_dash() {
+        let requested = |args: &[&str]| json_requested(args.iter().map(Into::into));
+        assert!(requested(&["dn", "host", "bogus", "--json"]));
+        assert!(requested(&["dn", "--json=true", "host", "list"]));
+        assert!(!requested(&["dn", "host", "bogus"]));
+        assert!(!requested(&["dn", "host", "bogus", "--", "--json"]));
+        assert!(!requested(&["dn", "--jsonx"]));
+        // argv[0] is the program, never a flag.
+        assert!(!requested(&["--json"]));
     }
 
     #[test]
