@@ -25,37 +25,10 @@ pub struct Config {
     pub api_url: String,
 }
 
-/// Settings file (`config.json`). Non-secret configuration like `api_url`.
-/// Credentials live in [`AuthFile`] (`auth.json`).
-///
-/// Keys this binary doesn't model are preserved verbatim in `extra`, so a
-/// round-trip through an older `dn` never drops what a newer one wrote.
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FileConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_url: Option<String>,
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
-}
-
-impl FileConfig {
-    /// Read the settings file, treating a missing file as an empty config. A
-    /// present-but-unparsable file is an error naming the path.
-    pub fn load() -> Result<Self> {
-        let path = config_path()?;
-        match fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text)
-                .with_context(|| format!("failed to parse {}", path.display())),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).with_context(|| format!("failed to read {}", path.display())),
-        }
-    }
-}
-
 /// One named account: which API to talk to and where its key comes from.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
-    /// Falls back to `config.json`'s `api_url`, then the default, when unset.
+    /// Falls back to https://api.defined.net when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_url: Option<String>,
     /// A 1Password secret reference to the API key.
@@ -66,8 +39,7 @@ pub struct Profile {
 }
 
 /// Credentials file (`auth.json`): named profiles and which one is the
-/// default. Separated from [`FileConfig`] so that `dn auth logout` can delete
-/// credentials without touching settings.
+/// default. Whenever there are profiles, the default names one of them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthFile {
     pub version: u64,
@@ -138,7 +110,7 @@ impl AuthFile {
     }
 
     /// Read the credentials file, treating a missing file as no profiles. An
-    /// old-layout file is converted in memory; see [`migrate_legacy_auth`].
+    /// old-layout file is converted in memory; see [`migrate_to_profiles`].
     pub fn load() -> Result<Self> {
         let path = auth_path()?;
         match fs::read_to_string(&path) {
@@ -167,6 +139,21 @@ impl AuthFile {
         Ok(path)
     }
 
+    /// Keep the default pointing at a real profile: when it is unset or names
+    /// a profile that no longer exists, pick the first one by name. Returns
+    /// the newly chosen default, if it changed.
+    pub fn ensure_default(&mut self) -> Option<String> {
+        let valid = self
+            .default_profile
+            .as_ref()
+            .is_some_and(|d| self.profiles.contains_key(d));
+        if valid {
+            return None;
+        }
+        self.default_profile = self.profiles.keys().next().cloned();
+        self.default_profile.clone()
+    }
+
     fn to_text(&self) -> Result<String> {
         let mut text = serde_json::to_string_pretty(self)?;
         text.push('\n');
@@ -174,48 +161,121 @@ impl AuthFile {
     }
 }
 
-/// What [`migrate_legacy_auth`] did.
+/// What [`migrate_to_profiles`] did.
 #[derive(Debug)]
 pub enum Migration {
-    /// No old-layout file to migrate (missing, unreadable, unparsable, or
-    /// already current). Unreadable and corrupt files are left for the
-    /// command itself to report.
+    /// Nothing to migrate (or another call just did it). Unreadable and
+    /// corrupt files are left for the command itself to report.
     NotNeeded,
-    Migrated(PathBuf),
-    /// The rewrite failed; the command still runs on the in-memory conversion.
+    /// What moved, for a one-line notice.
+    Migrated(String),
+    /// A rewrite failed. The command still runs; the next call retries.
     Failed(PathBuf, anyhow::Error),
 }
 
-/// Rewrite an old single-reference `auth.json` as profiles. Every `dn` call
-/// runs this first, so the old layout disappears on first contact. It never
-/// fails the command: a failed write leaves the old file for the next call.
+/// Bring credentials into the profiles layout. Every `dn` call runs this
+/// first, so old layouts disappear on first contact:
 ///
-/// The conversion depends only on the old file's own text, so parallel calls
-/// that race here write identical bytes, and the write is atomic. The file is
-/// re-read just before the write so a call that finds it already changed (by
-/// another migration or a login) leaves it alone.
-pub fn migrate_legacy_auth() -> Migration {
-    let Ok(path) = auth_path() else {
+/// - an `auth.json` from before profiles (one `api_key_ref`, no `version`)
+///   becomes a `default` profile;
+/// - `config.json`'s `api_url` moves into the default profile (unless that
+///   profile already has one) and is removed from `config.json`, which is
+///   deleted once empty.
+///
+/// It never fails the command. Parallel calls are safe: `auth.json` is read
+/// before `config.json` and re-read just before it is written, and the write
+/// is skipped if it changed. So a call that sees `config.json` already
+/// stripped also sees the migrated `auth.json` and backs off, and two calls
+/// that both see the old files write identical bytes atomically.
+pub fn migrate_to_profiles() -> Migration {
+    let (Ok(auth_path), Ok(config_path)) = (auth_path(), config_path()) else {
         return Migration::NotNeeded;
     };
-    let Ok(original) = fs::read_to_string(&path) else {
+    let Ok(auth_text) = read_optional(&auth_path) else {
         return Migration::NotNeeded;
     };
-    let Ok((auth, true)) = AuthFile::parse(&original) else {
-        return Migration::NotNeeded;
+    let (mut auth, legacy) = match &auth_text {
+        None => (AuthFile::default(), false),
+        Some(text) => match AuthFile::parse(text) {
+            Ok(parsed) => parsed,
+            Err(_) => return Migration::NotNeeded,
+        },
     };
+    let config_text = read_optional(&config_path).ok().flatten();
+    let mut config: Option<serde_json::Map<String, serde_json::Value>> = config_text
+        .as_deref()
+        .and_then(|text| serde_json::from_str(text).ok());
+    let moved_url = config
+        .as_mut()
+        .and_then(|c| c.remove("api_url"))
+        .and_then(|url| url.as_str().map(str::trim).map(str::to_string));
+    if !legacy && moved_url.is_none() {
+        return Migration::NotNeeded;
+    }
+
+    let mut notes = Vec::new();
+    if legacy {
+        notes.push(format!("converted {} to profiles", auth_path.display()));
+    }
+    if let Some(url) = moved_url.filter(|u| !u.is_empty()) {
+        let target = auth
+            .default_profile
+            .clone()
+            .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
+        let profile = auth.profiles.entry(target.clone()).or_default();
+        if profile.api_url.is_none() {
+            profile.api_url = Some(normalize_api_url(&url));
+            notes.push(format!(
+                "moved api_url from {} into profile {target:?}",
+                config_path.display()
+            ));
+        }
+        auth.ensure_default();
+    }
+
     let write = || -> Result<bool> {
-        let text = auth.to_text()?;
-        if fs::read_to_string(&path).ok().as_deref() != Some(original.as_str()) {
+        if read_optional(&auth_path)? != auth_text {
             return Ok(false);
         }
-        write_private(&path, &text)?;
+        write_private(&auth_path, &auth.to_text()?)?;
+        match &config {
+            Some(rest) if rest.is_empty() => remove_file_if_present(&config_path)?,
+            Some(rest) => {
+                let mut text = serde_json::to_string_pretty(rest)?;
+                text.push('\n');
+                write_private(&config_path, &text)?;
+            }
+            None => {}
+        }
         Ok(true)
     };
     match write() {
-        Ok(true) => Migration::Migrated(path),
+        Ok(true) => Migration::Migrated(notes.join("; ")),
         Ok(false) => Migration::NotNeeded,
-        Err(e) => Migration::Failed(path, e),
+        Err(e) => Migration::Failed(auth_path, e),
+    }
+}
+
+/// A file's contents, or `None` if it doesn't exist.
+fn read_optional(path: &Path) -> Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
+fn remove_file_if_present(path: &Path) -> Result<()> {
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    match fs::remove_file(&target) {
+        Ok(()) => {
+            if target != path {
+                let _ = fs::remove_file(path);
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("failed to remove {}", target.display())),
     }
 }
 
@@ -278,7 +338,9 @@ fn write_private(path: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
-/// `$DN_CONFIG_DIR/config.json`, else the platform config dir:
+/// `$DN_CONFIG_DIR/config.json`, else the platform config dir. Only read to
+/// migrate its `api_url` into a profile; see [`migrate_to_profiles`]. Same
+/// directory rules as [`auth_path`]:
 /// `$XDG_CONFIG_HOME/dn` → `~/.config/dn` on unix (macOS included — CLI
 /// convention, not `~/Library`), `%APPDATA%\dn` on Windows.
 pub fn config_path() -> Result<PathBuf> {
@@ -619,28 +681,23 @@ pub fn op_read(reference: &str) -> Result<String> {
 }
 
 /// The API base: `DEFINED_API_URL` over [`stored_api_url`].
-pub fn api_url(profile: Option<&Profile>, file: &FileConfig) -> String {
+pub fn api_url(profile: Option<&Profile>) -> String {
     match non_empty_env("DEFINED_API_URL") {
         Some(url) => normalize_api_url(&url),
-        None => stored_api_url(profile, file),
+        None => stored_api_url(profile),
     }
 }
 
-/// The API base a profile is configured with, ignoring the environment: the
-/// profile's `api_url`, else `config.json`'s, else the default. Trimmed and
-/// without a trailing slash so path concatenation never yields `//v2/...`.
-pub fn stored_api_url(profile: Option<&Profile>, file: &FileConfig) -> String {
-    let non_blank = |url: &Option<String>| {
-        url.as_deref()
-            .map(str::trim)
-            .filter(|u| !u.is_empty())
-            .map(str::to_string)
-    };
+/// The API base a profile is configured with, ignoring the environment: its
+/// `api_url`, else the default. Trimmed and without a trailing slash so path
+/// concatenation never yields `//v2/...`.
+pub fn stored_api_url(profile: Option<&Profile>) -> String {
     let raw = profile
-        .and_then(|p| non_blank(&p.api_url))
-        .or_else(|| non_blank(&file.api_url))
-        .unwrap_or_else(|| DEFAULT_API_URL.to_string());
-    normalize_api_url(&raw)
+        .and_then(|p| p.api_url.as_deref())
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .unwrap_or(DEFAULT_API_URL);
+    normalize_api_url(raw)
 }
 
 pub fn normalize_api_url(raw: &str) -> String {
@@ -649,10 +706,10 @@ pub fn normalize_api_url(raw: &str) -> String {
 
 impl Config {
     /// Build a config from an already-resolved key.
-    pub fn with_key(api_key: String, profile: Option<&Profile>, file: &FileConfig) -> Self {
+    pub fn with_key(api_key: String, profile: Option<&Profile>) -> Self {
         Self {
             api_key,
-            api_url: api_url(profile, file),
+            api_url: api_url(profile),
         }
     }
 
@@ -661,7 +718,6 @@ impl Config {
     /// the API call this.
     pub fn load(profile_flag: Option<&str>) -> Result<Self> {
         let active = Active::load(profile_flag)?;
-        let settings = FileConfig::load()?;
         let source = active.source.ok_or_else(|| {
             anyhow!(
                 "No API key configured. Run `dn auth login` (stores a 1Password secret \
@@ -672,7 +728,7 @@ impl Config {
             KeySource::Env(key) => key,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => op_read(&r)?,
         };
-        Ok(Self::with_key(api_key, active.profile.as_ref(), &settings))
+        Ok(Self::with_key(api_key, active.profile.as_ref()))
     }
 }
 
@@ -766,36 +822,6 @@ mod tests {
         let dbg = format!("{:?}", KeySource::Env("dnkey_secret".into()));
         assert!(!dbg.contains("dnkey_secret"), "{dbg}");
         assert_eq!(dbg, "Env(<redacted>)");
-    }
-
-    #[test]
-    fn file_config_roundtrips_and_omits_none() {
-        let cfg = FileConfig {
-            api_url: Some("https://api.test".into()),
-            ..FileConfig::default()
-        };
-        let text = serde_json::to_string(&cfg).unwrap();
-        assert_eq!(text, r#"{"api_url":"https://api.test"}"#);
-        let back: FileConfig = serde_json::from_str(&text).unwrap();
-        assert_eq!(back, cfg);
-        let empty = serde_json::to_string(&FileConfig::default()).unwrap();
-        assert_eq!(empty, "{}");
-    }
-
-    #[test]
-    fn file_config_preserves_unknown_keys() {
-        let text = r#"{"api_url":"https://api.test","future_flag":true}"#;
-        let cfg: FileConfig = serde_json::from_str(text).unwrap();
-        assert_eq!(
-            cfg.extra.get("future_flag"),
-            Some(&serde_json::Value::Bool(true))
-        );
-        let back: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
-        assert_eq!(
-            back,
-            serde_json::json!({ "api_url": "https://api.test", "future_flag": true })
-        );
     }
 
     #[test]
@@ -895,11 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_api_url_prefers_the_profile_then_config_then_default() {
-        let file = FileConfig {
-            api_url: Some("https://config.test/".into()),
-            ..FileConfig::default()
-        };
+    fn stored_api_url_prefers_the_profile_then_the_default() {
         let profile = Profile {
             api_url: Some(" https://staging.test/ ".into()),
             ..Profile::default()
@@ -908,16 +930,20 @@ mod tests {
             api_url: Some("  ".into()),
             ..Profile::default()
         };
-        assert_eq!(
-            stored_api_url(Some(&profile), &file),
-            "https://staging.test"
-        );
-        assert_eq!(stored_api_url(Some(&blank), &file), "https://config.test");
-        assert_eq!(stored_api_url(None, &file), "https://config.test");
-        assert_eq!(
-            stored_api_url(None, &FileConfig::default()),
-            DEFAULT_API_URL
-        );
+        assert_eq!(stored_api_url(Some(&profile)), "https://staging.test");
+        assert_eq!(stored_api_url(Some(&blank)), DEFAULT_API_URL);
+        assert_eq!(stored_api_url(None), DEFAULT_API_URL);
+    }
+
+    #[test]
+    fn ensure_default_picks_a_real_profile() {
+        let mut auth = two_profiles();
+        assert_eq!(auth.ensure_default(), None);
+        auth.profiles.remove("prod");
+        assert_eq!(auth.ensure_default().as_deref(), Some("staging"));
+        auth.profiles.clear();
+        assert_eq!(auth.ensure_default(), None);
+        assert_eq!(auth.default_profile, None);
     }
 
     /// A per-process scratch directory, so parallel tests never share one.

@@ -63,10 +63,7 @@ fn any_call_migrates_the_old_layout_once() {
     let first = dn(dir.path(), &["auth", "status", "--json"]);
     assert!(first.status.success(), "{first:?}");
     assert_eq!(auth_json(dir.path()), migrated());
-    assert!(
-        stderr(&first).contains("to the profiles format"),
-        "{first:?}"
-    );
+    assert!(stderr(&first).contains("converted"), "{first:?}");
     let status = stdout_json(&first);
     assert_eq!(status["profile"], "default");
     assert_eq!(status["source"], "file");
@@ -93,17 +90,15 @@ fn a_failing_command_still_migrates() {
     );
 }
 
-#[test]
-fn parallel_calls_migrate_to_one_valid_file() {
-    let dir = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("auth.json"), LEGACY).unwrap();
-
-    let children: Vec<_> = (0..8)
+/// Start `n` `auth status --json` calls at once and wait for all of them.
+fn run_in_parallel(dir: &Path, n: usize) {
+    let children: Vec<_> = (0..n)
         .map(|_| {
             Command::new(env!("CARGO_BIN_EXE_dn"))
                 .args(["auth", "status", "--json"])
-                .env("DN_CONFIG_DIR", dir.path())
+                .env("DN_CONFIG_DIR", dir)
                 .env_remove("DEFINED_API_KEY")
+                .env_remove("DEFINED_API_URL")
                 .env_remove("DN_PROFILE")
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
@@ -115,18 +110,42 @@ fn parallel_calls_migrate_to_one_valid_file() {
     for child in children {
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success(), "{output:?}");
-        assert_eq!(stdout_json(&output)["profile"], "default");
+        assert_eq!(stdout_json(&output)["profile"], "default", "{output:?}");
     }
-    assert_eq!(auth_json(dir.path()), migrated());
-    let leftovers: Vec<_> = fs::read_dir(dir.path())
+    let leftovers: Vec<_> = fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().file_name())
         .filter(|name| name != "auth.json")
         .collect();
-    assert!(
-        leftovers.is_empty(),
-        "temp files left behind: {leftovers:?}"
-    );
+    assert!(leftovers.is_empty(), "files left behind: {leftovers:?}");
+}
+
+#[test]
+fn parallel_calls_migrate_to_one_valid_file() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("auth.json"), LEGACY).unwrap();
+    run_in_parallel(dir.path(), 8);
+    assert_eq!(auth_json(dir.path()), migrated());
+}
+
+/// Moving `api_url` touches two files; a call that sees `config.json`
+/// already stripped must also see the migrated `auth.json`, or the URL
+/// would be lost. Repeated to give an interleaving a chance to show up.
+#[test]
+fn parallel_calls_never_lose_the_moved_api_url() {
+    let mut want = migrated();
+    want["profiles"]["default"]["api_url"] = json!("https://staging.example");
+    for _ in 0..10 {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("auth.json"), LEGACY).unwrap();
+        fs::write(
+            dir.path().join("config.json"),
+            r#"{"api_url":"https://staging.example"}"#,
+        )
+        .unwrap();
+        run_in_parallel(dir.path(), 8);
+        assert_eq!(auth_json(dir.path()), want);
+    }
 }
 
 #[test]
@@ -180,6 +199,16 @@ fn login(dir: &Path, args: &[&str]) -> Value {
     stdout_json(&output)
 }
 
+/// The `profiles` entry named `name` in a command's JSON output.
+fn entry<'a>(out: &'a Value, name: &str) -> &'a Value {
+    out["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == name)
+        .unwrap_or_else(|| panic!("no profile {name} in {out}"))
+}
+
 #[test]
 fn profiles_can_be_added_listed_switched_and_removed() {
     let dir = tempfile::tempdir().unwrap();
@@ -197,28 +226,46 @@ fn profiles_can_be_added_listed_switched_and_removed() {
         ],
     );
     assert_eq!(staging["profile"], "staging");
-    assert_eq!(staging["api_url"], "https://staging.example");
+    assert_eq!(staging["default_profile"], "staging");
     assert_eq!(
-        staging["default"], true,
-        "the first profile becomes the default"
+        entry(&staging, "staging")["api_url"],
+        "https://staging.example"
     );
 
+    // The latest login becomes the default, like `gh` and `tg`...
     let prod = login(
         d,
         &["--profile", "prod", "--ref", "op://Personal/dn/credential"],
     );
-    assert_eq!(prod["default"], false, "a login never moves the default");
-    assert_eq!(prod["api_url"], "https://api.defined.net");
+    assert_eq!(prod["default_profile"], "prod");
+    assert_eq!(entry(&prod, "prod")["api_url"], "https://api.defined.net");
+    assert_eq!(prod["profiles"].as_array().unwrap().len(), 2);
+
+    // ...unless asked not to.
+    let qa = login(
+        d,
+        &[
+            "--profile",
+            "qa",
+            "--ref",
+            "op://Dev/dn-qa/credential",
+            "--keep-default",
+        ],
+    );
+    assert_eq!(qa["default_profile"], "prod");
+    assert_eq!(entry(&qa, "qa")["default"], false);
 
     let list = stdout_json(&dn(d, &["auth", "list", "--json"]));
     assert_eq!(
         list,
         json!({
-            "default_profile": "staging",
+            "default_profile": "prod",
             "profiles": [
-                { "name": "prod", "default": false, "api_url": "https://api.defined.net",
+                { "name": "prod", "default": true, "api_url": "https://api.defined.net",
                   "api_key_ref": "op://Personal/dn/credential" },
-                { "name": "staging", "default": true, "api_url": "https://staging.example",
+                { "name": "qa", "default": false, "api_url": "https://api.defined.net",
+                  "api_key_ref": "op://Dev/dn-qa/credential" },
+                { "name": "staging", "default": false, "api_url": "https://staging.example",
                   "api_key_ref": "op://Dev/dn-staging/credential" },
             ],
         })
@@ -229,11 +276,12 @@ fn profiles_can_be_added_listed_switched_and_removed() {
         all.extend_from_slice(args);
         stdout_json(&dn_with(d, &all, env))
     };
-    assert_eq!(status(&[], &[])["profile"], "staging");
-    assert_eq!(status(&["--profile", "prod"], &[])["profile"], "prod");
-    let from_env = status(&[], &[("DN_PROFILE", "prod")]);
-    assert_eq!(from_env["profile"], "prod");
-    assert_eq!(from_env["api_key_ref"], "op://Personal/dn/credential");
+    assert_eq!(status(&[], &[])["profile"], "prod");
+    assert_eq!(status(&["--profile", "staging"], &[])["profile"], "staging");
+    let from_env = status(&[], &[("DN_PROFILE", "staging")]);
+    assert_eq!(from_env["profile"], "staging");
+    assert_eq!(from_env["api_key_ref"], "op://Dev/dn-staging/credential");
+    assert_eq!(from_env["api_url"], "https://staging.example");
     // The flag beats the environment, and DEFINED_API_URL beats the profile.
     let both = status(
         &["--profile", "staging"],
@@ -245,24 +293,153 @@ fn profiles_can_be_added_listed_switched_and_removed() {
     assert_eq!(both["profile"], "staging");
     assert_eq!(both["api_url"], "https://override.test");
 
-    let switched = stdout_json(&dn(d, &["auth", "switch", "prod", "--json"]));
-    assert_eq!(switched["default_profile"], "prod");
-    assert_eq!(status(&[], &[])["profile"], "prod");
+    let switched = stdout_json(&dn(d, &["auth", "switch", "staging", "--json"]));
+    assert_eq!(switched["default_profile"], "staging");
+    assert_eq!(switched["profiles"].as_array().unwrap().len(), 3);
+    assert_eq!(status(&[], &[])["profile"], "staging");
 
-    let logout = stdout_json(&dn(
-        d,
-        &["auth", "logout", "--profile", "staging", "--json"],
-    ));
+    // Removing a profile that isn't the default leaves the default alone.
+    let logout = stdout_json(&dn(d, &["auth", "logout", "--profile", "qa", "--json"]));
     assert_eq!(logout["removed"], true);
+    assert_eq!(logout["profile"], "qa");
+    assert_eq!(logout["default_profile"], "staging");
+
+    // Removing the default picks another one.
+    let logout = stdout_json(&dn(d, &["auth", "logout", "--json"]));
     assert_eq!(logout["profile"], "staging");
     assert_eq!(logout["default_profile"], "prod");
+    assert_eq!(logout["profiles"].as_array().unwrap().len(), 1);
 
     let logout = stdout_json(&dn(d, &["auth", "logout", "--json"]));
     assert_eq!(logout["profile"], "prod");
+    assert_eq!(logout["default_profile"], Value::Null);
+    assert_eq!(logout["profiles"], json!([]));
     assert!(
         !d.join("auth.json").exists(),
         "the last logout removes the file"
     );
+}
+
+#[test]
+fn changing_commands_list_the_profiles_for_humans() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let text = |args: &[&str]| {
+        let output = dn(d, args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    let out = text(&[
+        "auth",
+        "login",
+        "--no-verify",
+        "--profile",
+        "a",
+        "--ref",
+        "op://v/a/f",
+    ]);
+    assert!(out.contains("Default profile is now \"a\"."), "{out}");
+    assert!(out.contains("PROFILE"), "{out}");
+    let out = text(&[
+        "auth",
+        "login",
+        "--no-verify",
+        "--profile",
+        "b",
+        "--ref",
+        "op://v/b/f",
+    ]);
+    assert!(out.contains("Default profile is now \"b\"."), "{out}");
+    assert!(out.contains("*  b"), "{out}");
+    let out = text(&["auth", "switch", "a"]);
+    assert!(out.contains("*  a"), "{out}");
+    let out = text(&["auth", "logout"]);
+    assert!(out.contains("Removed profile \"a\"."), "{out}");
+    assert!(out.contains("Default profile is now \"b\"."), "{out}");
+    assert!(out.contains("*  b"), "{out}");
+}
+
+#[test]
+fn config_api_url_moves_into_the_default_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    fs::write(d.join("auth.json"), LEGACY).unwrap();
+    fs::write(
+        d.join("config.json"),
+        r#"{"api_url":"https://staging.example/"}"#,
+    )
+    .unwrap();
+
+    let output = dn(d, &["auth", "status", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(stderr(&output).contains("moved api_url"), "{output:?}");
+    assert_eq!(stdout_json(&output)["api_url"], "https://staging.example");
+    let mut want = migrated();
+    want["profiles"]["default"]["api_url"] = json!("https://staging.example");
+    assert_eq!(auth_json(d), want);
+    assert!(
+        !d.join("config.json").exists(),
+        "an emptied config.json is removed"
+    );
+}
+
+#[test]
+fn config_api_url_alone_becomes_a_keyless_default_profile() {
+    // DEFINED_API_KEY users could set only a URL in config.json.
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    fs::write(
+        d.join("config.json"),
+        r#"{"api_url":"https://staging.example","other":1}"#,
+    )
+    .unwrap();
+
+    let output = dn_with(
+        d,
+        &["auth", "status", "--json"],
+        &[("DEFINED_API_KEY", "k")],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let status = stdout_json(&output);
+    assert_eq!(status["source"], "env");
+    assert_eq!(status["profile"], "default");
+    assert_eq!(status["api_url"], "https://staging.example");
+    assert_eq!(
+        auth_json(d),
+        json!({
+            "version": 2,
+            "default_profile": "default",
+            "profiles": { "default": { "api_url": "https://staging.example" } },
+        })
+    );
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(d.join("config.json")).unwrap()).unwrap();
+    assert_eq!(config, json!({ "other": 1 }), "other settings stay put");
+}
+
+#[test]
+fn config_api_url_never_overrides_a_profile_url() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    login(
+        d,
+        &[
+            "--ref",
+            "op://v/i/f",
+            "--api-url",
+            "https://profile.example",
+        ],
+    );
+    fs::write(
+        d.join("config.json"),
+        r#"{"api_url":"https://config.example"}"#,
+    )
+    .unwrap();
+
+    let status = stdout_json(&dn(d, &["auth", "status", "--json"]));
+    assert_eq!(status["api_url"], "https://profile.example");
+    assert!(!d.join("config.json").exists());
 }
 
 #[test]

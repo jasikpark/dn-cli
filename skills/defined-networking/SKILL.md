@@ -34,8 +34,10 @@ prompt on the user's machine; that is expected.
 Credentials are stored as named profiles (`dn auth list --json`), e.g. `prod`
 and `staging` with different API URLs. When the user names an environment,
 pass `--profile <name>` on every call (or set `DN_PROFILE` for your shell).
-**Never run `dn auth switch`** — it changes the default for every other
-process, including other agents running in parallel.
+**Never run `dn auth switch`, `login` or `logout`** — each can change the
+default profile for every other process, including other agents running in
+parallel. If the user asks you to add a profile, pass `--keep-default` to
+`dn auth login` unless they want it to become the default.
 
 ## Always use `--json` when reading data programmatically
 

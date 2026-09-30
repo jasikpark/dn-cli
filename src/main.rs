@@ -12,10 +12,9 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::api::{ApiError, Client};
 use crate::config::{
-    Active, AuthFile, Config, DEFAULT_PROFILE, FileConfig, KeySource, Migration,
-    api_key_env_is_set, api_url, auth_path, config_path, migrate_legacy_auth, normalize_api_url,
-    normalize_op_ref, op_read, requested_profile, select_profile, stored_api_url, validate_op_ref,
-    validate_profile_name,
+    Active, AuthFile, Config, DEFAULT_PROFILE, KeySource, Migration, api_key_env_is_set, api_url,
+    auth_path, migrate_to_profiles, normalize_api_url, normalize_op_ref, op_read,
+    requested_profile, select_profile, stored_api_url, validate_op_ref, validate_profile_name,
 };
 
 #[derive(Parser)]
@@ -101,9 +100,9 @@ struct TagGetArgs {
 
 #[derive(Subcommand)]
 enum AuthCommand {
-    /// Store a 1Password secret reference to your API key in a profile
-    /// (`default` unless `--profile` names another). The key itself is never
-    /// written to disk; every `dn` call resolves it with `op read`.
+    /// Store a 1Password secret reference to your API key in a profile and
+    /// make it the default. The key itself is never written to disk; every
+    /// `dn` call resolves it with `op read`.
     Login(AuthLoginArgs),
     /// Show which profile and API key source a call would use (never prints
     /// the key)
@@ -112,7 +111,8 @@ enum AuthCommand {
     List,
     /// Make a profile the default for calls that don't name one
     Switch(AuthSwitchArgs),
-    /// Forget a profile (the one `--profile` names, else the default)
+    /// Forget a profile (the one `--profile` names, else the default). If it
+    /// was the default, another profile becomes the default.
     Logout(AuthLogoutArgs),
 }
 
@@ -136,10 +136,12 @@ struct AuthLoginArgs {
     #[arg(long = "ref", value_name = "op://vault/item/field")]
     reference: Option<String>,
     /// API base URL for this profile, e.g. a staging server. Kept when
-    /// omitted; a new profile falls back to `config.json`'s `api_url`, then
-    /// https://api.defined.net.
+    /// omitted; a new profile uses https://api.defined.net.
     #[arg(long, value_name = "URL")]
     api_url: Option<String>,
+    /// Don't make this profile the default (the first profile always is)
+    #[arg(long)]
+    keep_default: bool,
     /// Skip resolving the reference and calling the API before saving
     #[arg(long)]
     no_verify: bool,
@@ -309,14 +311,13 @@ fn main() -> ExitCode {
     }
 }
 
-/// Say once what [`migrate_legacy_auth`] did, on stderr only so `--json`
+/// Say once what [`migrate_to_profiles`] did, on stderr only so `--json`
 /// output never changes. A failed rewrite is a warning, never an error.
 fn report_migration(migration: Migration) {
     match migration {
         Migration::NotNeeded => {}
-        Migration::Migrated(path) => {
-            eprintln!("migrated {} to the profiles format", path.display())
-        }
+        Migration::Migrated(notes) if notes.is_empty() => {}
+        Migration::Migrated(notes) => eprintln!("migrated credentials: {notes}"),
         Migration::Failed(path, err) => eprintln!(
             "warning: could not migrate {} to the profiles format ({err:#}); \
              using it as-is and retrying next time",
@@ -396,7 +397,7 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
 }
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
-    report_migration(migrate_legacy_auth());
+    report_migration(migrate_to_profiles());
     preflight(cli).map_err(InvalidArgument)?;
 
     match &cli.command {
@@ -462,51 +463,98 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
     if let Some(url) = &args.api_url {
         profile.api_url = Some(normalize_api_url(url));
     }
-    let settings = FileConfig::load()?;
     if !args.no_verify {
         let key = op_read(&reference)?;
-        Client::new(Config::with_key(key, Some(&profile), &settings))
+        Client::new(Config::with_key(key, Some(&profile)))
             .verify_key()
             .map_err(label_verify_error)?;
     }
     profile.key = Some(reference.clone());
-    let api_url = stored_api_url(Some(&profile), &settings);
     auth.profiles.insert(name.clone(), profile);
-    // A login never moves the default away from another profile, so a
-    // staging login can't redirect every later call; `auth switch` does that.
-    let default_is_valid = auth
-        .default_profile
-        .as_ref()
-        .is_some_and(|d| auth.profiles.contains_key(d));
-    if !default_is_valid {
+    // Like `gh` and `tg`, the profile just logged in to becomes the default,
+    // unless asked not to.
+    let previous_default = auth.default_profile.clone();
+    if !args.keep_default {
         auth.default_profile = Some(name.clone());
     }
-    let is_default = auth.default_profile.as_deref() == Some(name.as_str());
+    auth.ensure_default();
     let path = auth.save()?;
     let env_override = warn_env_override();
 
     if json {
-        print_json(&json!({
-            "ok": true,
-            "profile": name,
-            "default": is_default,
-            "api_url": api_url,
-            "auth_path": path,
-            "api_key_ref": reference,
-            "env_override": env_override,
-        }))?;
-    } else {
-        println!(
-            "Saved profile \"{name}\" ({api_url}) to {}. `dn` will resolve its key with `op read` on every call.",
-            path.display()
-        );
-        if !is_default {
-            println!(
-                "Use it with --profile {name} or DN_PROFILE={name}, or make it the default with `dn auth switch {name}`."
-            );
+        let mut out = profiles_json(&auth);
+        out.as_object_mut().unwrap().extend([
+            ("ok".into(), json!(true)),
+            ("profile".into(), json!(name)),
+            ("auth_path".into(), json!(path)),
+            ("env_override".into(), json!(env_override)),
+        ]);
+        return print_json(&out);
+    }
+    println!(
+        "Saved profile \"{name}\" to {}. `dn` will resolve its key with `op read` on every call.",
+        path.display()
+    );
+    print_default_change(previous_default.as_deref(), &auth);
+    print!("{}", render_profiles(&auth));
+    Ok(())
+}
+
+/// Say when a command changed the default profile.
+fn print_default_change(previous: Option<&str>, auth: &AuthFile) {
+    let current = auth.default_profile.as_deref();
+    if current != previous {
+        match current {
+            Some(name) => println!("Default profile is now \"{name}\"."),
+            None => println!("No profiles remain."),
         }
     }
-    Ok(())
+}
+
+/// `{default_profile, profiles: [{name, default, api_url, api_key_ref}]}`,
+/// the shape `auth list` prints and every command that changes profiles
+/// includes.
+fn profiles_json(auth: &AuthFile) -> Value {
+    let default = auth.default_profile.as_deref();
+    let profiles: Vec<Value> = auth
+        .profiles
+        .iter()
+        .map(|(name, profile)| {
+            json!({
+                "name": name,
+                "default": default == Some(name.as_str()),
+                "api_url": stored_api_url(Some(profile)),
+                "api_key_ref": profile.key,
+            })
+        })
+        .collect();
+    json!({ "default_profile": default, "profiles": profiles })
+}
+
+/// The profiles as a table, `*` marking the default.
+fn render_profiles(auth: &AuthFile) -> String {
+    if auth.profiles.is_empty() {
+        return "No profiles. Run `dn auth login` to create one.\n".to_string();
+    }
+    let default = auth.default_profile.as_deref();
+    let rows: Vec<Vec<String>> = auth
+        .profiles
+        .iter()
+        .map(|(name, profile)| {
+            vec![
+                if default == Some(name.as_str()) {
+                    "*"
+                } else {
+                    ""
+                }
+                .to_string(),
+                name.clone(),
+                stored_api_url(Some(profile)),
+                profile.key.clone().unwrap_or_default(),
+            ]
+        })
+        .collect();
+    render_table(&["", "PROFILE", "API URL", "KEY"], &rows)
 }
 
 /// Reject an `--api-url` that can't be an API base before anything is saved.
@@ -575,11 +623,10 @@ fn prompt_for_reference() -> anyhow::Result<String> {
 /// misconfigured key — unreadable credentials, a bad reference, or a blank
 /// env var is reported as `source: "invalid"` so callers can branch on it.
 fn auth_status(profile_flag: Option<&str>, json: bool) -> anyhow::Result<()> {
-    let settings = FileConfig::load()?;
     let auth_path = auth_path()?;
     let active = Active::load(profile_flag);
     let profile = active.as_ref().ok().and_then(|a| a.profile.as_ref());
-    let api_url = api_url(profile, &settings);
+    let api_url = api_url(profile);
     let profile_name = active.as_ref().ok().and_then(|a| a.profile_name.clone());
     let source = active.as_ref().map(|a| a.source.as_ref());
     let (label, reference, message) = match &source {
@@ -595,7 +642,6 @@ fn auth_status(profile_flag: Option<&str>, json: bool) -> anyhow::Result<()> {
             "api_key_ref": reference,
             "message": message,
             "auth_path": auth_path,
-            "config_path": config_path()?,
             "api_url": api_url,
         }));
     }
@@ -625,49 +671,10 @@ fn auth_status(profile_flag: Option<&str>, json: bool) -> anyhow::Result<()> {
 
 fn auth_list(json: bool) -> anyhow::Result<()> {
     let auth = AuthFile::load()?;
-    let settings = FileConfig::load()?;
-    let default = auth.default_profile.as_deref();
-    let rows: Vec<(&String, bool, String, Option<&str>)> = auth
-        .profiles
-        .iter()
-        .map(|(name, profile)| {
-            (
-                name,
-                default == Some(name.as_str()),
-                stored_api_url(Some(profile), &settings),
-                profile.key.as_deref(),
-            )
-        })
-        .collect();
-
     if json {
-        let profiles: Vec<Value> = rows
-            .iter()
-            .map(|(name, is_default, url, key)| {
-                json!({ "name": name, "default": is_default, "api_url": url, "api_key_ref": key })
-            })
-            .collect();
-        return print_json(&json!({ "default_profile": default, "profiles": profiles }));
+        return print_json(&profiles_json(&auth));
     }
-    if rows.is_empty() {
-        println!("No profiles. Run `dn auth login` to create one.");
-        return Ok(());
-    }
-    let table: Vec<Vec<String>> = rows
-        .iter()
-        .map(|(name, is_default, url, key)| {
-            vec![
-                if *is_default { "*" } else { "" }.to_string(),
-                (*name).clone(),
-                url.clone(),
-                key.unwrap_or("").to_string(),
-            ]
-        })
-        .collect();
-    print!(
-        "{}",
-        render_table(&["", "PROFILE", "API URL", "KEY"], &table)
-    );
+    print!("{}", render_profiles(&auth));
     Ok(())
 }
 
@@ -680,16 +687,23 @@ fn auth_switch(args: &AuthSwitchArgs, json: bool) -> anyhow::Result<()> {
         ))
         .into());
     }
+    let previous_default = auth.default_profile.clone();
     auth.default_profile = Some(args.name.clone());
     let path = auth.save()?;
     if json {
-        return print_json(&json!({
-            "ok": true,
-            "default_profile": args.name,
-            "auth_path": path,
-        }));
+        let mut out = profiles_json(&auth);
+        out.as_object_mut().unwrap().extend([
+            ("ok".into(), json!(true)),
+            ("auth_path".into(), json!(path)),
+        ]);
+        return print_json(&out);
     }
-    println!("Default profile is now \"{}\".", args.name);
+    if previous_default.as_deref() == Some(args.name.as_str()) {
+        println!("\"{}\" is already the default profile.", args.name);
+    } else {
+        print_default_change(previous_default.as_deref(), &auth);
+    }
+    print!("{}", render_profiles(&auth));
     Ok(())
 }
 
@@ -700,25 +714,19 @@ fn auth_logout(
 ) -> anyhow::Result<()> {
     let path = auth_path()?;
     let (mut auth, corrupt) = AuthFile::load_or_reset()?;
+    let previous_default = auth.default_profile.clone();
     // An unreadable file can't be edited profile by profile, so logging out
     // of it removes it, as does `--all`.
     let (removed, profile) = if args.all || corrupt.is_some() {
+        auth = AuthFile::default();
         (remove_auth_file(&path)?, None)
     } else {
         let requested = requested_profile(profile_flag)?;
         match select_profile(requested.as_deref(), &auth)? {
-            None if !auth.profiles.is_empty() => {
-                return Err(InvalidArgument(anyhow!(
-                    "no default profile is set; pass --profile <name> (see `dn auth list`) or --all"
-                ))
-                .into());
-            }
             None => (false, None),
             Some((name, _)) => {
                 auth.profiles.remove(&name);
-                if auth.default_profile.as_deref() == Some(name.as_str()) {
-                    auth.default_profile = None;
-                }
+                auth.ensure_default();
                 if auth.profiles.is_empty() {
                     remove_auth_file(&path)?;
                 } else {
@@ -731,24 +739,27 @@ fn auth_logout(
     let env_override = warn_env_override();
 
     if json {
-        return print_json(&json!({
-            "ok": true,
-            "removed": removed,
-            "profile": profile,
-            "default_profile": auth.default_profile,
-            "auth_path": path,
-            "env_override": env_override,
-        }));
+        let mut out = profiles_json(&auth);
+        out.as_object_mut().unwrap().extend([
+            ("ok".into(), json!(true)),
+            ("removed".into(), json!(removed)),
+            ("profile".into(), json!(profile)),
+            ("auth_path".into(), json!(path)),
+            ("env_override".into(), json!(env_override)),
+        ]);
+        return print_json(&out);
     }
     match (&profile, removed) {
-        (Some(name), _) => {
-            println!("Removed profile \"{name}\".");
-            if auth.default_profile.is_none() && !auth.profiles.is_empty() {
-                println!("No default profile is set now; pick one with `dn auth switch <name>`.");
-            }
-        }
+        (Some(name), _) => println!("Removed profile \"{name}\"."),
         (None, true) => println!("Removed {}.", path.display()),
-        (None, false) => println!("No stored credentials to remove."),
+        (None, false) => {
+            println!("No stored credentials to remove.");
+            return Ok(());
+        }
+    }
+    print_default_change(previous_default.as_deref(), &auth);
+    if !auth.profiles.is_empty() {
+        print!("{}", render_profiles(&auth));
     }
     Ok(())
 }

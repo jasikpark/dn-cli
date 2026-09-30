@@ -72,13 +72,15 @@ dn auth switch staging                # make it the default
 dn auth logout --profile staging      # or --all
 ```
 
-A call uses `--profile`, else `DN_PROFILE`, else the default profile. A login
-never changes the default (except for the very first profile); `auth switch`
-does. A profile without its own URL uses `config.json`'s `api_url`, then
-`https://api.defined.net`.
+A call uses `--profile`, else `DN_PROFILE`, else the default profile. Like
+`gh`, `auth login` makes the profile it saves the default (`--keep-default`
+opts out), and logging out of the default makes another profile the default.
+Each of these commands prints the resulting profiles. A profile without its own
+URL uses `https://api.defined.net`.
 
-An `auth.json` from before profiles is converted to a `default` profile the
-first time any `dn` command runs, with a one-line notice on stderr.
+Credentials from before profiles are converted the first time any `dn` command
+runs, with a one-line notice on stderr: the old `auth.json` becomes a `default`
+profile, and `config.json`'s `api_url` moves into it.
 
 For CI or agents, `DEFINED_API_KEY` in the environment takes precedence over any
 profile's key (the selected profile still supplies the URL). It may hold the raw
