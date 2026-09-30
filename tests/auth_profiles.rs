@@ -115,7 +115,7 @@ fn run_in_parallel(dir: &Path, n: usize) {
     let leftovers: Vec<_> = fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().file_name())
-        .filter(|name| name != "auth.json")
+        .filter(|name| name != "auth.json" && name != "auth.json.lock")
         .collect();
     assert!(leftovers.is_empty(), "files left behind: {leftovers:?}");
 }
@@ -620,4 +620,252 @@ fn a_non_production_url_is_noted_for_humans_only() {
     let json_output = dn_with(dir.path(), &["host", "list", "--json"], &env);
     assert!(json_output.status.success(), "{json_output:?}");
     assert!(json_output.stderr.is_empty(), "{json_output:?}");
+}
+
+/// A login racing migrations must not be lost. Before locking, about 2% of
+/// runs ended without the new profile, so this repeats enough to notice.
+#[test]
+fn a_login_during_migration_is_kept() {
+    for _ in 0..40 {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        fs::write(d.join("auth.json"), LEGACY).unwrap();
+        fs::write(
+            d.join("config.json"),
+            r#"{"api_url":"https://staging.example"}"#,
+        )
+        .unwrap();
+        let spawn = |args: &[&str]| {
+            Command::new(env!("CARGO_BIN_EXE_dn"))
+                .args(args)
+                .env("DN_CONFIG_DIR", d)
+                .env_remove("DEFINED_API_KEY")
+                .env_remove("DEFINED_API_URL")
+                .env_remove("DN_PROFILE")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        let mut children: Vec<_> = (0..4).map(|_| spawn(&["auth", "list", "--json"])).collect();
+        children.push(spawn(&[
+            "auth",
+            "login",
+            "--profile",
+            "work",
+            "--ref",
+            "op://w/i/f",
+            "--no-verify",
+            "--json",
+        ]));
+        for child in children {
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+        }
+        let auth = auth_json(d);
+        assert_eq!(auth["profiles"]["work"]["key"], "op://w/i/f", "{auth}");
+        assert_eq!(
+            auth["profiles"]["default"]["api_url"], "https://staging.example",
+            "{auth}"
+        );
+    }
+}
+
+#[test]
+fn logout_of_one_profile_never_deletes_an_unreadable_file() {
+    for text in ["not valid JSON", r#"{"version":3,"profiles":{}}"#] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("auth.json"), text).unwrap();
+
+        let output = dn(dir.path(), &["auth", "logout", "--profile", "a", "--json"]);
+        assert_eq!(output.status.code(), Some(1), "{text}: {output:?}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("auth.json")).unwrap(),
+            text,
+            "the file must survive"
+        );
+
+        let output = dn(dir.path(), &["auth", "logout", "--all", "--json"]);
+        assert!(output.status.success(), "{text}: {output:?}");
+        assert!(!dir.path().join("auth.json").exists(), "--all clears it");
+    }
+}
+
+#[test]
+fn login_refuses_to_replace_a_file_from_a_newer_dn() {
+    let dir = tempfile::tempdir().unwrap();
+    let newer = r#"{"version":3,"profiles":{"x":{}}}"#;
+    fs::write(dir.path().join("auth.json"), newer).unwrap();
+
+    let output = dn(
+        dir.path(),
+        &[
+            "auth",
+            "login",
+            "--no-verify",
+            "--ref",
+            "op://v/i/f",
+            "--json",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let message = stdout_json(&output)["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.contains("unsupported auth.json version 3"),
+        "{message}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("auth.json")).unwrap(),
+        newer
+    );
+}
+
+#[test]
+fn a_missing_or_dangling_default_is_repaired_on_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    fs::write(
+        d.join("auth.json"),
+        r#"{"version":2,"default_profile":"gone","profiles":{"b":{"key":"op://v/b/f"},"a":{"key":"op://v/a/f"}}}"#,
+    )
+    .unwrap();
+    let status = stdout_json(&dn(d, &["auth", "status", "--json"]));
+    assert_eq!(status["profile"], "a");
+    assert_eq!(status["api_key_ref"], "op://v/a/f");
+    assert_eq!(
+        stdout_json(&dn(d, &["auth", "list", "--json"]))["default_profile"],
+        "a"
+    );
+
+    fs::write(
+        d.join("auth.json"),
+        r#"{"version":2,"default_profile":"zz","profiles":{}}"#,
+    )
+    .unwrap();
+    let list = stdout_json(&dn(d, &["auth", "list", "--json"]));
+    assert_eq!(list, json!({ "default_profile": null, "profiles": [] }));
+}
+
+#[test]
+fn config_api_url_goes_to_the_actual_default_and_differences_are_noted() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    // No default_profile: the repaired default ("b") gets the URL.
+    fs::write(
+        d.join("auth.json"),
+        r#"{"version":2,"profiles":{"b":{"key":"op://v/b/f"}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        d.join("config.json"),
+        r#"{"api_url":"https://stg.example"}"#,
+    )
+    .unwrap();
+    let output = dn(d, &["auth", "status", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let auth = auth_json(d);
+    assert_eq!(
+        auth["profiles"]["b"]["api_url"], "https://stg.example",
+        "{auth}"
+    );
+    assert!(auth["profiles"].get("default").is_none(), "{auth}");
+
+    // A profile URL wins over a different config.json one, with a notice.
+    fs::write(
+        d.join("config.json"),
+        r#"{"api_url":"https://other.example"}"#,
+    )
+    .unwrap();
+    let output = dn(d, &["auth", "status", "--json"]);
+    assert!(
+        stderr(&output).contains("dropped api_url https://other.example"),
+        "{output:?}"
+    );
+    assert_eq!(
+        auth_json(d)["profiles"]["b"]["api_url"],
+        "https://stg.example"
+    );
+    assert!(!d.join("config.json").exists());
+}
+
+#[test]
+fn an_unusable_url_is_refused_before_op_read() {
+    let dir = tempfile::tempdir().unwrap();
+    login(dir.path(), &["--ref", "op://v/i/f"]);
+    // No `op` on PATH: had it been run first, the error would be about `op`.
+    let output = dn_with(
+        dir.path(),
+        &["host", "list", "--json"],
+        &[
+            ("DEFINED_API_URL", "http://localhost:80@127.0.0.2:1"),
+            ("PATH", ""),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let message = stdout_json(&output)["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.contains("DEFINED_API_URL is not usable"),
+        "{message}"
+    );
+    assert!(message.contains("'@'"), "{message}");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_config_json_that_cant_be_rewritten_is_reported_once_per_call() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    fs::write(d.join("auth.json"), LEGACY).unwrap();
+    // A config.json managed elsewhere: a symlink into a read-only directory.
+    let managed = d.join("managed");
+    fs::create_dir(&managed).unwrap();
+    fs::write(
+        managed.join("dn.json"),
+        r#"{"api_url":"https://stg.example"}"#,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(managed.join("dn.json"), d.join("config.json")).unwrap();
+    fs::set_permissions(&managed, fs::Permissions::from_mode(0o555)).unwrap();
+    if fs::write(managed.join("probe"), "").is_ok() {
+        fs::set_permissions(&managed, fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: this user can write to a read-only directory");
+        return;
+    }
+
+    let first = dn(d, &["auth", "status", "--json"]);
+    assert!(first.status.success(), "{first:?}");
+    let err = stderr(&first);
+    assert!(err.contains("moved api_url"), "{err}");
+    assert!(err.contains("remove it by hand"), "{err}");
+    assert!(err.contains("config.json"), "{err}");
+    let mut want = migrated();
+    want["profiles"]["default"]["api_url"] = json!("https://stg.example");
+    assert_eq!(auth_json(d), want);
+
+    // Later calls don't rewrite auth.json and only repeat the warning.
+    let before = fs::metadata(d.join("auth.json"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    let second = dn(d, &["auth", "status", "--json"]);
+    let err = stderr(&second);
+    assert!(!err.contains("moved api_url"), "{err}");
+    assert!(err.contains("remove it by hand"), "{err}");
+    assert_eq!(
+        fs::metadata(d.join("auth.json"))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        before
+    );
+    fs::set_permissions(&managed, fs::Permissions::from_mode(0o755)).unwrap();
 }

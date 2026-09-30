@@ -64,6 +64,49 @@ impl Default for AuthFile {
     }
 }
 
+/// An `auth.json` whose `version` this binary doesn't know.
+#[derive(Debug)]
+pub struct UnsupportedAuthVersion(String);
+
+impl fmt::Display for UnsupportedAuthVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "unsupported auth.json version {} (written by a newer dn?); upgrade dn, \
+             or run `dn auth logout --all` to discard it",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for UnsupportedAuthVersion {}
+
+/// An exclusive advisory lock on the credentials, held while a command reads,
+/// changes and writes `auth.json` (and, when migrating, `config.json`), so
+/// concurrent `dn` processes can't lose each other's changes. It lives in a
+/// separate `auth.json.lock` because `auth.json` itself is replaced by rename.
+/// Released on drop.
+pub struct AuthLock(#[allow(dead_code)] fs::File);
+
+impl AuthLock {
+    pub fn acquire() -> Result<Self> {
+        let path = config_dir()?.join("auth.json.lock");
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)
+                .with_context(|| format!("failed to create {}", dir.display()))?;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        file.lock()
+            .with_context(|| format!("failed to lock {}", path.display()))?;
+        Ok(Self(file))
+    }
+}
+
 /// The `auth.json` layout before profiles: one reference, no `version`.
 #[derive(Deserialize)]
 struct LegacyAuthFile {
@@ -94,21 +137,24 @@ impl From<LegacyAuthFile> for AuthFile {
 impl AuthFile {
     /// Parse either layout. The flag is true for the old single-reference
     /// layout, which comes back already converted to profiles.
+    ///
+    /// A hand-edited default that is missing or names no profile is repaired
+    /// in memory (see [`AuthFile::ensure_default`]), so callers can rely on a
+    /// default whenever there are profiles.
     fn parse(text: &str) -> Result<(Self, bool)> {
         let value: serde_json::Value = serde_json::from_str(text)?;
-        match value.get("version") {
-            None => Ok((
+        let (mut auth, legacy) = match value.get("version") {
+            None => (
                 serde_json::from_value::<LegacyAuthFile>(value)?.into(),
                 true,
-            )),
-            Some(version) if version.as_u64() == Some(AUTH_VERSION) => {
-                Ok((serde_json::from_value(value)?, false))
-            }
-            Some(version) => bail!(
-                "unsupported auth.json version {version} (written by a newer dn?); \
-                 upgrade dn or run `dn auth logout --all` and log in again"
             ),
-        }
+            Some(version) if version.as_u64() == Some(AUTH_VERSION) => {
+                (serde_json::from_value::<AuthFile>(value)?, false)
+            }
+            Some(version) => return Err(UnsupportedAuthVersion(version.to_string()).into()),
+        };
+        auth.ensure_default();
+        Ok((auth, legacy))
     }
 
     /// Read the credentials file, treating a missing file as no profiles. An
@@ -124,11 +170,15 @@ impl AuthFile {
         }
     }
 
+    /// Like [`AuthFile::load`], but an unparsable file comes back as no
+    /// profiles plus the error, for `auth login` to replace. A file from a
+    /// newer `dn` is still an error: replacing it would lose its profiles.
     pub fn load_or_reset() -> Result<(Self, Option<anyhow::Error>)> {
-        Ok(match Self::load() {
-            Ok(cfg) => (cfg, None),
-            Err(e) => (Self::default(), Some(e)),
-        })
+        match Self::load() {
+            Ok(cfg) => Ok((cfg, None)),
+            Err(e) if e.downcast_ref::<UnsupportedAuthVersion>().is_some() => Err(e),
+            Err(e) => Ok((Self::default(), Some(e))),
+        }
     }
 
     pub fn save(&self) -> Result<PathBuf> {
@@ -163,16 +213,49 @@ impl AuthFile {
     }
 }
 
-/// What [`migrate_to_profiles`] did.
-#[derive(Debug)]
-pub enum Migration {
-    /// Nothing to migrate (or another call just did it). Unreadable and
-    /// corrupt files are left for the command itself to report.
-    NotNeeded,
-    /// What moved, for a one-line notice.
-    Migrated(String),
-    /// A rewrite failed. The command still runs; the next call retries.
-    Failed(PathBuf, anyhow::Error),
+/// What [`migrate_to_profiles`] did, for stderr: notices of what moved, and
+/// warnings for what couldn't be done.
+#[derive(Debug, Default)]
+pub struct Migration {
+    pub notes: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// The parsed pieces migration looks at: the credentials (converted in
+/// memory if old), whether they were in the old layout, and `config.json`
+/// as a JSON object if it parses.
+struct MigrationInputs {
+    auth: AuthFile,
+    legacy: bool,
+    config: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl MigrationInputs {
+    /// `None` when `auth.json` can't be read or parsed; the command itself
+    /// reports that.
+    fn read(auth_path: &Path, config_path: &Path) -> Option<Self> {
+        let (auth, legacy) = match read_optional(auth_path).ok()? {
+            None => (AuthFile::default(), false),
+            Some(text) => AuthFile::parse(&text).ok()?,
+        };
+        let config = read_optional(config_path)
+            .ok()
+            .flatten()
+            .and_then(|text| serde_json::from_str(&text).ok());
+        Some(Self {
+            auth,
+            legacy,
+            config,
+        })
+    }
+
+    fn needed(&self) -> bool {
+        self.legacy
+            || self
+                .config
+                .as_ref()
+                .is_some_and(|c| c.contains_key("api_url"))
+    }
 }
 
 /// Bring credentials into the profiles layout. Every `dn` call runs this
@@ -184,78 +267,101 @@ pub enum Migration {
 ///   profile already has one) and is removed from `config.json`, which is
 ///   deleted once empty.
 ///
-/// It never fails the command. Parallel calls are safe: `auth.json` is read
-/// before `config.json` and re-read just before it is written, and the write
-/// is skipped if it changed. So a call that sees `config.json` already
-/// stripped also sees the migrated `auth.json` and backs off, and two calls
-/// that both see the old files write identical bytes atomically.
+/// It never fails the command. The common case, nothing to migrate, reads
+/// without locking; otherwise the work is redone under [`AuthLock`], so
+/// parallel calls migrate once and can't lose a concurrent `auth login`.
+/// `auth.json` is written before `config.json` is stripped, so a failure in
+/// between leaves the URL in both places, never in neither.
 pub fn migrate_to_profiles() -> Migration {
+    let mut migration = Migration::default();
     let (Ok(auth_path), Ok(config_path)) = (auth_path(), config_path()) else {
-        return Migration::NotNeeded;
+        return migration;
     };
-    let Ok(auth_text) = read_optional(&auth_path) else {
-        return Migration::NotNeeded;
-    };
-    let (mut auth, legacy) = match &auth_text {
-        None => (AuthFile::default(), false),
-        Some(text) => match AuthFile::parse(text) {
-            Ok(parsed) => parsed,
-            Err(_) => return Migration::NotNeeded,
-        },
-    };
-    let config_text = read_optional(&config_path).ok().flatten();
-    let mut config: Option<serde_json::Map<String, serde_json::Value>> = config_text
-        .as_deref()
-        .and_then(|text| serde_json::from_str(text).ok());
-    let moved_url = config
-        .as_mut()
-        .and_then(|c| c.remove("api_url"))
-        .and_then(|url| url.as_str().map(str::trim).map(str::to_string));
-    if !legacy && moved_url.is_none() {
-        return Migration::NotNeeded;
+    if !MigrationInputs::read(&auth_path, &config_path).is_some_and(|m| m.needed()) {
+        return migration;
     }
+    let _lock = match AuthLock::acquire() {
+        Ok(lock) => lock,
+        Err(e) => {
+            migration.warnings.push(format!(
+                "could not migrate credentials ({e:#}); using them as-is and retrying next time"
+            ));
+            return migration;
+        }
+    };
+    let Some(MigrationInputs {
+        mut auth,
+        legacy,
+        mut config,
+    }) = MigrationInputs::read(&auth_path, &config_path)
+    else {
+        return migration;
+    };
 
-    let mut notes = Vec::new();
+    let mut auth_changed = legacy;
     if legacy {
-        notes.push(format!("converted {} to profiles", auth_path.display()));
+        migration
+            .notes
+            .push(format!("converted {} to profiles", auth_path.display()));
     }
-    if let Some(url) = moved_url.filter(|u| !u.is_empty()) {
+    let config_url = config.as_mut().and_then(|c| c.remove("api_url"));
+    if let Some(url) = config_url
+        .as_ref()
+        .and_then(|u| u.as_str())
+        .map(normalize_api_url)
+        .filter(|u| !u.is_empty())
+    {
         let target = auth
             .default_profile
             .clone()
             .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
         let profile = auth.profiles.entry(target.clone()).or_default();
-        if profile.api_url.is_none() {
-            profile.api_url = Some(normalize_api_url(&url));
-            notes.push(format!(
-                "moved api_url from {} into profile {target:?}",
+        match profile.api_url.as_deref().map(normalize_api_url) {
+            None => {
+                profile.api_url = Some(url);
+                auth_changed = true;
+                migration.notes.push(format!(
+                    "moved api_url from {} into profile {target:?}",
+                    config_path.display()
+                ));
+            }
+            Some(existing) if existing != url => migration.notes.push(format!(
+                "dropped api_url {url} from {}: profile {target:?} already uses {existing}",
                 config_path.display()
-            ));
+            )),
+            Some(_) => {}
         }
         auth.ensure_default();
     }
 
-    let write = || -> Result<bool> {
-        if read_optional(&auth_path)? != auth_text {
-            return Ok(false);
-        }
-        write_private(&auth_path, &auth.to_text()?)?;
-        match &config {
-            Some(rest) if rest.is_empty() => remove_file_if_present(&config_path)?,
-            Some(rest) => {
-                let mut text = serde_json::to_string_pretty(rest)?;
-                text.push('\n');
-                write_private(&config_path, &text)?;
-            }
-            None => {}
-        }
-        Ok(true)
-    };
-    match write() {
-        Ok(true) => Migration::Migrated(notes.join("; ")),
-        Ok(false) => Migration::NotNeeded,
-        Err(e) => Migration::Failed(auth_path, e),
+    if auth_changed && let Err(e) = auth.save() {
+        migration.notes.clear();
+        migration.warnings.push(format!(
+            "could not migrate {} ({e:#}); using it as-is and retrying next time",
+            auth_path.display()
+        ));
+        return migration;
     }
+    if config_url.is_some() {
+        let stripped = match &config {
+            Some(rest) if rest.is_empty() => remove_file_if_present(&config_path),
+            Some(rest) => serde_json::to_string_pretty(rest)
+                .map_err(anyhow::Error::from)
+                .and_then(|mut text| {
+                    text.push('\n');
+                    write_private(&config_path, &text)
+                }),
+            None => Ok(()),
+        };
+        if let Err(e) = stripped {
+            migration.warnings.push(format!(
+                "api_url in {} is no longer used, but it couldn't be removed ({e:#}); \
+                 remove it by hand",
+                config_path.display()
+            ));
+        }
+    }
+    migration
 }
 
 /// A file's contents, or `None` if it doesn't exist.
@@ -707,23 +813,37 @@ pub fn stored_api_url(profile: Option<&Profile>) -> String {
 /// what a local mock API needs. Anything else would send the key in clear.
 pub fn check_api_url(url: &str) -> Result<()> {
     let url = url.trim();
-    if url.is_empty() || url.contains(char::is_whitespace) {
-        bail!("expected an https:// URL, got {url:?}");
-    }
-    if let Some(rest) = url.strip_prefix("https://") {
-        if rest.is_empty() || rest.starts_with('/') {
-            bail!("expected an https:// URL with a host, got {url:?}");
-        }
-        return Ok(());
-    }
-    let Some(rest) = url.strip_prefix("http://") else {
+    let (secure, rest) = if let Some(rest) = url.strip_prefix("https://") {
+        (true, rest)
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        (false, rest)
+    } else {
         bail!("expected an https:// URL, got {url:?}");
     };
+    // A base URL has no credentials, query or fragment. Refusing `@`
+    // anywhere also stops `http://localhost:80@evil.example`, whose real
+    // host is after the `@`; `\` is refused because some parsers treat it
+    // as `/`.
+    if let Some(bad) = rest
+        .chars()
+        .find(|c| c.is_whitespace() || matches!(c, '@' | '?' | '#' | '\\'))
+    {
+        bail!("expected a plain API base URL, but {url:?} contains {bad:?}");
+    }
     let authority = rest.split('/').next().unwrap_or_default();
     let host = match authority.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        Some(v6) => match v6.split_once(']') {
+            Some((host, port)) if port.is_empty() || port.starts_with(':') => host,
+            _ => bail!("malformed IPv6 host in {url:?}"),
+        },
         None => authority.split(':').next().unwrap_or_default(),
     };
+    if host.is_empty() {
+        bail!("expected a URL with a host, got {url:?}");
+    }
+    if secure {
+        return Ok(());
+    }
     let loopback = host.eq_ignore_ascii_case("localhost")
         || host == "::1"
         || host
@@ -780,18 +900,20 @@ impl Config {
                  reference) or set {API_KEY_ENV}."
             )
         })?;
-        let api_key = match source {
-            KeySource::Env(key) => key,
-            KeySource::EnvRef(r) | KeySource::FileRef(r) => op_read(&r)?,
-        };
-        let mut config = Self::with_key(api_key, active.profile.as_ref());
-        check_api_url(&config.api_url).with_context(|| match non_empty_env("DEFINED_API_URL") {
+        // Refuse an unusable URL before `op read`, which may prompt to unlock.
+        let url = api_url(active.profile.as_ref());
+        check_api_url(&url).with_context(|| match non_empty_env("DEFINED_API_URL") {
             Some(_) => "DEFINED_API_URL is not usable".to_string(),
             None => format!(
                 "the API URL of profile {:?} is not usable",
                 active.profile_name.as_deref().unwrap_or(DEFAULT_PROFILE)
             ),
         })?;
+        let api_key = match source {
+            KeySource::Env(key) => key,
+            KeySource::EnvRef(r) | KeySource::FileRef(r) => op_read(&r)?,
+        };
+        let mut config = Self::with_key(api_key, active.profile.as_ref());
         config.profile = active.profile_name;
         Ok(config)
     }
@@ -1025,6 +1147,16 @@ mod tests {
             "http://127.0.0.1.evil.test",
             "http://[::2]",
             "https://a b",
+            // Userinfo: the real host is after the `@`.
+            "http://localhost:80@evil.example",
+            "http://localhost:@evil.example",
+            "http://[::1]@evil.example",
+            "http://127.0.0.1@evil.example",
+            "https://user@api.defined.net",
+            "https://@",
+            // A base URL can't carry a query or fragment.
+            "https://api.defined.net?x=1",
+            "https://api.defined.net#frag",
         ] {
             assert!(check_api_url(bad).is_err(), "{bad:?} should be rejected");
         }

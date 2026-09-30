@@ -2,6 +2,8 @@
 name = "dn-cli"
 version = "0.2.9"
 edition = "2024"
+# `std::fs::File::lock` guards concurrent edits to auth.json.
+rust-version = "1.89"
 description = "Unofficial CLI for the Defined Networking API"
 repository = "https://github.com/jasikpark/dn-cli"
 homepage = "https://github.com/jasikpark/dn-cli"

@@ -62,7 +62,8 @@ forgets the profile. Pass `--ref op://...` to `auth login` when scripting it.
 ### Profiles
 
 Each login is stored as a named profile, one per Defined Networking account.
-The first one is `default`. Add more for other accounts:
+`auth login` without `--profile` saves to the default profile (`default` on a
+fresh setup). Add more for other accounts:
 
 ```bash
 dn auth login --profile work --ref op://Work/dn/credential

@@ -12,9 +12,10 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::api::{ApiError, Client};
 use crate::config::{
-    Active, AuthFile, Config, DEFAULT_PROFILE, KeySource, Migration, api_key_env_is_set, api_url,
-    auth_path, check_api_url, migrate_to_profiles, normalize_api_url, normalize_op_ref, op_read,
-    requested_profile, select_profile, stored_api_url, validate_op_ref, validate_profile_name,
+    Active, AuthFile, AuthLock, Config, DEFAULT_PROFILE, KeySource, Migration, Profile,
+    api_key_env_is_set, api_url, auth_path, check_api_url, migrate_to_profiles, normalize_api_url,
+    normalize_op_ref, op_read, requested_profile, select_profile, stored_api_url, validate_op_ref,
+    validate_profile_name,
 };
 
 #[derive(Parser)]
@@ -315,15 +316,11 @@ fn main() -> ExitCode {
 /// Say once what [`migrate_to_profiles`] did, on stderr only so `--json`
 /// output never changes. A failed rewrite is a warning, never an error.
 fn report_migration(migration: Migration) {
-    match migration {
-        Migration::NotNeeded => {}
-        Migration::Migrated(notes) if notes.is_empty() => {}
-        Migration::Migrated(notes) => eprintln!("migrated credentials: {notes}"),
-        Migration::Failed(path, err) => eprintln!(
-            "warning: could not migrate {} to the profiles format ({err:#}); \
-             using it as-is and retrying next time",
-            path.display()
-        ),
+    if !migration.notes.is_empty() {
+        eprintln!("migrated credentials: {}", migration.notes.join("; "));
+    }
+    for warning in migration.warnings {
+        eprintln!("warning: {warning}");
     }
 }
 
@@ -453,23 +450,46 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
     };
     validate_op_ref(&reference)?;
 
+    // Verify against the URL the profile will be saved with, before taking
+    // the lock: `op read` may wait on a 1Password prompt, and every other
+    // `dn` call that migrates or edits credentials would wait with it.
+    let (planned, _) = AuthFile::load_or_reset()?;
+    let name = requested_profile(profile_flag)?
+        .or_else(|| planned.default_profile.clone())
+        .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
+    let saved_url = || {
+        args.api_url
+            .as_deref()
+            .map(normalize_api_url)
+            .or_else(|| planned.profiles.get(&name).and_then(|p| p.api_url.clone()))
+    };
+    if !args.no_verify {
+        let target = Profile {
+            api_url: saved_url(),
+            ..Profile::default()
+        };
+        let url = stored_api_url(Some(&target));
+        check_api_url(&url)?;
+        let key = op_read(&reference)?;
+        Client::new(Config {
+            api_key: key,
+            api_url: url,
+            profile: None,
+        })
+        .verify_key()
+        .map_err(label_verify_error)?;
+    }
+
+    // Re-read under the lock and apply only this login's change, so a
+    // concurrent login or migration isn't overwritten.
+    let _lock = AuthLock::acquire()?;
     let (mut auth, corrupt) = AuthFile::load_or_reset()?;
     if let Some(err) = corrupt {
         eprintln!("warning: replacing unreadable auth file ({err:#})");
     }
-    let name = requested_profile(profile_flag)?
-        .or_else(|| auth.default_profile.clone())
-        .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
     let mut profile = auth.profiles.get(&name).cloned().unwrap_or_default();
     if let Some(url) = &args.api_url {
         profile.api_url = Some(normalize_api_url(url));
-    }
-    if !args.no_verify {
-        check_api_url(&api_url(Some(&profile)))?;
-        let key = op_read(&reference)?;
-        Client::new(Config::with_key(key, Some(&profile)))
-            .verify_key()
-            .map_err(label_verify_error)?;
     }
     profile.key = Some(reference.clone());
     auth.profiles.insert(name.clone(), profile);
@@ -688,6 +708,7 @@ fn auth_list(json: bool) -> anyhow::Result<()> {
 }
 
 fn auth_switch(args: &AuthSwitchArgs, json: bool) -> anyhow::Result<()> {
+    let _lock = AuthLock::acquire()?;
     let mut auth = AuthFile::load()?;
     if !auth.profiles.contains_key(&args.name) {
         return Err(InvalidArgument(anyhow!(
@@ -722,12 +743,17 @@ fn auth_logout(
     json: bool,
 ) -> anyhow::Result<()> {
     let path = auth_path()?;
-    let (mut auth, corrupt) = AuthFile::load_or_reset()?;
+    let _lock = AuthLock::acquire()?;
+    // `--all` removes the file without reading it, so it also clears a
+    // corrupt file or one from a newer `dn`. Removing one profile needs a
+    // readable file; an unreadable one is an error, never a deletion.
+    let mut auth = if args.all {
+        AuthFile::default()
+    } else {
+        AuthFile::load()?
+    };
     let previous_default = auth.default_profile.clone();
-    // An unreadable file can't be edited profile by profile, so logging out
-    // of it removes it, as does `--all`.
-    let (removed, profile) = if args.all || corrupt.is_some() {
-        auth = AuthFile::default();
+    let (removed, profile) = if args.all {
         (remove_auth_file(&path)?, None)
     } else {
         let requested = requested_profile(profile_flag)?;
