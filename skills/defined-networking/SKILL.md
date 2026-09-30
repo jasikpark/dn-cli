@@ -22,8 +22,10 @@ dn auth status --json
 
 `source` is `file`, `env`, `env-ref`, `none`, or `invalid` (a malformed `op://`
 reference, a blank `DEFINED_API_KEY`, or a missing profile; `message` says
-which — surface it to the user). `profile` names the profile in use and
-`api_url` the server it talks to. On `none`, stop and ask the
+which — surface it to the user). `profile` names the profile (account) in use
+and `api_url` the server it talks to; anything other than
+`https://api.defined.net` is a test or mock server, so say so when you report
+results. On `none`, stop and ask the
 user to run `dn auth login` themselves — it needs their 1Password reference and
 an interactive terminal; do not try to prompt for it or pass `--ref` on their
 behalf. Every call that resolves an `op://` reference may pop a 1Password unlock

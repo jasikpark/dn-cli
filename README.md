@@ -61,31 +61,46 @@ forgets the profile. Pass `--ref op://...` to `auth login` when scripting it.
 
 ### Profiles
 
-Each login is stored as a named profile: a key reference plus an optional API
-URL. The first one is `default`. Add more for other accounts or servers:
+Each login is stored as a named profile, one per Defined Networking account.
+The first one is `default`. Add more for other accounts:
 
 ```bash
-dn auth login --profile staging --api-url https://api.staging.example --ref op://Dev/dn-staging/credential
-dn host list --profile staging        # or DN_PROFILE=staging dn host list
+dn auth login --profile work --ref op://Work/dn/credential
+dn host list --profile work           # or DN_PROFILE=work dn host list
 dn auth list                          # * marks the default
-dn auth switch staging                # make it the default
-dn auth logout --profile staging      # or --all
+dn auth switch work                   # make it the default
+dn auth logout --profile work         # or --all
 ```
 
 A call uses `--profile`, else `DN_PROFILE`, else the default profile. Like
 `gh`, `auth login` makes the profile it saves the default (`--keep-default`
 opts out), and logging out of the default makes another profile the default.
-Each of these commands prints the resulting profiles. A profile without its own
-URL uses `https://api.defined.net`.
+Each of these commands prints the resulting profiles.
 
 Credentials from before profiles are converted the first time any `dn` command
 runs, with a one-line notice on stderr: the old `auth.json` becomes a `default`
 profile, and `config.json`'s `api_url` moves into it.
 
 For CI or agents, `DEFINED_API_KEY` in the environment takes precedence over any
-profile's key (the selected profile still supplies the URL). It may hold the raw
-key or an `op://` reference — `dn` resolves the latter the same way. Override
-the base URL with `DEFINED_API_URL`.
+profile's key. It may hold the raw key or an `op://` reference — `dn` resolves
+the latter the same way.
+
+### Testing against another API server
+
+Every profile talks to `https://api.defined.net` unless it was saved with
+`--api-url`. That, and `DEFINED_API_URL` (which overrides any profile's URL for
+one call), exist for testing — against a local mock API, or a non-production
+server:
+
+```bash
+DEFINED_API_URL=http://127.0.0.1:8080 DEFINED_API_KEY=test dn host list   # a local mock
+dn auth login --profile test --api-url https://api.test.example --keep-default
+```
+
+Plain `http://` is only allowed to this machine (`localhost`, `127.0.0.1`,
+`[::1]`), so the key never crosses a network unencrypted. When a call isn't
+going to `https://api.defined.net`, `dn` says so on stderr (never under
+`--json`).
 
 ## Develop
 

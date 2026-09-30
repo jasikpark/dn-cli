@@ -495,7 +495,30 @@ fn profile_errors_name_the_problem() {
             ],
             &[],
             "ERR_INVALID_ARGUMENT",
-            "--api-url must be",
+            "--api-url: expected an https:// URL",
+        ),
+        (
+            &[
+                "auth",
+                "login",
+                "--ref",
+                "op://v/i/f",
+                "--api-url",
+                "http://staging.example",
+                "--json",
+            ],
+            &[],
+            "ERR_INVALID_ARGUMENT",
+            "refusing to send the API key over plain http://",
+        ),
+        (
+            &["host", "list", "--json"],
+            &[
+                ("DEFINED_API_KEY", "k"),
+                ("DEFINED_API_URL", "http://staging.example"),
+            ],
+            "ERR_LOCAL",
+            "DEFINED_API_URL is not usable: refusing to send the API key over plain http://",
         ),
     ] {
         let output = dn_with(dir.path(), args, env);
@@ -568,4 +591,33 @@ fn api_calls_go_to_the_selected_profile_url() {
         seen.iter().any(|line| line.starts_with("GET /v2/hosts")),
         "{seen:?}"
     );
+}
+
+#[test]
+fn a_non_production_url_is_noted_for_humans_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let (url, _) = serve_empty_hosts();
+    login(
+        dir.path(),
+        &[
+            "--profile",
+            "mock",
+            "--ref",
+            "op://v/i/f",
+            "--api-url",
+            &url,
+        ],
+    );
+    let env = [("DEFINED_API_KEY", "fake-test-key")];
+
+    let human = dn_with(dir.path(), &["host", "list"], &env);
+    assert!(human.status.success(), "{human:?}");
+    assert_eq!(
+        stderr(&human).trim(),
+        format!("note: using {url} (from profile \"mock\")")
+    );
+
+    let json_output = dn_with(dir.path(), &["host", "list", "--json"], &env);
+    assert!(json_output.status.success(), "{json_output:?}");
+    assert!(json_output.stderr.is_empty(), "{json_output:?}");
 }

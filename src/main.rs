@@ -13,7 +13,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::api::{ApiError, Client};
 use crate::config::{
     Active, AuthFile, Config, DEFAULT_PROFILE, KeySource, Migration, api_key_env_is_set, api_url,
-    auth_path, migrate_to_profiles, normalize_api_url, normalize_op_ref, op_read,
+    auth_path, check_api_url, migrate_to_profiles, normalize_api_url, normalize_op_ref, op_read,
     requested_profile, select_profile, stored_api_url, validate_op_ref, validate_profile_name,
 };
 
@@ -135,8 +135,9 @@ struct AuthLoginArgs {
     /// (interactive terminals only).
     #[arg(long = "ref", value_name = "op://vault/item/field")]
     reference: Option<String>,
-    /// API base URL for this profile, e.g. a staging server. Kept when
-    /// omitted; a new profile uses https://api.defined.net.
+    /// API server for this account, for testing against a mock or
+    /// non-production API. Kept when omitted; a new profile uses
+    /// https://api.defined.net. Plain http:// only to localhost.
     #[arg(long, value_name = "URL")]
     api_url: Option<String>,
     /// Don't make this profile the default (the first profile always is)
@@ -409,7 +410,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             AuthCommand::Logout(args) => auth_logout(args, cli.profile.as_deref(), cli.json)?,
         },
         Command::Host { command } => {
-            let client = Client::new(Config::load(cli.profile.as_deref())?);
+            let client = api_client(cli)?;
             match command {
                 HostCommand::List => hosts_list(&client, cli.json)?,
                 HostCommand::Search(args) => hosts_search(&client, args, cli.json)?,
@@ -419,20 +420,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
         }
         Command::Network { command } => {
-            let client = Client::new(Config::load(cli.profile.as_deref())?);
+            let client = api_client(cli)?;
             match command {
                 NetworkCommand::List => networks_list(&client, cli.json)?,
             }
         }
         Command::Role { command } => {
-            let client = Client::new(Config::load(cli.profile.as_deref())?);
+            let client = api_client(cli)?;
             match command {
                 RoleCommand::List => roles_list(&client, cli.json)?,
                 RoleCommand::Get(args) => roles_get(&client, args, cli.json)?,
             }
         }
         Command::Tag { command } => {
-            let client = Client::new(Config::load(cli.profile.as_deref())?);
+            let client = api_client(cli)?;
             match command {
                 TagCommand::List => tags_list(&client, cli.json)?,
                 TagCommand::Get(args) => tags_get(&client, args, cli.json)?,
@@ -464,6 +465,7 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
         profile.api_url = Some(normalize_api_url(url));
     }
     if !args.no_verify {
+        check_api_url(&api_url(Some(&profile)))?;
         let key = op_read(&reference)?;
         Client::new(Config::with_key(key, Some(&profile)))
             .verify_key()
@@ -559,13 +561,20 @@ fn render_profiles(auth: &AuthFile) -> String {
 
 /// Reject an `--api-url` that can't be an API base before anything is saved.
 fn validate_api_url(url: &str) -> anyhow::Result<()> {
-    let url = url.trim();
-    if !(url.starts_with("https://") || url.starts_with("http://"))
-        || url.contains(char::is_whitespace)
+    check_api_url(url).context("--api-url")
+}
+
+/// The API client for this call. In human mode, a stderr note says when the
+/// call isn't going to the production API, so staging or mock data is never
+/// mistaken for the real thing.
+fn api_client(cli: &Cli) -> anyhow::Result<Client> {
+    let config = Config::load(cli.profile.as_deref())?;
+    if !cli.json
+        && let Some(note) = config.non_default_url_note()
     {
-        bail!("--api-url must be an http:// or https:// URL, got {url:?}");
+        eprintln!("{note}");
     }
-    Ok(())
+    Ok(Client::new(config))
 }
 
 /// Only an API response is evidence the key itself was rejected; anything

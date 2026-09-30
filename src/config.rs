@@ -23,6 +23,8 @@ pub const DEFAULT_PROFILE: &str = "default";
 pub struct Config {
     pub api_key: String,
     pub api_url: String,
+    /// The profile the URL came from, for [`Config::non_default_url_note`].
+    pub profile: Option<String>,
 }
 
 /// One named account: which API to talk to and where its key comes from.
@@ -700,6 +702,42 @@ pub fn stored_api_url(profile: Option<&Profile>) -> String {
     normalize_api_url(raw)
 }
 
+/// Require an API URL that can carry the key safely: `https://`, or
+/// `http://` only to this machine (`localhost`, `127.*`, `[::1]`), which is
+/// what a local mock API needs. Anything else would send the key in clear.
+pub fn check_api_url(url: &str) -> Result<()> {
+    let url = url.trim();
+    if url.is_empty() || url.contains(char::is_whitespace) {
+        bail!("expected an https:// URL, got {url:?}");
+    }
+    if let Some(rest) = url.strip_prefix("https://") {
+        if rest.is_empty() || rest.starts_with('/') {
+            bail!("expected an https:// URL with a host, got {url:?}");
+        }
+        return Ok(());
+    }
+    let Some(rest) = url.strip_prefix("http://") else {
+        bail!("expected an https:// URL, got {url:?}");
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if !loopback {
+        bail!(
+            "refusing to send the API key over plain http:// to {host:?}; use https://, \
+             or http:// only for a local mock server (localhost, 127.0.0.1, [::1])"
+        );
+    }
+    Ok(())
+}
+
 pub fn normalize_api_url(raw: &str) -> String {
     raw.trim().trim_end_matches('/').to_string()
 }
@@ -710,7 +748,25 @@ impl Config {
         Self {
             api_key,
             api_url: api_url(profile),
+            profile: None,
         }
+    }
+
+    /// A reminder that this call isn't talking to the production API, naming
+    /// where the URL came from; `None` for the default URL.
+    pub fn non_default_url_note(&self) -> Option<String> {
+        if self.api_url == DEFAULT_API_URL {
+            return None;
+        }
+        let from = if non_empty_env("DEFINED_API_URL").is_some() {
+            "DEFINED_API_URL".to_string()
+        } else {
+            match &self.profile {
+                Some(name) => format!("profile {name:?}"),
+                None => "the default profile".to_string(),
+            }
+        };
+        Some(format!("note: using {} (from {from})", self.api_url))
     }
 
     /// Resolve the API key (running `op read` if the source is a reference)
@@ -728,7 +784,16 @@ impl Config {
             KeySource::Env(key) => key,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => op_read(&r)?,
         };
-        Ok(Self::with_key(api_key, active.profile.as_ref()))
+        let mut config = Self::with_key(api_key, active.profile.as_ref());
+        check_api_url(&config.api_url).with_context(|| match non_empty_env("DEFINED_API_URL") {
+            Some(_) => "DEFINED_API_URL is not usable".to_string(),
+            None => format!(
+                "the API URL of profile {:?} is not usable",
+                active.profile_name.as_deref().unwrap_or(DEFAULT_PROFILE)
+            ),
+        })?;
+        config.profile = active.profile_name;
+        Ok(config)
     }
 }
 
@@ -933,6 +998,36 @@ mod tests {
         assert_eq!(stored_api_url(Some(&profile)), "https://staging.test");
         assert_eq!(stored_api_url(Some(&blank)), DEFAULT_API_URL);
         assert_eq!(stored_api_url(None), DEFAULT_API_URL);
+    }
+
+    #[test]
+    fn check_api_url_allows_plain_http_only_to_this_machine() {
+        for good in [
+            "https://api.defined.net",
+            "https://staging.example:8443/base",
+            "http://localhost:8080",
+            "http://LOCALHOST",
+            "http://127.0.0.1:1",
+            "http://127.1.2.3/",
+            "http://[::1]:9000",
+        ] {
+            check_api_url(good).unwrap_or_else(|e| panic!("{good}: {e}"));
+        }
+        for bad in [
+            "",
+            "staging.example",
+            "ftp://x.test",
+            "https://",
+            "https:///path",
+            "http://staging.example",
+            "http://10.0.0.5:8080",
+            "http://localhost.evil.test",
+            "http://127.0.0.1.evil.test",
+            "http://[::2]",
+            "https://a b",
+        ] {
+            assert!(check_api_url(bad).is_err(), "{bad:?} should be rejected");
+        }
     }
 
     #[test]
