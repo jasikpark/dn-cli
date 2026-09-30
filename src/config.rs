@@ -56,6 +56,13 @@ pub struct AuthFile {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+impl Profile {
+    /// Whether this profile's key lives in the OS keyring.
+    pub fn uses_keyring(&self) -> bool {
+        self.key.as_deref().map(str::trim) == Some(KEYRING)
+    }
+}
+
 impl Default for AuthFile {
     fn default() -> Self {
         Self {
@@ -651,10 +658,10 @@ impl Active {
 /// keyring, or its `op://` reference. `None` for a profile saved with only a
 /// URL (e.g. migrated from `config.json`), which needs `DEFINED_API_KEY`.
 pub fn profile_key_source(name: &str, profile: &Profile) -> Result<Option<KeySource>> {
-    match profile.key.as_deref().map(str::trim) {
-        Some(KEYRING) => Ok(Some(KeySource::Keyring(name.to_string()))),
-        key => resolve_key_source(None, key).with_context(|| format!("profile {name:?}")),
+    if profile.uses_keyring() {
+        return Ok(Some(KeySource::Keyring(name.to_string())));
     }
+    resolve_key_source(None, profile.key.as_deref()).with_context(|| format!("profile {name:?}"))
 }
 
 /// Pure precedence: env (raw or `op://`) beats the file reference. `None` when

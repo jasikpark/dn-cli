@@ -123,6 +123,12 @@ fn login_stores_the_key_in_the_keyring_not_on_disk() {
 /// A local API that records each request's Authorization header and answers
 /// with an empty list.
 fn serve() -> (String, Arc<Mutex<Vec<String>>>) {
+    serve_accepting(None)
+}
+
+/// Like [`serve`], but with `Some(key)` only `Bearer <key>` gets a 200; any
+/// other key gets the API's 401.
+fn serve_accepting(accepted: Option<&'static str>) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -132,21 +138,30 @@ fn serve() -> (String, Arc<Mutex<Vec<String>>>) {
             let mut stream = stream.unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
+            let mut authorization = String::new();
             loop {
                 line.clear();
                 if reader.read_line(&mut line).unwrap() <= 2 {
                     break;
                 }
-                if let Some(value) = line.strip_prefix("authorization: ") {
-                    log.lock().unwrap().push(value.trim().to_string());
-                } else if let Some(value) = line.strip_prefix("Authorization: ") {
-                    log.lock().unwrap().push(value.trim().to_string());
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("authorization: ") {
+                    authorization = line[line.len() - value.len()..].trim().to_string();
+                    log.lock().unwrap().push(authorization.clone());
                 }
             }
-            let body = r#"{"data":[],"metadata":{}}"#;
+            let ok = accepted.is_none_or(|key| authorization == format!("Bearer {key}"));
+            let (status, body) = if ok {
+                ("200 OK", r#"{"data":[],"metadata":{}}"#)
+            } else {
+                (
+                    "401 Unauthorized",
+                    r#"{"errors":[{"code":"ERR_UNAUTHORIZED","message":"bad key"}]}"#,
+                )
+            };
             write!(
                 stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
                  Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             )
@@ -311,4 +326,112 @@ fn non_interactive_login_needs_key_stdin_or_ref() {
         &[],
     );
     assert_eq!(output.status.code(), Some(2), "{output:?}");
+}
+
+#[test]
+fn login_checks_the_key_itself_against_the_api() {
+    let env = Env::new();
+    let (url, seen) = serve_accepting(Some("good-key"));
+    let login = |key: &str| {
+        env.run(
+            &["auth", "login", "--key-stdin", "--api-url", &url, "--json"],
+            key,
+            &[],
+        )
+    };
+
+    let rejected = login("wrong-key");
+    assert_eq!(rejected.status.code(), Some(1), "{rejected:?}");
+    let message = error_message(&rejected);
+    assert!(message.starts_with("the API rejected the key"), "{message}");
+    assert_eq!(
+        env.keyring_entries(),
+        json!({}),
+        "a rejected key is not stored"
+    );
+    assert!(!env.dir.path().join("auth.json").exists());
+
+    let accepted = login("good-key\r\n");
+    assert!(accepted.status.success(), "{accepted:?}");
+    assert_eq!(env.keyring_entries(), json!({ "default": "good-key" }));
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        ["Bearer wrong-key", "Bearer good-key"]
+    );
+}
+
+#[test]
+fn logging_in_again_replaces_the_stored_key() {
+    let env = Env::new();
+    env.login("default", "old-key", &[]);
+    env.login("default", "new-key", &[]);
+    assert_eq!(env.keyring_entries(), json!({ "default": "new-key" }));
+}
+
+#[test]
+fn keys_that_cant_be_api_keys_are_refused() {
+    let env = Env::new();
+    let huge = "k".repeat(5000);
+    for (stdin, expected) in [
+        ("op://Personal/dn/credential", "pass it with --ref"),
+        ("abc\u{0}def", "printable ASCII"),
+        ("clé", "printable ASCII"),
+        (huge.as_str(), "longer than"),
+    ] {
+        let output = env.run(
+            &["auth", "login", "--key-stdin", "--no-verify", "--json"],
+            stdin,
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let message = error_message(&output);
+        assert!(message.contains(expected), "{expected}: {message}");
+    }
+    assert_eq!(env.keyring_entries(), json!({}));
+}
+
+#[test]
+fn logout_with_an_unavailable_keyring_warns_and_still_logs_out() {
+    let env = Env::new();
+    env.login("a", "key-a", &[]);
+    env.login("b", "key-b", &[]);
+
+    let output = env.run(
+        &["auth", "logout", "--profile", "a", "--json"],
+        "",
+        &[("DN_TEST_KEYRING", "unavailable")],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("could not remove the OS keyring entry for profile \"a\""),
+        "{stderr}"
+    );
+    assert!(env.auth_json()["profiles"].get("a").is_none());
+}
+
+#[test]
+fn profile_names_that_differ_only_in_case_are_refused() {
+    // Windows Credential Manager can't tell their keyring entries apart.
+    let env = Env::new();
+    env.login("work", "key", &[]);
+    let output = env.run(
+        &[
+            "auth",
+            "login",
+            "--profile",
+            "Work",
+            "--key-stdin",
+            "--no-verify",
+            "--json",
+        ],
+        "other-key",
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        error_message(&output).contains("only in case"),
+        "{output:?}"
+    );
+    assert_eq!(env.keyring_entries(), json!({ "work": "key" }));
 }

@@ -462,6 +462,17 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
     let name = requested_profile(profile_flag)?
         .or_else(|| planned.default_profile.clone())
         .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
+    if let Some(other) = planned
+        .profiles
+        .keys()
+        .find(|other| **other != name && other.eq_ignore_ascii_case(&name))
+    {
+        return Err(InvalidArgument(anyhow!(
+            "profile {name:?} differs from the existing {other:?} only in case; \
+             keyring entries on Windows can't tell them apart, so pick another name"
+        ))
+        .into());
+    }
     let saved_url = || {
         args.api_url
             .as_deref()
@@ -488,36 +499,26 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
         .map_err(label_verify_error)?;
     }
 
-    // Re-read under the lock and apply only this login's change, so a
-    // concurrent login or migration isn't overwritten.
-    let _lock = AuthLock::acquire()?;
-    let (mut auth, corrupt) = AuthFile::load_or_reset()?;
-    if let Some(err) = corrupt {
-        eprintln!("warning: replacing unreadable auth file ({err:#})");
+    // The keyring write can also wait on an unlock prompt, so it happens
+    // before the lock too, and before auth.json points at it. If saving the
+    // profile then fails, a keyring entry nothing used before is removed.
+    let had_keyring_entry = planned
+        .profiles
+        .get(&name)
+        .is_some_and(|p| p.uses_keyring());
+    if let LoginKey::Keyring(key) = &key {
+        keystore::set(&name, key)?;
     }
-    let mut profile = auth.profiles.get(&name).cloned().unwrap_or_default();
-    let had_keyring_entry = profile.key.as_deref() == Some(KEYRING);
-    if let Some(url) = &args.api_url {
-        profile.api_url = Some(normalize_api_url(url));
-    }
-    // The keyring entry is written before auth.json points at it, so a
-    // failure here leaves the profile as it was.
-    profile.key = Some(match &key {
-        LoginKey::Keyring(key) => {
-            keystore::set(&name, key)?;
-            KEYRING.to_string()
+    let saved = save_login(args, &name, &key);
+    let (auth, previous_default, path) = match saved {
+        Ok(saved) => saved,
+        Err(e) => {
+            if matches!(key, LoginKey::Keyring(_)) && !had_keyring_entry {
+                let _ = keystore::delete(&name);
+            }
+            return Err(e);
         }
-        LoginKey::Reference(reference) => reference.clone(),
-    });
-    auth.profiles.insert(name.clone(), profile);
-    // Like `gh` and `tg`, the profile just logged in to becomes the default,
-    // unless asked not to.
-    let previous_default = auth.default_profile.clone();
-    if !args.keep_default {
-        auth.default_profile = Some(name.clone());
-    }
-    auth.ensure_default();
-    let path = auth.save()?;
+    };
     if had_keyring_entry && matches!(key, LoginKey::Reference(_)) {
         forget_keyring_entry(&name);
     }
@@ -546,6 +547,39 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
     print_default_change(previous_default.as_deref(), &auth);
     print!("{}", render_profiles(&auth));
     Ok(())
+}
+
+/// Record a login in auth.json under the lock: re-read it and apply only this
+/// login's change, so a concurrent login or migration isn't overwritten.
+/// Returns the saved file, the previous default and its path.
+fn save_login(
+    args: &AuthLoginArgs,
+    name: &str,
+    key: &LoginKey,
+) -> anyhow::Result<(AuthFile, Option<String>, std::path::PathBuf)> {
+    let _lock = AuthLock::acquire()?;
+    let (mut auth, corrupt) = AuthFile::load_or_reset()?;
+    if let Some(err) = corrupt {
+        eprintln!("warning: replacing unreadable auth file ({err:#})");
+    }
+    let mut profile = auth.profiles.get(name).cloned().unwrap_or_default();
+    if let Some(url) = &args.api_url {
+        profile.api_url = Some(normalize_api_url(url));
+    }
+    profile.key = Some(match key {
+        LoginKey::Keyring(_) => KEYRING.to_string(),
+        LoginKey::Reference(reference) => reference.clone(),
+    });
+    auth.profiles.insert(name.to_string(), profile);
+    // Like `gh` and `tg`, the profile just logged in to becomes the default,
+    // unless asked not to.
+    let previous_default = auth.default_profile.clone();
+    if !args.keep_default {
+        auth.default_profile = Some(name.to_string());
+    }
+    auth.ensure_default();
+    let path = auth.save()?;
+    Ok((auth, previous_default, path))
 }
 
 /// Delete a profile's keyring entry that nothing points at any more. Failing
@@ -585,11 +619,11 @@ fn profiles_json(auth: &AuthFile) -> Value {
                 "default": default == Some(name.as_str()),
                 "api_url": stored_api_url(Some(profile)),
                 "key_source": match profile.key.as_deref() {
-                    Some(KEYRING) => json!("keyring"),
+                    _ if profile.uses_keyring() => json!("keyring"),
                     Some(_) => json!("1password"),
                     None => Value::Null,
                 },
-                "api_key_ref": profile.key.as_deref().filter(|k| *k != KEYRING),
+                "api_key_ref": profile.key.as_deref().filter(|_| !profile.uses_keyring()),
             })
         })
         .collect();
@@ -644,7 +678,7 @@ fn api_client(cli: &Cli) -> anyhow::Result<Client> {
 /// else (offline, bad `DEFINED_API_URL`) is a reachability problem.
 fn label_verify_error(err: anyhow::Error) -> anyhow::Error {
     if err.downcast_ref::<ApiError>().is_some() {
-        err.context("the key resolved but the API rejected it")
+        err.context("the API rejected the key")
     } else {
         err.context("could not reach the API to verify the key")
     }
@@ -656,7 +690,7 @@ fn warn_env_override() -> bool {
     let set = api_key_env_is_set();
     if set {
         eprintln!(
-            "warning: DEFINED_API_KEY is set in this environment and takes precedence over the stored reference."
+            "warning: DEFINED_API_KEY is set in this environment and takes precedence over the stored key."
         );
     }
     set
@@ -667,8 +701,12 @@ fn print_json(value: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
-const LOGIN_NEEDS_KEY: &str = "pass --key-stdin (or --ref op://… to use 1Password) \
-     when running non-interactively";
+const LOGIN_NEEDS_KEY: &str = "pass --key-stdin, or --ref op://… to use 1Password: \
+     `auth login` only prompts for the key in a terminal, and never under --json";
+
+/// Far longer than any Defined Networking API key, and under Windows
+/// Credential Manager's 2560-byte limit on a stored secret.
+const MAX_KEY_LEN: usize = 2048;
 
 /// The key a login stores, or the 1Password reference that stands for it.
 enum LoginKey {
@@ -685,11 +723,20 @@ fn read_login_key(args: &AuthLoginArgs) -> anyhow::Result<LoginKey> {
         validate_op_ref(&reference)?;
         return Ok(LoginKey::Reference(reference));
     }
-    let key = if args.key_stdin {
-        let mut key = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut key)
-            .context("failed to read the API key from stdin")?;
-        key
+    // `--key-stdin` from a terminal would echo the key as it's typed, so a
+    // terminal always gets the hidden prompt.
+    let key = if args.key_stdin && !std::io::stdin().is_terminal() {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(
+            &mut std::io::Read::take(std::io::stdin().lock(), MAX_KEY_LEN as u64 + 1),
+            &mut bytes,
+        )
+        .context("failed to read the API key from stdin")?;
+        if bytes.len() > MAX_KEY_LEN {
+            bail!("the input is longer than {MAX_KEY_LEN} bytes, so it isn't an API key");
+        }
+        String::from_utf8(bytes)
+            .map_err(|_| anyhow!("an API key is printable ASCII; check what was piped in"))?
     } else {
         eprintln!(
             "Create an API key at {API_KEYS_URL} (pick only the permissions you need).\n\
@@ -703,8 +750,13 @@ fn read_login_key(args: &AuthLoginArgs) -> anyhow::Result<LoginKey> {
     if key.is_empty() {
         bail!("no API key entered");
     }
-    if key.contains(char::is_whitespace) {
-        bail!("an API key has no spaces or line breaks; check what was pasted");
+    if key.starts_with("op://") {
+        bail!("that is a 1Password secret reference, not a key; pass it with --ref instead");
+    }
+    if !key.bytes().all(|b| b.is_ascii_graphic()) {
+        bail!(
+            "an API key is printable ASCII with no spaces or line breaks; check what was entered"
+        );
     }
     Ok(LoginKey::Keyring(key))
 }
@@ -807,7 +859,10 @@ fn auth_logout(
     json: bool,
 ) -> anyhow::Result<()> {
     let path = auth_path()?;
-    let _lock = AuthLock::acquire()?;
+    let lock = AuthLock::acquire()?;
+    // Keyring entries to delete once the lock is released: deleting can wait
+    // on an unlock prompt, and other `dn` calls shouldn't wait with it.
+    let mut forget = Vec::new();
     // `--all` removes the file without reading it, so it also clears a
     // corrupt file or one from a newer `dn`. Removing one profile needs a
     // readable file; an unreadable one is an error, never a deletion.
@@ -821,11 +876,13 @@ fn auth_logout(
         // Keyring entries are found through the file, so read it if it can
         // be read; an unreadable one can't say which entries are ours.
         match AuthFile::load() {
-            Ok(stored) => stored
-                .profiles
-                .iter()
-                .filter(|(_, p)| p.key.as_deref() == Some(KEYRING))
-                .for_each(|(name, _)| forget_keyring_entry(name)),
+            Ok(stored) => forget.extend(
+                stored
+                    .profiles
+                    .into_iter()
+                    .filter(|(_, p)| p.uses_keyring())
+                    .map(|(name, _)| name),
+            ),
             Err(e) => eprintln!(
                 "warning: could not read the profiles ({e:#}), so any keys they kept in the \
                  OS keyring (service {}) are left there",
@@ -845,13 +902,15 @@ fn auth_logout(
                 } else {
                     auth.save()?;
                 }
-                if removed.is_some_and(|p| p.key.as_deref() == Some(KEYRING)) {
-                    forget_keyring_entry(&name);
+                if removed.is_some_and(|p| p.uses_keyring()) {
+                    forget.push(name.clone());
                 }
                 (true, Some(name))
             }
         }
     };
+    drop(lock);
+    forget.iter().for_each(|name| forget_keyring_entry(name));
     let env_override = warn_env_override();
 
     if json {

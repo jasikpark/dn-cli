@@ -63,7 +63,14 @@ fn describe(err: keyring::Error, profile: &str) -> anyhow::Error {
             "profile {profile:?} has no key in the OS keyring; run \
              `dn auth login --profile {profile}` to store one"
         ),
-        keyring::Error::NoDefaultStore => anyhow!("{UNAVAILABLE_HINT}"),
+        keyring::Error::NoDefaultStore => match keyring::Entry::store_status() {
+            // The reason the store couldn't start (no D-Bus session, no
+            // Secret Service on it) is only kept here.
+            Err(cause) if !matches!(cause, keyring::Error::NoDefaultStore) => {
+                anyhow!("{UNAVAILABLE_HINT} ({cause})")
+            }
+            _ => anyhow!("{UNAVAILABLE_HINT}"),
+        },
         keyring::Error::NoStorageAccess(e) => {
             anyhow!("the OS keyring refused access (is it locked?): {e}")
         }

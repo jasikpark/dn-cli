@@ -66,8 +66,9 @@ failed; branch on `errors[].code`:
 - **Local errors** (exit 1): `status` and `request_id` are `null` because the
   request never reached the API.
   - `ERR_INVALID_ARGUMENT`: `dn` rejected the arguments — a malformed value, or
-    a flag you must add (`--yes`, `--ref`, `--network`). Fix the command; the
-    message says how.
+    a flag you must add (`--yes`, `--network`). Fix the command; the message
+    says how. (An `auth login` that needs `--key-stdin` or `--ref` is for the
+    user to run, not you.)
   - `ERR_LOCAL`: anything else — credentials, config, or the network.
 - **Usage errors** (exit 2): `ERR_USAGE` — an unknown subcommand or flag, or a
   missing argument. Check `dn <command> --help`: the installed `dn` may be
