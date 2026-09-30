@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io::{ErrorKind, IsTerminal};
@@ -10,6 +11,13 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_API_URL: &str = "https://api.defined.net";
 const OP_SCHEME: &str = "op://";
 const API_KEY_ENV: &str = "DEFINED_API_KEY";
+const PROFILE_ENV: &str = "DN_PROFILE";
+/// The `auth.json` layout this binary writes. Files without a `version` are
+/// the single-reference layout that came before profiles.
+const AUTH_VERSION: u64 = 2;
+/// The profile an old single-reference `auth.json` migrates into, and the one
+/// `auth login` creates when nothing else is named.
+pub const DEFAULT_PROFILE: &str = "default";
 
 /// Resolved runtime configuration: a usable bearer token plus the API base.
 pub struct Config {
@@ -44,21 +52,98 @@ impl FileConfig {
     }
 }
 
-/// Credentials file (`auth.json`). Separated from [`FileConfig`] so that
-/// `dn auth logout` can delete credentials without touching settings.
+/// One named account: which API to talk to and where its key comes from.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AuthFile {
+pub struct Profile {
+    /// Falls back to `config.json`'s `api_url`, then the default, when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key_ref: Option<String>,
+    pub api_url: Option<String>,
+    /// A 1Password secret reference to the API key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Credentials file (`auth.json`): named profiles and which one is the
+/// default. Separated from [`FileConfig`] so that `dn auth logout` can delete
+/// credentials without touching settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuthFile {
+    pub version: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_profile: Option<String>,
+    #[serde(default)]
+    pub profiles: BTreeMap<String, Profile>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Default for AuthFile {
+    fn default() -> Self {
+        Self {
+            version: AUTH_VERSION,
+            default_profile: None,
+            profiles: BTreeMap::new(),
+            extra: serde_json::Map::new(),
+        }
+    }
+}
+
+/// The `auth.json` layout before profiles: one reference, no `version`.
+#[derive(Deserialize)]
+struct LegacyAuthFile {
+    #[serde(default)]
+    api_key_ref: Option<String>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl From<LegacyAuthFile> for AuthFile {
+    fn from(legacy: LegacyAuthFile) -> Self {
+        let mut auth = AuthFile {
+            extra: legacy.extra,
+            ..AuthFile::default()
+        };
+        if let Some(reference) = legacy.api_key_ref.filter(|r| !r.trim().is_empty()) {
+            let profile = Profile {
+                key: Some(reference),
+                ..Profile::default()
+            };
+            auth.profiles.insert(DEFAULT_PROFILE.to_string(), profile);
+            auth.default_profile = Some(DEFAULT_PROFILE.to_string());
+        }
+        auth
+    }
+}
+
 impl AuthFile {
+    /// Parse either layout. The flag is true for the old single-reference
+    /// layout, which comes back already converted to profiles.
+    fn parse(text: &str) -> Result<(Self, bool)> {
+        let value: serde_json::Value = serde_json::from_str(text)?;
+        match value.get("version") {
+            None => Ok((
+                serde_json::from_value::<LegacyAuthFile>(value)?.into(),
+                true,
+            )),
+            Some(version) if version.as_u64() == Some(AUTH_VERSION) => {
+                Ok((serde_json::from_value(value)?, false))
+            }
+            Some(version) => bail!(
+                "unsupported auth.json version {version} (written by a newer dn?); \
+                 upgrade dn or run `dn auth logout --all` and log in again"
+            ),
+        }
+    }
+
+    /// Read the credentials file, treating a missing file as no profiles. An
+    /// old-layout file is converted in memory; see [`migrate_legacy_auth`].
     pub fn load() -> Result<Self> {
         let path = auth_path()?;
         match fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text)
+            Ok(text) => Self::parse(&text)
+                .map(|(auth, _)| auth)
                 .with_context(|| format!("failed to parse {}", path.display())),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("failed to read {}", path.display())),
@@ -78,10 +163,59 @@ impl AuthFile {
             fs::create_dir_all(dir)
                 .with_context(|| format!("failed to create {}", dir.display()))?;
         }
+        write_private(&path, &self.to_text()?)?;
+        Ok(path)
+    }
+
+    fn to_text(&self) -> Result<String> {
         let mut text = serde_json::to_string_pretty(self)?;
         text.push('\n');
+        Ok(text)
+    }
+}
+
+/// What [`migrate_legacy_auth`] did.
+#[derive(Debug)]
+pub enum Migration {
+    /// No old-layout file to migrate (missing, unreadable, unparsable, or
+    /// already current). Unreadable and corrupt files are left for the
+    /// command itself to report.
+    NotNeeded,
+    Migrated(PathBuf),
+    /// The rewrite failed; the command still runs on the in-memory conversion.
+    Failed(PathBuf, anyhow::Error),
+}
+
+/// Rewrite an old single-reference `auth.json` as profiles. Every `dn` call
+/// runs this first, so the old layout disappears on first contact. It never
+/// fails the command: a failed write leaves the old file for the next call.
+///
+/// The conversion depends only on the old file's own text, so parallel calls
+/// that race here write identical bytes, and the write is atomic. The file is
+/// re-read just before the write so a call that finds it already changed (by
+/// another migration or a login) leaves it alone.
+pub fn migrate_legacy_auth() -> Migration {
+    let Ok(path) = auth_path() else {
+        return Migration::NotNeeded;
+    };
+    let Ok(original) = fs::read_to_string(&path) else {
+        return Migration::NotNeeded;
+    };
+    let Ok((auth, true)) = AuthFile::parse(&original) else {
+        return Migration::NotNeeded;
+    };
+    let write = || -> Result<bool> {
+        let text = auth.to_text()?;
+        if fs::read_to_string(&path).ok().as_deref() != Some(original.as_str()) {
+            return Ok(false);
+        }
         write_private(&path, &text)?;
-        Ok(path)
+        Ok(true)
+    };
+    match write() {
+        Ok(true) => Migration::Migrated(path),
+        Ok(false) => Migration::NotNeeded,
+        Err(e) => Migration::Failed(path, e),
     }
 }
 
@@ -203,7 +337,7 @@ pub enum KeySource {
     Env(String),
     /// `DEFINED_API_KEY` holds an `op://` reference to resolve.
     EnvRef(String),
-    /// The config file's `api_key_ref`.
+    /// The selected profile's `op://` reference.
     FileRef(String),
 }
 
@@ -235,18 +369,105 @@ impl KeySource {
             KeySource::EnvRef(r) | KeySource::FileRef(r) => Some(r),
         }
     }
+}
 
-    /// Load the active source without resolving any secret. Stored credentials
-    /// are only a fallback: a broken auth file must not block an environment
-    /// key or mask an invalid environment key.
-    pub fn load() -> Result<Option<Self>> {
-        match resolve_key_source(api_key_env().as_deref(), None)? {
-            Some(source) => Ok(Some(source)),
-            None => {
-                let auth = AuthFile::load()?;
-                resolve_key_source(None, auth.api_key_ref.as_deref())
-            }
+/// Validate a profile name: 1–64 ASCII letters, digits, `-`, `_` or `.`, so
+/// it is safe as a keyring account name and in messages.
+pub fn validate_profile_name(name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if !ok {
+        bail!("invalid profile name {name:?}: use 1-64 letters, digits, '-', '_' or '.'");
+    }
+    Ok(())
+}
+
+/// The profile named for this call: `--profile`, else `DN_PROFILE`. `None`
+/// means "use the default profile". Existence is not checked here, since
+/// `auth login` creates the profile it names.
+pub fn requested_profile(flag: Option<&str>) -> Result<Option<String>> {
+    let name = flag
+        .map(|f| f.trim().to_string())
+        .or_else(|| non_empty_env(PROFILE_ENV));
+    if let Some(name) = &name {
+        validate_profile_name(name)
+            .with_context(|| format!("{PROFILE_ENV} or --profile names an invalid profile"))?;
+    }
+    Ok(name)
+}
+
+/// The profile a command runs as, looked up in `auth`: the requested one,
+/// else the default. `None` when nothing is requested and no default is set.
+pub fn select_profile<'a>(
+    requested: Option<&str>,
+    auth: &'a AuthFile,
+) -> Result<Option<(String, &'a Profile)>> {
+    let Some(name) = requested.or(auth.default_profile.as_deref()) else {
+        return Ok(None);
+    };
+    match auth.profiles.get(name) {
+        Some(profile) => Ok(Some((name.to_string(), profile))),
+        None if requested.is_some() => bail!(
+            "no profile named {name:?}. Run `dn auth list` to see profiles, or \
+             `dn auth login --profile {name}` to create it."
+        ),
+        None => bail!(
+            "the default profile {name:?} does not exist. Run `dn auth switch <name>` \
+             to pick another (see `dn auth list`)."
+        ),
+    }
+}
+
+/// Everything a call needs to know about its credentials, short of the secret.
+pub struct Active {
+    pub source: Option<KeySource>,
+    pub profile_name: Option<String>,
+    pub profile: Option<Profile>,
+}
+
+impl Active {
+    /// Load without resolving any secret. `DEFINED_API_KEY` wins over any
+    /// profile's key, and a broken auth file must not block it or mask an
+    /// invalid one; the file then only supplies the profile's URL, and is
+    /// skipped when it can't be read unless a profile was asked for by name.
+    pub fn load(profile_flag: Option<&str>) -> Result<Self> {
+        let requested = requested_profile(profile_flag)?;
+        if let Some(source) = resolve_key_source(api_key_env().as_deref(), None)? {
+            let auth = match AuthFile::load() {
+                Ok(auth) => auth,
+                Err(e) if requested.is_some() => return Err(e),
+                Err(_) => AuthFile::default(),
+            };
+            let selected = match select_profile(requested.as_deref(), &auth) {
+                Ok(selected) => selected,
+                Err(e) if requested.is_some() => return Err(e),
+                Err(_) => None,
+            };
+            let (profile_name, profile) = selected.map(|(n, p)| (n, p.clone())).unzip();
+            return Ok(Self {
+                source: Some(source),
+                profile_name,
+                profile,
+            });
         }
+        let auth = AuthFile::load()?;
+        let Some((name, profile)) = select_profile(requested.as_deref(), &auth)? else {
+            return Ok(Self {
+                source: None,
+                profile_name: None,
+                profile: None,
+            });
+        };
+        let source = resolve_key_source(None, profile.key.as_deref())
+            .with_context(|| format!("profile {name:?}"))?;
+        Ok(Self {
+            source,
+            profile_name: Some(name),
+            profile: Some(profile.clone()),
+        })
     }
 }
 
@@ -273,7 +494,7 @@ pub fn resolve_key_source(
         };
     }
     if let Some(r) = file_ref.map(str::trim).filter(|r| !r.is_empty()) {
-        validate_op_ref(r).context("api_key_ref is an invalid op:// reference")?;
+        validate_op_ref(r).context("the stored key is an invalid op:// reference")?;
         return Ok(Some(KeySource::FileRef(r.to_string())));
     }
     Ok(None)
@@ -397,41 +618,51 @@ pub fn op_read(reference: &str) -> Result<String> {
     Ok(key)
 }
 
-/// The API base: `DEFINED_API_URL` over the file's `api_url` over the
-/// default, trimmed and without a trailing slash so path concatenation never
-/// yields `//v2/...`.
-pub fn api_url(file: &FileConfig) -> String {
-    let raw = non_empty_env("DEFINED_API_URL")
-        .or_else(|| {
-            file.api_url
-                .as_deref()
-                .map(str::trim)
-                .filter(|u| !u.is_empty())
-                .map(str::to_string)
-        })
+/// The API base: `DEFINED_API_URL` over [`stored_api_url`].
+pub fn api_url(profile: Option<&Profile>, file: &FileConfig) -> String {
+    match non_empty_env("DEFINED_API_URL") {
+        Some(url) => normalize_api_url(&url),
+        None => stored_api_url(profile, file),
+    }
+}
+
+/// The API base a profile is configured with, ignoring the environment: the
+/// profile's `api_url`, else `config.json`'s, else the default. Trimmed and
+/// without a trailing slash so path concatenation never yields `//v2/...`.
+pub fn stored_api_url(profile: Option<&Profile>, file: &FileConfig) -> String {
+    let non_blank = |url: &Option<String>| {
+        url.as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .map(str::to_string)
+    };
+    let raw = profile
+        .and_then(|p| non_blank(&p.api_url))
+        .or_else(|| non_blank(&file.api_url))
         .unwrap_or_else(|| DEFAULT_API_URL.to_string());
     normalize_api_url(&raw)
 }
 
-fn normalize_api_url(raw: &str) -> String {
+pub fn normalize_api_url(raw: &str) -> String {
     raw.trim().trim_end_matches('/').to_string()
 }
 
 impl Config {
     /// Build a config from an already-resolved key.
-    pub fn with_key(api_key: String, file: &FileConfig) -> Self {
+    pub fn with_key(api_key: String, profile: Option<&Profile>, file: &FileConfig) -> Self {
         Self {
             api_key,
-            api_url: api_url(file),
+            api_url: api_url(profile, file),
         }
     }
 
     /// Resolve the API key (running `op read` if the source is a reference)
-    /// and the base URL. Only commands that talk to the API call this.
-    pub fn load() -> Result<Self> {
-        let source = KeySource::load()?;
+    /// and the base URL for the selected profile. Only commands that talk to
+    /// the API call this.
+    pub fn load(profile_flag: Option<&str>) -> Result<Self> {
+        let active = Active::load(profile_flag)?;
         let settings = FileConfig::load()?;
-        let source = source.ok_or_else(|| {
+        let source = active.source.ok_or_else(|| {
             anyhow!(
                 "No API key configured. Run `dn auth login` (stores a 1Password secret \
                  reference) or set {API_KEY_ENV}."
@@ -441,7 +672,7 @@ impl Config {
             KeySource::Env(key) => key,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => op_read(&r)?,
         };
-        Ok(Self::with_key(api_key, &settings))
+        Ok(Self::with_key(api_key, active.profile.as_ref(), &settings))
     }
 }
 
@@ -568,17 +799,125 @@ mod tests {
     }
 
     #[test]
-    fn auth_file_roundtrips_and_omits_none() {
-        let auth = AuthFile {
-            api_key_ref: Some("op://v/i/f".into()),
+    fn auth_file_roundtrips_profiles_and_unknown_keys() {
+        let text = r#"{"version":2,"default_profile":"prod","profiles":{"prod":{"key":"op://v/i/f","future":1}},"later":true}"#;
+        let (auth, legacy) = AuthFile::parse(text).unwrap();
+        assert!(!legacy);
+        assert_eq!(auth.default_profile.as_deref(), Some("prod"));
+        assert_eq!(auth.profiles["prod"].key.as_deref(), Some("op://v/i/f"));
+        assert_eq!(auth.profiles["prod"].api_url, None);
+        let back: serde_json::Value = serde_json::from_str(&auth.to_text().unwrap()).unwrap();
+        assert_eq!(
+            back,
+            serde_json::from_str::<serde_json::Value>(text).unwrap()
+        );
+    }
+
+    #[test]
+    fn legacy_auth_file_becomes_a_default_profile() {
+        let (auth, legacy) =
+            AuthFile::parse(r#"{"api_key_ref":"op://v/i/f","other":"kept"}"#).unwrap();
+        assert!(legacy);
+        assert_eq!(
+            serde_json::to_value(&auth).unwrap(),
+            serde_json::json!({
+                "version": 2,
+                "default_profile": "default",
+                "profiles": { "default": { "key": "op://v/i/f" } },
+                "other": "kept",
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_auth_file_without_a_reference_has_no_profiles() {
+        for text in ["{}", r#"{"api_key_ref":"  "}"#] {
+            let (auth, legacy) = AuthFile::parse(text).unwrap();
+            assert!(legacy, "{text}");
+            assert!(auth.profiles.is_empty(), "{text}");
+            assert_eq!(auth.default_profile, None, "{text}");
+        }
+    }
+
+    #[test]
+    fn unknown_auth_file_versions_are_errors() {
+        let err = AuthFile::parse(r#"{"version":3}"#).unwrap_err().to_string();
+        assert!(err.contains("unsupported auth.json version 3"), "{err}");
+        assert!(AuthFile::parse(r#"{"version":"2"}"#).is_err());
+        assert!(AuthFile::parse("[]").is_err());
+    }
+
+    fn two_profiles() -> AuthFile {
+        let mut auth = AuthFile {
+            default_profile: Some("prod".into()),
             ..AuthFile::default()
         };
-        let text = serde_json::to_string(&auth).unwrap();
-        assert_eq!(text, r#"{"api_key_ref":"op://v/i/f"}"#);
-        let back: AuthFile = serde_json::from_str(&text).unwrap();
-        assert_eq!(back, auth);
-        let empty = serde_json::to_string(&AuthFile::default()).unwrap();
-        assert_eq!(empty, "{}");
+        for name in ["prod", "staging"] {
+            auth.profiles.insert(
+                name.into(),
+                Profile {
+                    key: Some(format!("op://v/{name}/f")),
+                    ..Profile::default()
+                },
+            );
+        }
+        auth
+    }
+
+    #[test]
+    fn select_profile_prefers_the_requested_one_over_the_default() {
+        let auth = two_profiles();
+        let pick = |requested| select_profile(requested, &auth).unwrap().map(|(n, _)| n);
+        assert_eq!(pick(None).as_deref(), Some("prod"));
+        assert_eq!(pick(Some("staging")).as_deref(), Some("staging"));
+        assert_eq!(select_profile(None, &AuthFile::default()).unwrap(), None);
+    }
+
+    #[test]
+    fn select_profile_rejects_missing_profiles() {
+        let mut auth = two_profiles();
+        let err = select_profile(Some("qa"), &auth).unwrap_err().to_string();
+        assert!(err.contains("no profile named \"qa\""), "{err}");
+        assert!(err.contains("auth login --profile qa"), "{err}");
+        auth.default_profile = Some("gone".into());
+        let err = select_profile(None, &auth).unwrap_err().to_string();
+        assert!(err.contains("default profile \"gone\""), "{err}");
+    }
+
+    #[test]
+    fn profile_names_are_restricted() {
+        for good in ["default", "staging-2", "a.b_c", &"x".repeat(64)] {
+            validate_profile_name(good).unwrap();
+        }
+        for bad in ["", "a b", "a/b", "prod:1", "é", &"x".repeat(65)] {
+            assert!(validate_profile_name(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn stored_api_url_prefers_the_profile_then_config_then_default() {
+        let file = FileConfig {
+            api_url: Some("https://config.test/".into()),
+            ..FileConfig::default()
+        };
+        let profile = Profile {
+            api_url: Some(" https://staging.test/ ".into()),
+            ..Profile::default()
+        };
+        let blank = Profile {
+            api_url: Some("  ".into()),
+            ..Profile::default()
+        };
+        assert_eq!(
+            stored_api_url(Some(&profile), &file),
+            "https://staging.test"
+        );
+        assert_eq!(stored_api_url(Some(&blank), &file), "https://config.test");
+        assert_eq!(stored_api_url(None, &file), "https://config.test");
+        assert_eq!(
+            stored_api_url(None, &FileConfig::default()),
+            DEFAULT_API_URL
+        );
     }
 
     /// A per-process scratch directory, so parallel tests never share one.

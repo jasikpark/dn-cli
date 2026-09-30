@@ -21,12 +21,21 @@ dn auth status --json
 ```
 
 `source` is `file`, `env`, `env-ref`, `none`, or `invalid` (a malformed `op://`
-reference or a blank `DEFINED_API_KEY`; `message` says which — surface it to
-the user). On `none`, stop and ask the
+reference, a blank `DEFINED_API_KEY`, or a missing profile; `message` says
+which — surface it to the user). `profile` names the profile in use and
+`api_url` the server it talks to. On `none`, stop and ask the
 user to run `dn auth login` themselves — it needs their 1Password reference and
 an interactive terminal; do not try to prompt for it or pass `--ref` on their
 behalf. Every call that resolves an `op://` reference may pop a 1Password unlock
 prompt on the user's machine; that is expected.
+
+### Profiles
+
+Credentials are stored as named profiles (`dn auth list --json`), e.g. `prod`
+and `staging` with different API URLs. When the user names an environment,
+pass `--profile <name>` on every call (or set `DN_PROFILE` for your shell).
+**Never run `dn auth switch`** — it changes the default for every other
+process, including other agents running in parallel.
 
 ## Always use `--json` when reading data programmatically
 
