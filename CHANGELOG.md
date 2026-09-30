@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.10 (2026-09-30)
+
+### Features
+
+- report every --json error in the API's error envelope (#87)
+- named profiles for multiple accounts (#89)
+
 ## 0.2.9 (2026-09-29)
 
 ### Features
