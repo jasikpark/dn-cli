@@ -25,14 +25,13 @@ pub struct Client {
 #[derive(Debug, Serialize)]
 pub struct ApiError {
     pub status: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always present (`null` when the response had no `X-Request-ID`), so
+    /// every `--json` error envelope carries the same keys.
     pub request_id: Option<String>,
+    /// Never empty: a body without the expected `{errors:[...]}` shape (e.g. an
+    /// upstream proxy 502 or an empty 401) becomes one `ERR_HTTP_<status>`
+    /// entry carrying the raw body, so callers can always read `errors[0]`.
     pub errors: Vec<ApiErrorDetail>,
-    /// Raw body, kept only when it wasn't the expected `{errors:[...]}` shape
-    /// (e.g. an upstream proxy 502 or an empty 401), so agents still have
-    /// something to inspect.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw: Option<String>,
 }
 
 /// One entry from the Defined API error envelope: `{ code, message, path? }`.
@@ -46,7 +45,7 @@ pub struct ApiErrorDetail {
 
 impl ApiError {
     fn from_response(status: u16, body: &str, request_id: Option<String>) -> Self {
-        let errors = serde_json::from_str::<Value>(body)
+        let mut errors = serde_json::from_str::<Value>(body)
             .ok()
             .as_ref()
             .and_then(|v| v.get("errors"))
@@ -58,20 +57,23 @@ impl ApiError {
             })
             .unwrap_or_default();
 
-        // Only fall back to the raw body when we couldn't extract any structured
-        // errors — otherwise it's redundant with `errors`.
-        let raw = if errors.is_empty() {
+        if errors.is_empty() {
             let trimmed = body.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        } else {
-            None
-        };
+            errors.push(ApiErrorDetail {
+                code: format!("ERR_HTTP_{status}"),
+                message: if trimmed.is_empty() {
+                    "(no response body)".to_string()
+                } else {
+                    trimmed.to_string()
+                },
+                path: None,
+            });
+        }
 
         ApiError {
             status,
             request_id,
             errors,
-            raw,
         }
     }
 }
@@ -98,17 +100,10 @@ impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Defined API error (HTTP {})", self.status)?;
 
-        if self.errors.is_empty() {
-            match &self.raw {
-                Some(raw) => write!(f, ": {raw}")?,
-                None => write!(f, ": (no response body)")?,
-            }
-        } else {
-            for err in &self.errors {
-                match &err.path {
-                    Some(path) => write!(f, "\n  {}: {} [{}]", err.code, err.message, path)?,
-                    None => write!(f, "\n  {}: {}", err.code, err.message)?,
-                }
+        for err in &self.errors {
+            match &err.path {
+                Some(path) => write!(f, "\n  {}: {} [{}]", err.code, err.message, path)?,
+                None => write!(f, "\n  {}: {}", err.code, err.message)?,
             }
         }
 
@@ -496,8 +491,6 @@ mod tests {
         assert_eq!(err.errors[0].code, "ERR_BAD");
         assert_eq!(err.errors[0].message, "nope");
         assert_eq!(err.errors[0].path.as_deref(), Some("name"));
-        // Structured errors present -> raw is redundant and dropped.
-        assert!(err.raw.is_none());
     }
 
     #[test]
@@ -511,23 +504,43 @@ mod tests {
     }
 
     #[test]
-    fn from_response_keeps_raw_for_non_envelope_body() {
+    fn from_response_wraps_a_non_envelope_body_in_one_error() {
         // e.g. an upstream proxy 502 returning HTML, not the DN error shape.
         let err = ApiError::from_response(502, "<html>Bad Gateway</html>", None);
 
-        assert!(err.errors.is_empty());
-        assert_eq!(err.raw.as_deref(), Some("<html>Bad Gateway</html>"));
-        assert!(err.to_string().contains("Bad Gateway"));
+        assert_eq!(err.errors.len(), 1);
+        assert_eq!(err.errors[0].code, "ERR_HTTP_502");
+        assert_eq!(err.errors[0].message, "<html>Bad Gateway</html>");
+        assert!(
+            err.to_string()
+                .contains("ERR_HTTP_502: <html>Bad Gateway</html>")
+        );
     }
 
     #[test]
-    fn from_response_empty_body_has_no_raw() {
+    fn from_response_reports_an_empty_body_as_one_error() {
         // e.g. an empty 401.
         let err = ApiError::from_response(401, "   ", None);
 
-        assert!(err.errors.is_empty());
-        assert!(err.raw.is_none());
+        assert_eq!(err.errors.len(), 1);
+        assert_eq!(err.errors[0].code, "ERR_HTTP_401");
+        assert_eq!(err.errors[0].message, "(no response body)");
         assert!(err.to_string().contains("(no response body)"));
+    }
+
+    #[test]
+    fn serializes_a_missing_request_id_as_null() {
+        let err = ApiError::from_response(401, "", None);
+        let value = serde_json::to_value(&err).unwrap();
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "status": 401,
+                "request_id": null,
+                "errors": [{ "code": "ERR_HTTP_401", "message": "(no response body)" }],
+            })
+        );
     }
 
     #[test]

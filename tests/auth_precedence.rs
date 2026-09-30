@@ -58,14 +58,12 @@ fn environment_auth_does_not_depend_on_stored_credentials() {
     let auth_path = dir.path().join("auth.json");
     fs::write(&auth_path, "not valid JSON").unwrap();
 
-    // Without --yes, delete stops after loading credentials and before HTTP.
+    // The API URL refuses connections, so a usable key fails at the request
+    // and a bad one fails while loading credentials; neither reaches an API.
     // Each subprocess has its own environment; no global env mutation or real
     // credentials are needed, even when the test suite runs in parallel.
     for (key, expected) in [
-        (
-            Some("dummy-test-key"),
-            "pass --yes to delete without a confirmation prompt",
-        ),
+        (Some("dummy-test-key"), "request to Defined API failed"),
         (Some("   "), "DEFINED_API_KEY is set but empty"),
         (
             Some("op://invalid"),
@@ -75,7 +73,7 @@ fn environment_auth_does_not_depend_on_stored_credentials() {
     ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_dn"));
         command
-            .args(["host", "delete", "host-test", "--json"])
+            .args(["host", "delete", "host-test", "--yes", "--json"])
             .env("DN_CONFIG_DIR", dir.path())
             .env("DEFINED_API_URL", "http://127.0.0.1:1")
             .env_remove("DEFINED_API_KEY");
@@ -85,7 +83,10 @@ fn environment_auth_does_not_depend_on_stored_credentials() {
         let output = command.output().unwrap();
         assert!(!output.status.success());
         let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let error = payload["error"].as_str().unwrap();
+        assert!(payload["status"].is_null(), "{payload}");
+        assert!(payload["request_id"].is_null(), "{payload}");
+        assert_eq!(payload["errors"][0]["code"], "ERR_LOCAL");
+        let error = payload["errors"][0]["message"].as_str().unwrap();
         assert!(
             error.contains(expected),
             "expected {expected:?}, got {error:?}"
