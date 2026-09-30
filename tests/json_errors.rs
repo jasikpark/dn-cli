@@ -103,7 +103,7 @@ fn argument_errors_are_invalid_argument_before_credentials() {
         ),
         (&["host", "delete", "host-1", "--json"], "pass --yes"),
         (&["auth", "login", "--ref", "notop", "--json"], "op://"),
-        (&["auth", "login", "--json"], "pass --ref"),
+        (&["auth", "login", "--json"], "pass --key-stdin"),
     ] {
         let output = dn(args);
         assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");

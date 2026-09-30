@@ -262,11 +262,11 @@ fn profiles_can_be_added_listed_switched_and_removed() {
             "default_profile": "prod",
             "profiles": [
                 { "name": "prod", "default": true, "api_url": "https://api.defined.net",
-                  "api_key_ref": "op://Personal/dn/credential" },
+                  "key_source": "1password", "api_key_ref": "op://Personal/dn/credential" },
                 { "name": "qa", "default": false, "api_url": "https://api.defined.net",
-                  "api_key_ref": "op://Dev/dn-qa/credential" },
+                  "key_source": "1password", "api_key_ref": "op://Dev/dn-qa/credential" },
                 { "name": "staging", "default": false, "api_url": "https://staging.example",
-                  "api_key_ref": "op://Dev/dn-staging/credential" },
+                  "key_source": "1password", "api_key_ref": "op://Dev/dn-staging/credential" },
             ],
         })
     );

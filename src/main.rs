@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod keystore;
 
 use std::collections::HashMap;
 use std::io::{BufRead, IsTerminal, Write};
@@ -12,7 +13,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::api::{ApiError, Client};
 use crate::config::{
-    Active, AuthFile, AuthLock, Config, DEFAULT_PROFILE, KeySource, Migration, Profile,
+    Active, AuthFile, AuthLock, Config, DEFAULT_PROFILE, KEYRING, KeySource, Migration, Profile,
     api_key_env_is_set, api_url, auth_path, check_api_url, migrate_to_profiles, normalize_api_url,
     normalize_op_ref, op_read, requested_profile, select_profile, stored_api_url, validate_op_ref,
     validate_profile_name,
@@ -101,9 +102,9 @@ struct TagGetArgs {
 
 #[derive(Subcommand)]
 enum AuthCommand {
-    /// Store a 1Password secret reference to your API key in a profile and
-    /// make it the default. The key itself is never written to disk; every
-    /// `dn` call resolves it with `op read`.
+    /// Store an API key for a profile and make it the default. The key goes
+    /// in the OS keyring, or pass `--ref` to store a 1Password secret
+    /// reference instead.
     Login(AuthLoginArgs),
     /// Show which profile and API key source a call would use (never prints
     /// the key)
@@ -132,10 +133,17 @@ struct AuthLogoutArgs {
 
 #[derive(Args)]
 struct AuthLoginArgs {
-    /// 1Password secret reference to the API key. Prompted for when omitted
-    /// (interactive terminals only).
-    #[arg(long = "ref", value_name = "op://vault/item/field")]
+    /// Store a 1Password secret reference instead of the key; every call
+    /// then resolves it with `op read`
+    #[arg(
+        long = "ref",
+        value_name = "op://vault/item/field",
+        conflicts_with = "key_stdin"
+    )]
     reference: Option<String>,
+    /// Read the API key from stdin instead of prompting for it
+    #[arg(long)]
+    key_stdin: bool,
     /// API server for this account, for testing against a mock or
     /// non-production API. Kept when omitted; a new profile uses
     /// https://api.defined.net. Plain http:// only to localhost.
@@ -144,7 +152,7 @@ struct AuthLoginArgs {
     /// Don't make this profile the default (the first profile always is)
     #[arg(long)]
     keep_default: bool,
-    /// Skip resolving the reference and calling the API before saving
+    /// Skip checking the key against the API before saving
     #[arg(long)]
     no_verify: bool,
 }
@@ -387,7 +395,8 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
         }
         match &args.reference {
             Some(reference) => validate_op_ref(&normalize_op_ref(reference))?,
-            None if cli.json || !std::io::stdin().is_terminal() => bail!(LOGIN_NEEDS_REF),
+            None if args.key_stdin => {}
+            None if cli.json || !std::io::stdin().is_terminal() => bail!(LOGIN_NEEDS_KEY),
             None => {}
         }
     }
@@ -444,11 +453,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
 const API_KEYS_URL: &str = "https://admin.defined.net/settings/api-keys/add";
 
 fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> anyhow::Result<()> {
-    let reference = match &args.reference {
-        Some(r) => normalize_op_ref(r),
-        None => prompt_for_reference()?,
-    };
-    validate_op_ref(&reference)?;
+    let key = read_login_key(args)?;
 
     // Verify against the URL the profile will be saved with, before taking
     // the lock: `op read` may wait on a 1Password prompt, and every other
@@ -470,9 +475,12 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
         };
         let url = stored_api_url(Some(&target));
         check_api_url(&url)?;
-        let key = op_read(&reference)?;
+        let api_key = match &key {
+            LoginKey::Keyring(key) => key.clone(),
+            LoginKey::Reference(reference) => op_read(reference)?,
+        };
         Client::new(Config {
-            api_key: key,
+            api_key,
             api_url: url,
             profile: None,
         })
@@ -488,10 +496,19 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
         eprintln!("warning: replacing unreadable auth file ({err:#})");
     }
     let mut profile = auth.profiles.get(&name).cloned().unwrap_or_default();
+    let had_keyring_entry = profile.key.as_deref() == Some(KEYRING);
     if let Some(url) = &args.api_url {
         profile.api_url = Some(normalize_api_url(url));
     }
-    profile.key = Some(reference.clone());
+    // The keyring entry is written before auth.json points at it, so a
+    // failure here leaves the profile as it was.
+    profile.key = Some(match &key {
+        LoginKey::Keyring(key) => {
+            keystore::set(&name, key)?;
+            KEYRING.to_string()
+        }
+        LoginKey::Reference(reference) => reference.clone(),
+    });
     auth.profiles.insert(name.clone(), profile);
     // Like `gh` and `tg`, the profile just logged in to becomes the default,
     // unless asked not to.
@@ -501,6 +518,9 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
     }
     auth.ensure_default();
     let path = auth.save()?;
+    if had_keyring_entry && matches!(key, LoginKey::Reference(_)) {
+        forget_keyring_entry(&name);
+    }
     let env_override = warn_env_override();
 
     if json {
@@ -513,13 +533,30 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
         ]);
         return print_json(&out);
     }
-    println!(
-        "Saved profile \"{name}\" to {}. `dn` will resolve its key with `op read` on every call.",
-        path.display()
-    );
+    match &key {
+        LoginKey::Keyring(_) => println!(
+            "Saved profile \"{name}\" to {}, with its key in the OS keyring.",
+            path.display()
+        ),
+        LoginKey::Reference(_) => println!(
+            "Saved profile \"{name}\" to {}. `dn` will resolve its key with `op read` on every call.",
+            path.display()
+        ),
+    }
     print_default_change(previous_default.as_deref(), &auth);
     print!("{}", render_profiles(&auth));
     Ok(())
+}
+
+/// Delete a profile's keyring entry that nothing points at any more. Failing
+/// to is only a warning: the profile change it follows has already happened.
+fn forget_keyring_entry(profile: &str) {
+    if let Err(e) = keystore::delete(profile) {
+        eprintln!(
+            "warning: could not remove the OS keyring entry for profile {profile:?} ({e:#}); \
+             it is no longer used"
+        );
+    }
 }
 
 /// Say when a command changed the default profile.
@@ -533,7 +570,8 @@ fn print_default_change(previous: Option<&str>, auth: &AuthFile) {
     }
 }
 
-/// `{default_profile, profiles: [{name, default, api_url, api_key_ref}]}`,
+/// `{default_profile, profiles: [{name, default, api_url, key_source,
+/// api_key_ref}]}`,
 /// the shape `auth list` prints and every command that changes profiles
 /// includes.
 fn profiles_json(auth: &AuthFile) -> Value {
@@ -546,7 +584,12 @@ fn profiles_json(auth: &AuthFile) -> Value {
                 "name": name,
                 "default": default == Some(name.as_str()),
                 "api_url": stored_api_url(Some(profile)),
-                "api_key_ref": profile.key,
+                "key_source": match profile.key.as_deref() {
+                    Some(KEYRING) => json!("keyring"),
+                    Some(_) => json!("1password"),
+                    None => Value::Null,
+                },
+                "api_key_ref": profile.key.as_deref().filter(|k| *k != KEYRING),
             })
         })
         .collect();
@@ -624,28 +667,46 @@ fn print_json(value: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Interactive-only: explain where to mint a key, then read the reference from
-/// stdin. Agents pass `--ref` instead — no prompt ever blocks a `--json` run.
-const LOGIN_NEEDS_REF: &str = "pass --ref when running non-interactively";
+const LOGIN_NEEDS_KEY: &str = "pass --key-stdin (or --ref op://… to use 1Password) \
+     when running non-interactively";
 
-/// Ask for the secret reference. [`preflight`] has already refused a
-/// non-interactive run without `--ref`.
-fn prompt_for_reference() -> anyhow::Result<String> {
-    let mut err = std::io::stderr();
-    writeln!(
-        err,
-        "Create an API key at {API_KEYS_URL} (pick only the permissions you need),\n\
-         save it in 1Password, then right-click the field \u{2192} Copy Secret Reference."
-    )?;
-    write!(err, "Secret reference (op://vault/item/field): ")?;
-    err.flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    let line = normalize_op_ref(&line);
-    if line.is_empty() {
-        bail!("no reference entered");
+/// The key a login stores, or the 1Password reference that stands for it.
+enum LoginKey {
+    Keyring(String),
+    Reference(String),
+}
+
+/// Read the key for `auth login`: from stdin with `--key-stdin`, else from a
+/// hidden prompt. [`preflight`] has already refused a non-interactive run
+/// with neither `--key-stdin` nor `--ref`.
+fn read_login_key(args: &AuthLoginArgs) -> anyhow::Result<LoginKey> {
+    if let Some(reference) = &args.reference {
+        let reference = normalize_op_ref(reference);
+        validate_op_ref(&reference)?;
+        return Ok(LoginKey::Reference(reference));
     }
-    Ok(line)
+    let key = if args.key_stdin {
+        let mut key = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut key)
+            .context("failed to read the API key from stdin")?;
+        key
+    } else {
+        eprintln!(
+            "Create an API key at {API_KEYS_URL} (pick only the permissions you need).\n\
+             It will be stored in the OS keyring. To store a 1Password reference instead, \
+             pass --ref op://vault/item/field."
+        );
+        rpassword::prompt_password("API key (input hidden): ")
+            .context("failed to read the API key")?
+    };
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        bail!("no API key entered");
+    }
+    if key.contains(char::is_whitespace) {
+        bail!("an API key has no spaces or line breaks; check what was pasted");
+    }
+    Ok(LoginKey::Keyring(key))
 }
 
 /// Read-only introspection: never resolves a secret and never fails on a
@@ -692,6 +753,9 @@ fn auth_status(profile_flag: Option<&str>, json: bool) -> anyhow::Result<()> {
             "API key: {r} (from {}, resolved via op read)",
             auth_path.display()
         ),
+        Ok(Some(KeySource::Keyring(profile))) => {
+            println!("API key: OS keyring (entry for profile {profile:?})")
+        }
         Err(e) => println!("API key: invalid — {e:#}"),
     }
     println!("API URL: {api_url}");
@@ -754,18 +818,35 @@ fn auth_logout(
     };
     let previous_default = auth.default_profile.clone();
     let (removed, profile) = if args.all {
+        // Keyring entries are found through the file, so read it if it can
+        // be read; an unreadable one can't say which entries are ours.
+        match AuthFile::load() {
+            Ok(stored) => stored
+                .profiles
+                .iter()
+                .filter(|(_, p)| p.key.as_deref() == Some(KEYRING))
+                .for_each(|(name, _)| forget_keyring_entry(name)),
+            Err(e) => eprintln!(
+                "warning: could not read the profiles ({e:#}), so any keys they kept in the \
+                 OS keyring (service {}) are left there",
+                keystore::SERVICE
+            ),
+        }
         (remove_auth_file(&path)?, None)
     } else {
         let requested = requested_profile(profile_flag)?;
         match select_profile(requested.as_deref(), &auth)? {
             None => (false, None),
             Some((name, _)) => {
-                auth.profiles.remove(&name);
+                let removed = auth.profiles.remove(&name);
                 auth.ensure_default();
                 if auth.profiles.is_empty() {
                     remove_auth_file(&path)?;
                 } else {
                     auth.save()?;
+                }
+                if removed.is_some_and(|p| p.key.as_deref() == Some(KEYRING)) {
+                    forget_keyring_entry(&name);
                 }
                 (true, Some(name))
             }

@@ -18,6 +18,8 @@ const AUTH_VERSION: u64 = 2;
 /// The profile an old single-reference `auth.json` migrates into, and the one
 /// `auth login` creates when nothing else is named.
 pub const DEFAULT_PROFILE: &str = "default";
+/// A profile `key` meaning "the OS keyring holds it, under the profile name".
+pub const KEYRING: &str = "keyring";
 
 /// Resolved runtime configuration: a usable bearer token plus the API base.
 pub struct Config {
@@ -33,7 +35,8 @@ pub struct Profile {
     /// Falls back to https://api.defined.net when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_url: Option<String>,
-    /// A 1Password secret reference to the API key.
+    /// Where the API key is: [`KEYRING`] for the OS keyring, or a 1Password
+    /// secret reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     #[serde(flatten)]
@@ -509,6 +512,8 @@ pub enum KeySource {
     EnvRef(String),
     /// The selected profile's `op://` reference.
     FileRef(String),
+    /// The OS keyring entry for the named profile.
+    Keyring(String),
 }
 
 /// The raw env key never appears in debug output.
@@ -518,6 +523,7 @@ impl fmt::Debug for KeySource {
             KeySource::Env(_) => f.write_str("Env(<redacted>)"),
             KeySource::EnvRef(r) => f.debug_tuple("EnvRef").field(r).finish(),
             KeySource::FileRef(r) => f.debug_tuple("FileRef").field(r).finish(),
+            KeySource::Keyring(p) => f.debug_tuple("Keyring").field(p).finish(),
         }
     }
 }
@@ -528,6 +534,7 @@ impl KeySource {
             KeySource::Env(_) => "env",
             KeySource::EnvRef(_) => "env-ref",
             KeySource::FileRef(_) => "file",
+            KeySource::Keyring(_) => "keyring",
         }
     }
 
@@ -535,7 +542,7 @@ impl KeySource {
     /// env key deliberately has no accessor here.
     pub fn reference(&self) -> Option<&str> {
         match self {
-            KeySource::Env(_) => None,
+            KeySource::Env(_) | KeySource::Keyring(_) => None,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => Some(r),
         }
     }
@@ -631,13 +638,22 @@ impl Active {
                 profile: None,
             });
         };
-        let source = resolve_key_source(None, profile.key.as_deref())
-            .with_context(|| format!("profile {name:?}"))?;
+        let source = profile_key_source(&name, profile)?;
         Ok(Self {
             source,
             profile_name: Some(name),
             profile: Some(profile.clone()),
         })
+    }
+}
+
+/// Where a stored profile's key comes from, without resolving it: the OS
+/// keyring, or its `op://` reference. `None` for a profile saved with only a
+/// URL (e.g. migrated from `config.json`), which needs `DEFINED_API_KEY`.
+pub fn profile_key_source(name: &str, profile: &Profile) -> Result<Option<KeySource>> {
+    match profile.key.as_deref().map(str::trim) {
+        Some(KEYRING) => Ok(Some(KeySource::Keyring(name.to_string()))),
+        key => resolve_key_source(None, key).with_context(|| format!("profile {name:?}")),
     }
 }
 
@@ -912,6 +928,7 @@ impl Config {
         let api_key = match source {
             KeySource::Env(key) => key,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => op_read(&r)?,
+            KeySource::Keyring(profile) => crate::keystore::get(&profile)?,
         };
         let mut config = Self::with_key(api_key, active.profile.as_ref());
         config.profile = active.profile_name;

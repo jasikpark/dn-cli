@@ -11,25 +11,29 @@ inspect and manage the user's network.
 
 ## Prerequisite: an API key source must be configured
 
-`dn` never stores the API key itself. It resolves a 1Password secret reference
-with `op read` on every call, or reads `DEFINED_API_KEY` from the environment
-(raw key or `op://` reference — the environment wins). Check before doing
-anything else:
+Each profile's key is in the OS keyring, or is a 1Password secret reference
+that `dn` resolves with `op read` on every call; `DEFINED_API_KEY` in the
+environment (raw key or `op://` reference) overrides either. Check before
+doing anything else:
 
 ```bash
 dn auth status --json
 ```
 
-`source` is `file`, `env`, `env-ref`, `none`, or `invalid` (a malformed `op://`
+`source` is `keyring`, `file` (a 1Password reference), `env`, `env-ref`, `none`,
+or `invalid` (a malformed `op://`
 reference, a blank `DEFINED_API_KEY`, or a missing profile; `message` says
 which — surface it to the user). `profile` names the profile (account) in use
 and `api_url` the server it talks to; anything other than
 `https://api.defined.net` is a test or mock server, so say so when you report
 results. On `none`, stop and ask the
-user to run `dn auth login` themselves — it needs their 1Password reference and
-an interactive terminal; do not try to prompt for it or pass `--ref` on their
-behalf. Every call that resolves an `op://` reference may pop a 1Password unlock
-prompt on the user's machine; that is expected.
+user to run `dn auth login` themselves — it needs their API key and an
+interactive terminal; never ask them to paste a key into the conversation, and
+do not pass `--key-stdin` or `--ref` on their behalf. Every call that resolves
+an `op://` reference may pop a 1Password unlock prompt on the user's machine,
+and a locked keyring may prompt to unlock; that is expected. If a call fails
+with "no OS keyring is available", the machine has no keyring (e.g. headless
+Linux): tell the user to use `--ref` or `DEFINED_API_KEY` instead.
 
 ### Profiles
 

@@ -41,23 +41,36 @@ cargo install --git https://github.com/jasikpark/dn-cli
 
 ## Auth
 
-Store a 1Password *secret reference* to your API key once:
+Log in once:
 
 ```bash
 dn auth login
 ```
 
-It walks you through creating a key at
-<https://admin.defined.net/settings/api-keys/add> (pick only the permissions you
-need), asks for the key's `op://vault/item/field` reference, verifies it against
-the API, and saves the reference to `~/.config/dn/auth.json`
-(`%APPDATA%\dn\auth.json` on Windows; override the directory with
-`DN_CONFIG_DIR`). The key itself never touches disk: every `dn` call resolves
-the reference with [`op read`](https://developer.1password.com/docs/cli/get-started/),
-so 1Password's unlock prompt gates each invocation.
+It points you at <https://admin.defined.net/settings/api-keys/add> to create a
+key (pick only the permissions you need), asks for it with the input hidden,
+verifies it against the API, and stores it in the **OS keyring**: macOS
+Keychain, Windows Credential Manager, or the Secret Service (GNOME Keyring,
+KWallet) on Linux. The profile itself — which API server, where the key is —
+goes in `~/.config/dn/auth.json` (`%APPDATA%\dn\auth.json` on Windows; override
+the directory with `DN_CONFIG_DIR`); the key never does.
 
-`dn auth status` shows which profile and source are active; `dn auth logout`
-forgets the profile. Pass `--ref op://...` to `auth login` when scripting it.
+To script it, pipe the key in with `--key-stdin`:
+
+```bash
+printf '%s' "$KEY" | dn auth login --key-stdin
+```
+
+**1Password instead:** `dn auth login --ref op://vault/item/field` stores a
+1Password *secret reference*, and every `dn` call resolves it with
+[`op read`](https://developer.1password.com/docs/cli/get-started/), so
+1Password's unlock prompt gates each invocation.
+
+On a headless Linux machine with no Secret Service (a server, a container), the
+keyring is unavailable; use `--ref` or `DEFINED_API_KEY` there.
+
+`dn auth status` shows which profile and key source are active; `dn auth logout`
+forgets the profile and deletes its keyring entry.
 
 ### Profiles
 
@@ -66,7 +79,7 @@ Each login is stored as a named profile, one per Defined Networking account.
 fresh setup). Add more for other accounts:
 
 ```bash
-dn auth login --profile work --ref op://Work/dn/credential
+dn auth login --profile work
 dn host list --profile work           # or DN_PROFILE=work dn host list
 dn auth list                          # * marks the default
 dn auth switch work                   # make it the default
@@ -165,8 +178,8 @@ network"* — conversational device enrollment.
   permission: `hosts:list`. (`filter.search` is not in the public OpenAPI spec
   yet, so it's pinned to the web client's observed behaviour.)
 - Auth: `auth login` / `auth status` / `auth list` / `auth switch` /
-  `auth logout` — stores 1Password secret references (never the key) as named
-  profiles in `~/.config/dn/auth.json` and resolves them per call with
+  `auth logout` — named profiles in `~/.config/dn/auth.json`, each with its key
+  in the OS keyring or a 1Password secret reference resolved per call with
   `op read`. `--profile` / `DN_PROFILE` picks one per call.
 - Writes: `host create` (host / lighthouse / relay) — wraps the
   `POST /v2/host-and-enrollment-code` one-shot endpoint, so the OTP comes
