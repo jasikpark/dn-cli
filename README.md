@@ -6,10 +6,6 @@ An unofficial CLI (`dn`) for the [Defined Networking](https://defined.net) API.
 Networking neither endorses nor supports it; report problems in this
 repository's issues.
 
-Rust + [clap](https://docs.rs/clap) + [ureq](https://docs.rs/ureq) (pure-Rust
-TLS via rustls, so the binary statically links cleanly for per-platform npm
-distribution later, à la `sentry-cli`).
-
 Designed to be driven two ways:
 
 - **Interactively** by a human (tables; confirmations on destructive actions)
@@ -103,58 +99,10 @@ For CI or agents, `DEFINED_API_KEY` in the environment takes precedence over any
 profile's key. It may hold the raw key or an `op://` reference — `dn` resolves
 the latter the same way.
 
-### Testing against another API server
+## Contributing
 
-Every profile talks to `https://api.defined.net` unless it was saved with
-`--api-url`. That, and `DEFINED_API_URL` (which overrides any profile's URL for
-one call), exist for testing — against a local mock API, or a non-production
-server:
-
-```bash
-DEFINED_API_URL=http://127.0.0.1:8080 DEFINED_API_KEY=test dn host list   # a local mock
-dn auth login --profile test --api-url https://api.test.example --keep-default
-```
-
-Plain `http://` is only allowed to this machine (`localhost`, `127.0.0.1`,
-`[::1]`), so the key never crosses a network unencrypted. When a call isn't
-going to `https://api.defined.net`, `dn` says so on stderr (never under
-`--json`).
-
-## Develop
-
-With [`just`](https://github.com/casey/just):
-
-```bash
-just run host list --json
-```
-
-Or directly:
-
-```bash
-cargo run -- host list --json
-cargo build --release
-```
-
-`just mutants` runs [cargo-mutants](https://mutants.rs/) over the crate: it edits
-one expression at a time and reruns `cargo test`. A MISSED mutant is an edit the
-suite did not notice, so it names a behaviour nothing asserts on.
-`just mutants-diff` narrows that to the lines the current change touches.
-The `cargo-mutants` skill in `.claude/skills/` loads when Claude Code runs in this
-checkout and walks through a run and the survivor triage.
-
-### Changelog and releases
-
-`CHANGELOG.md` is generated from commit subjects, so every user-visible change
-needs a [conventional commit](https://www.conventionalcommits.org/): `feat:`
-and `fix:` become entries under the next version, `feat!:` (or a
-`BREAKING CHANGE:` footer) marks a breaking change, and other types (`docs:`,
-`chore:`, `test:`) stay out of the changelog. Write the subject as the line a
-user should read in the release notes. The `Require changes to be documented`
-check on each PR is [Knope](https://knope.tech) looking for exactly that.
-
-On every push to `main`, Knope opens or updates a `chore: prepare release X`
-PR that bumps `Cargo.toml` and writes `CHANGELOG.md`. Merging it pushes the
-`vX` tag, and cargo-dist builds the binaries and publishes the release.
+For local development, checks, test-server configuration, and release
+conventions, see [CONTRIBUTE.md](./CONTRIBUTE.md).
 
 ## Claude Code plugin
 
@@ -172,54 +120,6 @@ claude plugin install dn-cli@dn-cli
 For local development, `claude --plugin-dir /path/to/dn-cli` loads the checkout
 for one session. The longer-term goal: *"I have this device, set it up on my
 network"* — conversational device enrollment.
-
-## Status
-
-- Reads: `host list`, `host search <QUERY>` — the latter wraps the
-  `GET /v2/hosts?filter.search=` query, a server-side match across each host's
-  name, IP addresses, assigned role name, and tags (the same surface the admin
-  panel's search box drives). The query must be at least two characters. Key
-  permission: `hosts:list`. (`filter.search` is not in the public OpenAPI spec
-  yet, so it's pinned to the web client's observed behaviour.)
-- Auth: `auth login` / `auth status` / `auth list` / `auth switch` /
-  `auth logout` — named profiles in `~/.config/dn/auth.json`, each with its key
-  in the OS keyring or a 1Password secret reference resolved per call with
-  `op read`. `--profile` / `DN_PROFILE` picks one per call.
-- Writes: `host create` (host / lighthouse / relay) — wraps the
-  `POST /v2/host-and-enrollment-code` one-shot endpoint, so the OTP comes
-  back in the same response and the human view prints the `dnclient enroll`
-  command to copy. Network is auto-picked when the account has exactly one.
-  Hosts get an IPv4 whenever the network has an IPv4 prefix — the API alone
-  leaves dual-stack hosts v6-only — and `--no-ipv4` skips that for a v6-only
-  host. Key permissions: `hosts:create`, `hosts:enroll`, and `networks:list`
-  (auto-pick) or `networks:read` (`--network <id>`).
-- Deletes: `host delete <HOST_ID>` — wraps `DELETE /v1/hosts/{id}`. An
-  interactive run looks the host up first (`hosts:read`) and asks
-  `Delete host "<name>" (<id>; <ips>)? [y/N]`; `--yes` skips the lookup and the
-  prompt, and is required with `--json` or when stdin isn't a terminal. Key
-  permission: `hosts:delete`.
-- Edits: `host edit <HOST_ID>` — `--name`, `--role <ROLE_ID>` / `--clear-role`,
-  `--add-tag`, `--remove-tag` (repeatable). Reads the host, applies the changes, and PUTs
-  the whole object back via `/v3/hosts/{id}`; a no-op edit skips the write.
-  Key permissions: `hosts:read` and `hosts:update`.
-- Roles: `role list` — id, name, rule and host counts. Pair it with
-  `host edit --role` to move a host off the default deny-all role.
-  `role get <ROLE_ID>` shows one role's inbound firewall rules — allowed
-  hosts, protocol, ports — in the admin panel's order. Key permission:
-  `roles:read`, plus `roles:list` to show role names in rules instead of
-  ids.
-- Tags: `tag list` — name, rule and host counts, description, priority,
-  highest priority first like the admin panel. Key permission: `tags:list`.
-  `tag get <KEY:VALUE>` shows the inbound firewall rules a tag adds to every
-  host carrying it, laid out like `role get`. Key permission: `tags:read`,
-  plus `roles:list` for role names.
-- Networks: `network list` — id, name, CIDRs, host count, whether managed
-  lighthouses and lighthouses-as-relays are on, curve and cert version. The
-  lighthouse settings live on the network, so this is where to look when the
-  hosts list shows no lighthouse. Key permission: `networks:list`.
-- Coming next: `role create` and `role add-rule` — the default role denies
-  all traffic, so newly enrolled hosts share a network but can't talk to
-  each other until a permissive role exists and is assigned.
 
 ## Prior art
 
