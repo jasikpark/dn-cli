@@ -1,51 +1,27 @@
 use serde_json::Value;
 
 use crate::api::Client;
-use crate::output::render_table;
+use crate::output::{count_field, joined_field, print_list, str_field};
 
 pub fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
-    let res = client.list_networks()?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&res)?);
-        return Ok(());
-    }
-
-    let empty: Vec<Value> = Vec::new();
-    let rows = res.get("data").and_then(Value::as_array).unwrap_or(&empty);
-    if rows.is_empty() {
-        println!("No networks found.");
-        return Ok(());
-    }
-
-    let table_rows: Vec<Vec<String>> = rows.iter().map(network_row).collect();
-    print!(
-        "{}",
-        render_table(
-            &[
-                "ID",
-                "NAME",
-                "CIDRS",
-                "HOSTS",
-                "MANAGED LH",
-                "LH AS RELAYS",
-                "CURVE",
-                "CERT",
-                "DESCRIPTION",
-            ],
-            &table_rows
-        )
-    );
-
-    if let Some(total) = res
-        .get("metadata")
-        .and_then(|m| m.get("totalCount"))
-        .and_then(Value::as_u64)
-    {
-        println!("\n{} shown / {total} total", rows.len());
-    }
-
-    Ok(())
+    let headers = [
+        "ID",
+        "NAME",
+        "CIDRS",
+        "HOSTS",
+        "MANAGED LH",
+        "LH AS RELAYS",
+        "CURVE",
+        "CERT",
+        "DESCRIPTION",
+    ];
+    print_list(
+        &client.list_networks()?,
+        json,
+        "No networks found.",
+        &headers,
+        |rows| rows.iter().map(network_row).collect(),
+    )
 }
 
 /// The columns the human network table renders. Strings fall back to empty
@@ -56,54 +32,27 @@ pub fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
 /// stores it inverted (`disableManagedLighthouses`) and the column reports it
 /// the way the admin panel does — whether managed lighthouses are on.
 fn network_row(row: &Value) -> Vec<String> {
-    let field = |key| {
+    let yes_no = |key, invert: bool| {
         row.get(key)
-            .and_then(Value::as_str)
+            .and_then(Value::as_bool)
+            .map(|b| if b != invert { "yes" } else { "no" }.to_string())
             .unwrap_or_default()
-            .to_string()
     };
-    let yes_no = |enabled: bool| if enabled { "yes" } else { "no" }.to_string();
-    let cidrs = row
-        .get("cidrs")
-        .and_then(Value::as_array)
-        .map(|cidrs| {
-            cidrs
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
-    let hosts = row
-        .get("hostCount")
-        .and_then(Value::as_u64)
-        .map(|n| n.to_string())
-        .unwrap_or_default();
-    let managed_lighthouses = row
-        .get("disableManagedLighthouses")
-        .and_then(Value::as_bool)
-        .map(|disabled| yes_no(!disabled))
-        .unwrap_or_default();
-    let lighthouses_as_relays = row
-        .get("lighthousesAsRelays")
-        .and_then(Value::as_bool)
-        .map(yes_no)
-        .unwrap_or_default();
     let cert = row
         .get("certVersion")
         .and_then(Value::as_u64)
         .map(|v| format!("v{v}"))
         .unwrap_or_default();
     vec![
-        field("id"),
-        field("name"),
-        cidrs,
-        hosts,
-        managed_lighthouses,
-        lighthouses_as_relays,
-        field("curve"),
+        str_field(row, "id").to_string(),
+        str_field(row, "name").to_string(),
+        joined_field(row, "cidrs"),
+        count_field(row, "hostCount"),
+        yes_no("disableManagedLighthouses", true),
+        yes_no("lighthousesAsRelays", false),
+        str_field(row, "curve").to_string(),
         cert,
-        field("description"),
+        str_field(row, "description").to_string(),
     ]
 }
 

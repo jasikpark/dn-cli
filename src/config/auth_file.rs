@@ -101,10 +101,7 @@ pub struct AuthLock(#[allow(dead_code)] fs::File);
 impl AuthLock {
     pub fn acquire() -> Result<Self> {
         let path = config_dir()?.join("auth.json.lock");
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)
-                .with_context(|| format!("failed to create {}", dir.display()))?;
-        }
+        create_parent(&path)?;
         let file = fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -178,12 +175,11 @@ impl AuthFile {
     /// old-layout file is converted in memory; see [`migrate_to_profiles`].
     pub fn load() -> Result<Self> {
         let path = auth_path()?;
-        match fs::read_to_string(&path) {
-            Ok(text) => Self::parse(&text)
+        match read_optional(&path)? {
+            Some(text) => Self::parse(&text)
                 .map(|(auth, _)| auth)
                 .with_context(|| format!("failed to parse {}", path.display())),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).with_context(|| format!("failed to read {}", path.display())),
+            None => Ok(Self::default()),
         }
     }
 
@@ -206,11 +202,8 @@ impl AuthFile {
 
     pub fn save(&self) -> Result<PathBuf> {
         let path = auth_path()?;
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)
-                .with_context(|| format!("failed to create {}", dir.display()))?;
-        }
-        write_private(&path, &self.to_text()?)?;
+        create_parent(&path)?;
+        write_private(&path, &pretty_text(self)?)?;
         Ok(path)
     }
 
@@ -227,12 +220,6 @@ impl AuthFile {
         }
         self.default_profile = self.profiles.keys().next().cloned();
         self.default_profile.clone()
-    }
-
-    fn to_text(&self) -> Result<String> {
-        let mut text = serde_json::to_string_pretty(self)?;
-        text.push('\n');
-        Ok(text)
     }
 }
 
@@ -367,13 +354,8 @@ pub fn migrate_to_profiles() -> Migration {
     }
     if config_url.is_some() {
         let stripped = match &config {
-            Some(rest) if rest.is_empty() => remove_file_if_present(&config_path),
-            Some(rest) => serde_json::to_string_pretty(rest)
-                .map_err(anyhow::Error::from)
-                .and_then(|mut text| {
-                    text.push('\n');
-                    write_private(&config_path, &text)
-                }),
+            Some(rest) if rest.is_empty() => remove_file_if_present(&config_path).map(drop),
+            Some(rest) => pretty_text(rest).and_then(|text| write_private(&config_path, &text)),
             None => Ok(()),
         };
         if let Err(e) = stripped {
@@ -387,6 +369,18 @@ pub fn migrate_to_profiles() -> Migration {
     migration
 }
 
+fn create_parent(path: &Path) -> Result<()> {
+    let Some(dir) = path.parent() else {
+        return Ok(());
+    };
+    fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))
+}
+
+/// Pretty JSON with a trailing newline, as the config files are written.
+fn pretty_text(value: &impl Serialize) -> Result<String> {
+    Ok(serde_json::to_string_pretty(value)? + "\n")
+}
+
 /// A file's contents, or `None` if it doesn't exist.
 fn read_optional(path: &Path) -> Result<Option<String>> {
     match fs::read_to_string(path) {
@@ -396,16 +390,18 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
     }
 }
 
-fn remove_file_if_present(path: &Path) -> Result<()> {
+/// Delete a file (through a symlink, then the link itself). `false` when
+/// there was nothing to delete.
+pub fn remove_file_if_present(path: &Path) -> Result<bool> {
     let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     match fs::remove_file(&target) {
         Ok(()) => {
             if target != path {
                 let _ = fs::remove_file(path);
             }
-            Ok(())
+            Ok(true)
         }
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e).with_context(|| format!("failed to remove {}", target.display())),
     }
 }
@@ -481,7 +477,7 @@ mod tests {
         assert_eq!(auth.default_profile.as_deref(), Some("prod"));
         assert_eq!(auth.profiles["prod"].key.as_deref(), Some("op://v/i/f"));
         assert_eq!(auth.profiles["prod"].api_url, None);
-        let back: serde_json::Value = serde_json::from_str(&auth.to_text().unwrap()).unwrap();
+        let back: serde_json::Value = serde_json::from_str(&pretty_text(&auth).unwrap()).unwrap();
         assert_eq!(
             back,
             serde_json::from_str::<serde_json::Value>(text).unwrap()

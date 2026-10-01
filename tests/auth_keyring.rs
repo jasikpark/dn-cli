@@ -6,7 +6,7 @@
 #![cfg(debug_assertions)]
 
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -61,12 +61,12 @@ impl Env {
             command.env(key, value);
         }
         let mut child = command.spawn().unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
+        // A command that fails preflight exits without reading stdin, so the
+        // write can race its exit and hit a closed pipe.
+        match child.stdin.take().unwrap().write_all(stdin.as_bytes()) {
+            Err(e) if e.kind() == ErrorKind::BrokenPipe => {}
+            result => result.unwrap(),
+        }
         child.wait_with_output().unwrap()
     }
 

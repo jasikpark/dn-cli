@@ -8,7 +8,8 @@ use crate::cli::{AuthLoginArgs, AuthLogoutArgs, AuthSwitchArgs};
 use crate::config::{
     Active, AuthFile, AuthLock, Config, DEFAULT_PROFILE, KEYRING, KeySource, Profile,
     api_key_env_is_set, api_url, auth_path, check_api_url, normalize_api_url, normalize_op_ref,
-    op_read, requested_profile, select_profile, stored_api_url, validate_op_ref,
+    op_read, remove_file_if_present, requested_profile, select_profile, stored_api_url,
+    validate_op_ref,
 };
 use crate::error::InvalidArgument;
 use crate::keystore;
@@ -95,15 +96,16 @@ pub fn auth_login(
     let env_override = warn_env_override();
 
     if json {
-        let mut out = profiles_json(&auth);
-        out.as_object_mut().unwrap().extend([
-            ("ok".into(), json!(true)),
-            ("profile".into(), json!(name)),
-            ("auth_path".into(), json!(path)),
-            ("env_override".into(), json!(env_override)),
-            ("keyring_left".into(), json!(keyring_left)),
-        ]);
-        return print_json(&out);
+        return print_json(&profiles_json(
+            &auth,
+            json!({
+                "ok": true,
+                "profile": name,
+                "auth_path": path,
+                "env_override": env_override,
+                "keyring_left": keyring_left,
+            }),
+        ));
     }
     match &key {
         LoginKey::Keyring(_) => println!(
@@ -237,10 +239,9 @@ fn print_default_change(previous: Option<&str>, auth: &AuthFile) {
 }
 
 /// `{default_profile, profiles: [{name, default, api_url, key_source,
-/// api_key_ref}]}`,
-/// the shape `auth list` prints and every command that changes profiles
-/// includes.
-fn profiles_json(auth: &AuthFile) -> Value {
+/// api_key_ref}]}` plus the fields of `extra`: the shape `auth list` prints
+/// and every command that changes profiles extends.
+fn profiles_json(auth: &AuthFile, extra: Value) -> Value {
     let default = auth.default_profile.as_deref();
     let profiles: Vec<Value> = auth
         .profiles
@@ -262,7 +263,11 @@ fn profiles_json(auth: &AuthFile) -> Value {
             })
         })
         .collect();
-    json!({ "default_profile": default, "profiles": profiles })
+    let mut out = json!({ "default_profile": default, "profiles": profiles });
+    if let (Some(out), Value::Object(extra)) = (out.as_object_mut(), extra) {
+        out.extend(extra);
+    }
+    out
 }
 
 /// The profiles as a table, `*` marking the default.
@@ -275,13 +280,13 @@ fn render_profiles(auth: &AuthFile) -> String {
         .profiles
         .iter()
         .map(|(name, profile)| {
+            let mark = if default == Some(name.as_str()) {
+                "*"
+            } else {
+                ""
+            };
             vec![
-                if default == Some(name.as_str()) {
-                    "*"
-                } else {
-                    ""
-                }
-                .to_string(),
+                mark.to_string(),
                 name.clone(),
                 stored_api_url(Some(profile)),
                 profile.key.clone().unwrap_or_default(),
@@ -444,7 +449,7 @@ pub fn auth_status(profile_flag: Option<&str>, json: bool) -> anyhow::Result<()>
 pub fn auth_list(json: bool) -> anyhow::Result<()> {
     let auth = AuthFile::load()?;
     if json {
-        return print_json(&profiles_json(&auth));
+        return print_json(&profiles_json(&auth, Value::Null));
     }
     print!("{}", render_profiles(&auth));
     Ok(())
@@ -464,12 +469,10 @@ pub fn auth_switch(args: &AuthSwitchArgs, json: bool) -> anyhow::Result<()> {
     auth.default_profile = Some(args.name.clone());
     let path = auth.save()?;
     if json {
-        let mut out = profiles_json(&auth);
-        out.as_object_mut().unwrap().extend([
-            ("ok".into(), json!(true)),
-            ("auth_path".into(), json!(path)),
-        ]);
-        return print_json(&out);
+        return print_json(&profiles_json(
+            &auth,
+            json!({ "ok": true, "auth_path": path }),
+        ));
     }
     if previous_default.as_deref() == Some(args.name.as_str()) {
         println!("\"{}\" is already the default profile.", args.name);
@@ -516,7 +519,7 @@ pub fn auth_logout(
                 keystore::SERVICE
             ),
         }
-        (remove_auth_file(&path)?, None)
+        (remove_file_if_present(&path)?, None)
     } else {
         let requested = requested_profile(profile_flag)?;
         match select_profile(requested.as_deref(), &auth)? {
@@ -525,7 +528,7 @@ pub fn auth_logout(
                 let removed = auth.profiles.remove(&name);
                 auth.ensure_default();
                 if auth.profiles.is_empty() {
-                    remove_auth_file(&path)?;
+                    remove_file_if_present(&path)?;
                 } else {
                     auth.save()?;
                 }
@@ -545,16 +548,17 @@ pub fn auth_logout(
     let env_override = warn_env_override();
 
     if json {
-        let mut out = profiles_json(&auth);
-        out.as_object_mut().unwrap().extend([
-            ("ok".into(), json!(true)),
-            ("removed".into(), json!(removed)),
-            ("profile".into(), json!(profile)),
-            ("auth_path".into(), json!(path)),
-            ("env_override".into(), json!(env_override)),
-            ("keyring_left".into(), json!(keyring_left)),
-        ]);
-        return print_json(&out);
+        return print_json(&profiles_json(
+            &auth,
+            json!({
+                "ok": true,
+                "removed": removed,
+                "profile": profile,
+                "auth_path": path,
+                "env_override": env_override,
+                "keyring_left": keyring_left,
+            }),
+        ));
     }
     match (&profile, removed) {
         (Some(name), _) => println!("Removed profile \"{name}\"."),
@@ -569,21 +573,4 @@ pub fn auth_logout(
         print!("{}", render_profiles(&auth));
     }
     Ok(())
-}
-
-/// Delete the credentials file (through a symlink, then the link itself).
-/// `false` when there was nothing to delete.
-fn remove_auth_file(path: &std::path::Path) -> anyhow::Result<bool> {
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let removed = match std::fs::remove_file(&target) {
-        Ok(()) => true,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(e) => {
-            return Err(e).with_context(|| format!("failed to remove {}", target.display()));
-        }
-    };
-    if removed && target != path {
-        let _ = std::fs::remove_file(path);
-    }
-    Ok(removed)
 }

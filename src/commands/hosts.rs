@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::api::Client;
 use crate::cli::HostSearchArgs;
-use crate::output::{render_table, sanitize_for_display};
+use crate::output::{joined_field, print_list, sanitize_for_display, str_field};
 
 pub fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
     let res = client.list_hosts()?;
@@ -47,44 +47,23 @@ pub fn hosts_search(client: &Client, args: &HostSearchArgs, json: bool) -> anyho
     )
 }
 
-/// Render a `{ data, metadata }` hosts envelope: pretty JSON in `--json`
-/// mode, otherwise the id/name/IP table (or `empty_msg` when there are no
-/// rows). Shared by `host list` and `host search` so the two can't drift on
-/// columns or the "N shown / M total" footer.
+/// Render a hosts envelope. Shared by `host list` and `host search` so the
+/// two can't drift on columns.
 fn render_hosts(res: &Value, json: bool, empty_msg: &str) -> anyhow::Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(res)?);
-        return Ok(());
-    }
-
-    let empty: Vec<Value> = Vec::new();
-    let rows = res.get("data").and_then(Value::as_array).unwrap_or(&empty);
-    if rows.is_empty() {
-        println!("{empty_msg}");
-        return Ok(());
-    }
-
-    let table_rows: Vec<Vec<String>> = rows
-        .iter()
-        .map(|row| {
-            let (id, name, ip) = host_fields(row);
-            vec![id.to_string(), name.to_string(), ip]
-        })
-        .collect();
-    print!(
-        "{}",
-        render_table(&["ID", "NAME", "IP ADDRESSES"], &table_rows)
-    );
-
-    if let Some(total) = res
-        .get("metadata")
-        .and_then(|m| m.get("totalCount"))
-        .and_then(Value::as_u64)
-    {
-        println!("\n{} shown / {total} total", rows.len());
-    }
-
-    Ok(())
+    print_list(
+        res,
+        json,
+        empty_msg,
+        &["ID", "NAME", "IP ADDRESSES"],
+        |rows| {
+            rows.iter()
+                .map(|row| {
+                    let (id, name, ip) = host_fields(row);
+                    vec![id.to_string(), name.to_string(), ip]
+                })
+                .collect()
+        },
+    )
 }
 
 /// Reject host IDs that contain URL-structural characters.
@@ -149,19 +128,11 @@ pub fn parse_tag(s: &str) -> anyhow::Result<(String, String)> {
 /// to an empty string when absent or non-string; the IP column joins the v2
 /// `ipAddresses` array (dual-stack: IPv4 and/or IPv6) with ", ".
 fn host_fields(row: &Value) -> (&str, &str, String) {
-    let field = |key| row.get(key).and_then(Value::as_str).unwrap_or_default();
-    let ips = row
-        .get("ipAddresses")
-        .and_then(Value::as_array)
-        .map(|addrs| {
-            addrs
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
-    (field("id"), field("name"), ips)
+    (
+        str_field(row, "id"),
+        str_field(row, "name"),
+        joined_field(row, "ipAddresses"),
+    )
 }
 
 #[cfg(test)]
@@ -245,7 +216,7 @@ mod tests {
 
     #[test]
     fn render_hosts_json_passes_the_envelope_through() {
-        let res = json!({"data": [{"id": "host-1"}], "metadata": {"totalCount": 1}});
+        let res = json!({"data": [{"id": "host-1"}], "metadata": {"hasNextPage": false}});
         // Just assert it doesn't error on the JSON path; the payload is the
         // client's, rendered verbatim.
         assert!(render_hosts(&res, true, "unused").is_ok());

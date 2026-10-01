@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use super::{host_fields, parse_tag, validate_host_id, validate_role_id};
 use crate::api::Client;
 use crate::cli::HostEditArgs;
-use crate::output::sanitize_for_display;
+use crate::output::{print_json, sanitize_for_display, str_field};
 
 /// Catch user errors (empty flags, bad tag format) before credentials are
 /// resolved, matching `validate_create_preflight`'s contract.
@@ -95,25 +95,21 @@ pub fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::R
         }
     }
 
-    if body == *data {
+    let updated = if body == *data {
         if !json {
             eprintln!("nothing changed — skipping update");
+            return Ok(());
         }
-        if json {
-            println!("{}", serde_json::to_string_pretty(&res)?);
-        }
-        return Ok(());
-    }
-
-    let updated = client.update_host(id, &body)?;
-
+        res
+    } else {
+        client.update_host(id, &body)?
+    };
     if json {
-        println!("{}", serde_json::to_string_pretty(&updated)?);
-        return Ok(());
+        return print_json(&updated);
     }
 
-    let (_, name, ips) = host_fields(updated.get("data").unwrap_or(&Value::Null));
-    let final_tags = extract_tags(updated.get("data").unwrap_or(&Value::Null));
+    let data = &updated["data"];
+    let (_, name, ips) = host_fields(data);
     let name = sanitize_for_display(name);
     let ips = sanitize_for_display(&ips);
     if name.is_empty() {
@@ -125,22 +121,16 @@ pub fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::R
         print!(" [{ips}]");
     }
     println!();
-    let role = updated
-        .get("data")
-        .and_then(|d| d.get("roleID"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if role.is_empty() {
-        println!("  Role: (none)");
-    } else {
-        println!("  Role: {}", sanitize_for_display(role));
+    match str_field(data, "roleID") {
+        "" => println!("  Role: (none)"),
+        role => println!("  Role: {}", sanitize_for_display(role)),
     }
+    let final_tags = extract_tags(data);
     if final_tags.is_empty() {
         println!("  Tags: (none)");
-    } else {
-        for tag in &final_tags {
-            println!("  {}", sanitize_for_display(tag));
-        }
+    }
+    for tag in &final_tags {
+        println!("  {}", sanitize_for_display(tag));
     }
     Ok(())
 }
@@ -150,13 +140,11 @@ pub fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::R
 fn extract_tags(host: &Value) -> Vec<String> {
     host.get("tags")
         .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
 }
 
 #[cfg(test)]

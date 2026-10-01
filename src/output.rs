@@ -6,14 +6,56 @@ pub fn print_json(value: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Render rows as a left-aligned column table with a header row, padding each
-/// column to its widest cell. Columns are separated by two spaces; the final
-/// column is never padded (no trailing whitespace).
-///
-/// Widths are measured in terminal display columns (see [`display_width`]),
-/// so wide glyphs (emoji, CJK) and combining marks align — a host named
-/// `caleb-macbook-pro 💻` lines up with its plain-ASCII neighbours. Generic
-/// over column count so every list command shares it.
+/// Print a `{ data, metadata }` list envelope: pretty JSON for `--json`,
+/// otherwise `empty` when `data` has no rows, else the table `rows` builds.
+pub fn print_list(
+    res: &Value,
+    json: bool,
+    empty: &str,
+    headers: &[&str],
+    rows: impl FnOnce(&[Value]) -> Vec<Vec<String>>,
+) -> anyhow::Result<()> {
+    if json {
+        return print_json(res);
+    }
+    let data = res
+        .get("data")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    if data.is_empty() {
+        println!("{empty}");
+    } else {
+        print!("{}", render_table(headers, &rows(data)));
+    }
+    Ok(())
+}
+
+/// A string field, empty when absent or not a string.
+pub fn str_field<'a>(v: &'a Value, key: &str) -> &'a str {
+    v.get(key).and_then(Value::as_str).unwrap_or_default()
+}
+
+/// An unsigned integer field as text, empty when absent.
+pub fn count_field(v: &Value, key: &str) -> String {
+    v.get(key)
+        .and_then(Value::as_u64)
+        .map(|n| n.to_string())
+        .unwrap_or_default()
+}
+
+/// The strings in an array field, joined with ", ".
+pub fn joined_field(v: &Value, key: &str) -> String {
+    v.get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `s` with control characters replaced by spaces, so API-supplied text
+/// can't move the cursor or recolour the terminal.
 pub fn sanitize_for_display(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -31,6 +73,14 @@ fn display_width(s: &str) -> usize {
     s.chars().filter_map(UnicodeWidthChar::width).sum()
 }
 
+/// Render rows as a left-aligned column table with a header row, padding each
+/// column to its widest cell. Columns are separated by two spaces; the final
+/// column is never padded (no trailing whitespace).
+///
+/// Widths are measured in terminal display columns (see [`display_width`]),
+/// so wide glyphs (emoji, CJK) and combining marks align — a host named
+/// `caleb-macbook-pro 💻` lines up with its plain-ASCII neighbours. Generic
+/// over column count so every list command shares it.
 pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     let rows: Vec<Vec<String>> = rows
         .iter()
