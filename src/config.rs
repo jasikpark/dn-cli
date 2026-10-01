@@ -91,8 +91,8 @@ impl fmt::Display for UnsupportedAuthVersion {
 
 impl std::error::Error for UnsupportedAuthVersion {}
 
-/// An `auth.json` naming a profile [`validate_profile_name`] rejects: one
-/// saved by a `dn` that allowed uppercase, or edited by hand.
+/// An `auth.json` naming a profile [`validate_profile_name`] rejects, which
+/// can only come from editing the file by hand.
 #[derive(Debug)]
 pub struct InvalidStoredProfileName(String);
 
