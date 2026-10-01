@@ -12,6 +12,11 @@ license-file = "LICENSE.md"
 keywords = ["defined-networking", "nebula", "vpn", "cli"]
 categories = ["command-line-utilities"]
 
+# dn-cli isn't on crates.io, so binstall's quick-install and compile fallbacks
+# (both resolve by crates.io name) can never succeed.
+[package.metadata.binstall]
+disabled-strategies = ["quick-install", "compile"]
+
 [[bin]]
 name = "dn"
 path = "src/main.rs"
