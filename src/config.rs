@@ -18,6 +18,8 @@ const AUTH_VERSION: u64 = 2;
 /// The profile an old single-reference `auth.json` migrates into, and the one
 /// `auth login` creates when nothing else is named.
 pub const DEFAULT_PROFILE: &str = "default";
+/// A profile `key` meaning "the OS keyring holds it, under the profile name".
+pub const KEYRING: &str = "keyring";
 
 /// Resolved runtime configuration: a usable bearer token plus the API base.
 pub struct Config {
@@ -33,7 +35,8 @@ pub struct Profile {
     /// Falls back to https://api.defined.net when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_url: Option<String>,
-    /// A 1Password secret reference to the API key.
+    /// Where the API key is: [`KEYRING`] for the OS keyring, or a 1Password
+    /// secret reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     #[serde(flatten)]
@@ -51,6 +54,13 @@ pub struct AuthFile {
     pub profiles: BTreeMap<String, Profile>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Profile {
+    /// Whether this profile's key lives in the OS keyring.
+    pub fn uses_keyring(&self) -> bool {
+        self.key.as_deref().map(str::trim) == Some(KEYRING)
+    }
 }
 
 impl Default for AuthFile {
@@ -80,6 +90,23 @@ impl fmt::Display for UnsupportedAuthVersion {
 }
 
 impl std::error::Error for UnsupportedAuthVersion {}
+
+/// An `auth.json` naming a profile [`validate_profile_name`] rejects, which
+/// can only come from editing the file by hand.
+#[derive(Debug)]
+pub struct InvalidStoredProfileName(String);
+
+impl fmt::Display for InvalidStoredProfileName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid profile name {:?}: rename it in auth.json to 1-64 {PROFILE_NAME_CHARS}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for InvalidStoredProfileName {}
 
 /// An exclusive advisory lock on the credentials, held while a command reads,
 /// changes and writes `auth.json` (and, when migrating, `config.json`), so
@@ -153,6 +180,13 @@ impl AuthFile {
             }
             Some(version) => return Err(UnsupportedAuthVersion(version.to_string()).into()),
         };
+        // Every name becomes a keyring account name, so one the CLI would
+        // refuse (`Work` beside `work` would share a Windows Credential
+        // Manager entry) is refused here too.
+        let names = auth.profiles.keys().chain(&auth.default_profile);
+        if let Some(bad) = names.into_iter().find(|n| !is_valid_profile_name(n)) {
+            return Err(InvalidStoredProfileName(bad.clone()).into());
+        }
         auth.ensure_default();
         Ok((auth, legacy))
     }
@@ -172,11 +206,17 @@ impl AuthFile {
 
     /// Like [`AuthFile::load`], but an unparsable file comes back as no
     /// profiles plus the error, for `auth login` to replace. A file from a
-    /// newer `dn` is still an error: replacing it would lose its profiles.
+    /// newer `dn`, or one with a hand-edited bad name, is still an error:
+    /// replacing it would lose its profiles and orphan their keyring entries.
     pub fn load_or_reset() -> Result<(Self, Option<anyhow::Error>)> {
         match Self::load() {
             Ok(cfg) => Ok((cfg, None)),
-            Err(e) if e.downcast_ref::<UnsupportedAuthVersion>().is_some() => Err(e),
+            Err(e)
+                if e.downcast_ref::<UnsupportedAuthVersion>().is_some()
+                    || e.downcast_ref::<InvalidStoredProfileName>().is_some() =>
+            {
+                Err(e)
+            }
             Err(e) => Ok((Self::default(), Some(e))),
         }
     }
@@ -509,6 +549,8 @@ pub enum KeySource {
     EnvRef(String),
     /// The selected profile's `op://` reference.
     FileRef(String),
+    /// The OS keyring entry for the named profile.
+    Keyring(String),
 }
 
 /// The raw env key never appears in debug output.
@@ -518,6 +560,7 @@ impl fmt::Debug for KeySource {
             KeySource::Env(_) => f.write_str("Env(<redacted>)"),
             KeySource::EnvRef(r) => f.debug_tuple("EnvRef").field(r).finish(),
             KeySource::FileRef(r) => f.debug_tuple("FileRef").field(r).finish(),
+            KeySource::Keyring(p) => f.debug_tuple("Keyring").field(p).finish(),
         }
     }
 }
@@ -528,6 +571,7 @@ impl KeySource {
             KeySource::Env(_) => "env",
             KeySource::EnvRef(_) => "env-ref",
             KeySource::FileRef(_) => "file",
+            KeySource::Keyring(_) => "keyring",
         }
     }
 
@@ -535,24 +579,30 @@ impl KeySource {
     /// env key deliberately has no accessor here.
     pub fn reference(&self) -> Option<&str> {
         match self {
-            KeySource::Env(_) => None,
+            KeySource::Env(_) | KeySource::Keyring(_) => None,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => Some(r),
         }
     }
 }
 
-/// Validate a profile name: 1–64 ASCII letters, digits, `-`, `_` or `.`, so
-/// it is safe as a keyring account name and in messages.
+/// Validate a profile name: 1–64 lowercase ASCII letters, digits, `-`, `_`
+/// or `.`, so it is safe as a keyring account name and in messages. Lowercase
+/// because Windows Credential Manager can't tell entries apart by case.
 pub fn validate_profile_name(name: &str) -> Result<()> {
-    let ok = !name.is_empty()
+    if !is_valid_profile_name(name) {
+        bail!("invalid profile name {name:?}: use 1-64 {PROFILE_NAME_CHARS}");
+    }
+    Ok(())
+}
+
+const PROFILE_NAME_CHARS: &str = "lowercase letters, digits, '-', '_' or '.'";
+
+fn is_valid_profile_name(name: &str) -> bool {
+    !name.is_empty()
         && name.len() <= 64
         && name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-    if !ok {
-        bail!("invalid profile name {name:?}: use 1-64 letters, digits, '-', '_' or '.'");
-    }
-    Ok(())
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
 }
 
 /// The profile named for this call: `--profile`, else `DN_PROFILE`. `None`
@@ -606,9 +656,16 @@ impl Active {
     pub fn load(profile_flag: Option<&str>) -> Result<Self> {
         let requested = requested_profile(profile_flag)?;
         if let Some(source) = resolve_key_source(api_key_env().as_deref(), None)? {
+            // A readable file with a bad name still knows the default
+            // profile's URL; skipping it would send the key to the default API.
             let auth = match AuthFile::load() {
                 Ok(auth) => auth,
-                Err(e) if requested.is_some() => return Err(e),
+                Err(e)
+                    if requested.is_some()
+                        || e.downcast_ref::<InvalidStoredProfileName>().is_some() =>
+                {
+                    return Err(e);
+                }
                 Err(_) => AuthFile::default(),
             };
             let selected = match select_profile(requested.as_deref(), &auth) {
@@ -631,14 +688,23 @@ impl Active {
                 profile: None,
             });
         };
-        let source = resolve_key_source(None, profile.key.as_deref())
-            .with_context(|| format!("profile {name:?}"))?;
+        let source = profile_key_source(&name, profile)?;
         Ok(Self {
             source,
             profile_name: Some(name),
             profile: Some(profile.clone()),
         })
     }
+}
+
+/// Where a stored profile's key comes from, without resolving it: the OS
+/// keyring, or its `op://` reference. `None` for a profile saved with only a
+/// URL (e.g. migrated from `config.json`), which needs `DEFINED_API_KEY`.
+pub fn profile_key_source(name: &str, profile: &Profile) -> Result<Option<KeySource>> {
+    if profile.uses_keyring() {
+        return Ok(Some(KeySource::Keyring(name.to_string())));
+    }
+    resolve_key_source(None, profile.key.as_deref()).with_context(|| format!("profile {name:?}"))
 }
 
 /// Pure precedence: env (raw or `op://`) beats the file reference. `None` when
@@ -734,6 +800,20 @@ pub fn validate_op_ref(s: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The key a profile keeps in the OS keyring, trimmed. Anything not a
+/// plausible key (empty, or with spaces or control characters, as an entry
+/// edited outside `dn` can be) is refused here, not sent to the API.
+fn keyring_key(profile: &str) -> Result<String> {
+    let key = crate::keystore::get(profile)?.trim().to_string();
+    if key.is_empty() || !key.bytes().all(|b| b.is_ascii_graphic()) {
+        bail!(
+            "the OS keyring entry for profile {profile:?} is not an API key; run \
+             `dn auth login --profile {profile}` to replace it"
+        );
+    }
+    Ok(key)
 }
 
 /// Resolve a secret reference through the 1Password CLI. This is the
@@ -896,8 +976,8 @@ impl Config {
         let active = Active::load(profile_flag)?;
         let source = active.source.ok_or_else(|| {
             anyhow!(
-                "No API key configured. Run `dn auth login` (stores a 1Password secret \
-                 reference) or set {API_KEY_ENV}."
+                "No API key configured. Run `dn auth login` (stores the key in the OS \
+                 keyring) or set {API_KEY_ENV}."
             )
         })?;
         // Refuse an unusable URL before `op read`, which may prompt to unlock.
@@ -912,6 +992,7 @@ impl Config {
         let api_key = match source {
             KeySource::Env(key) => key,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => op_read(&r)?,
+            KeySource::Keyring(profile) => keyring_key(&profile)?,
         };
         let mut config = Self::with_key(api_key, active.profile.as_ref());
         config.profile = active.profile_name;
@@ -1102,7 +1183,7 @@ mod tests {
         for good in ["default", "staging-2", "a.b_c", &"x".repeat(64)] {
             validate_profile_name(good).unwrap();
         }
-        for bad in ["", "a b", "a/b", "prod:1", "é", &"x".repeat(65)] {
+        for bad in ["", "a b", "a/b", "prod:1", "é", "Work", &"x".repeat(65)] {
             assert!(validate_profile_name(bad).is_err(), "{bad:?}");
         }
     }
