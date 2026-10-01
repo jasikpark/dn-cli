@@ -1,6 +1,6 @@
 [package]
 name = "dn-cli"
-version = "0.2.10"
+version = "0.2.11"
 edition = "2024"
 # `std::fs::File::lock` guards concurrent edits to auth.json.
 rust-version = "1.89"
