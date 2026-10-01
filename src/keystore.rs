@@ -48,6 +48,20 @@ pub fn delete(profile: &str) -> Result<bool> {
     }
 }
 
+/// Fail when no OS keyring could start, so `dn auth login` can say so before
+/// asking for a key. An `Ok` doesn't promise a write will succeed: the
+/// keyring can still be locked or refuse access.
+pub fn ensure_available() -> Result<()> {
+    #[cfg(debug_assertions)]
+    if let Some(store) = test_store::from_env() {
+        return store.path().map(|_| ());
+    }
+    match keyring::Entry::store_status() {
+        Ok(()) => Ok(()),
+        Err(cause) => Err(anyhow!("{UNAVAILABLE_HINT} ({cause})")),
+    }
+}
+
 fn entry(profile: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(SERVICE, profile).map_err(|e| describe(e, profile))
 }
@@ -104,7 +118,7 @@ mod test_store {
     }
 
     impl TestStore {
-        fn path(&self) -> Result<&PathBuf> {
+        pub fn path(&self) -> Result<&PathBuf> {
             match self {
                 TestStore::File(path) => Ok(path),
                 TestStore::Unavailable => bail!("{}", super::UNAVAILABLE_HINT),

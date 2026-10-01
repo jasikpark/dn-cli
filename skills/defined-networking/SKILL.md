@@ -34,6 +34,9 @@ an `op://` reference may pop a 1Password unlock prompt on the user's machine,
 and a locked keyring may prompt to unlock; that is expected. If a call fails
 with "no OS keyring is available", the machine has no keyring (e.g. headless
 Linux): tell the user to use `--ref` or `DEFINED_API_KEY` instead.
+`source: "keyring"` only says where the key should be; `auth status` doesn't
+open the keyring. If a call fails with "has no key in the OS keyring", relay
+that error's `dn auth login --profile …` command to the user; don't run it.
 
 ### Profiles
 
@@ -42,8 +45,11 @@ and `staging` with different API URLs. When the user names an environment,
 pass `--profile <name>` on every call (or set `DN_PROFILE` for your shell).
 **Never run `dn auth switch`, `login` or `logout`** — each can change the
 default profile for every other process, including other agents running in
-parallel. If the user asks you to add a profile, pass `--keep-default` to
-`dn auth login` unless they want it to become the default.
+parallel. If the user asks to add a profile, give them the
+`dn auth login --profile <name>` command to run, with `--keep-default` unless
+they want it to become the default. `dn auth list --json` gives each profile's
+`key_source` (`keyring`, `file`, or `null` with no key) and its `api_key_ref`
+(the `op://` reference, else `null`).
 
 ## Always use `--json` when reading data programmatically
 

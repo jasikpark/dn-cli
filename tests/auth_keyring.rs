@@ -296,6 +296,49 @@ fn an_unavailable_keyring_points_at_the_alternatives() {
 }
 
 #[test]
+fn an_unavailable_keyring_fails_before_reading_a_key() {
+    let env = Env::new();
+    // Stdin is a 1Password reference, which the key check would reject;
+    // the keyring error coming first shows the key was never read.
+    let output = env.run(
+        &["auth", "login", "--key-stdin", "--no-verify", "--json"],
+        "op://vault/item/field",
+        &[("DN_TEST_KEYRING", "unavailable")],
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        error_message(&output).contains("no OS keyring is available"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn a_key_at_the_length_cap_with_a_trailing_newline_is_accepted() {
+    let env = Env::new();
+    let key = "k".repeat(1280);
+    let output = env.run(
+        &["auth", "login", "--key-stdin", "--no-verify", "--json"],
+        &format!("{key}\n"),
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(env.keyring_entries(), json!({ "default": key }));
+}
+
+#[test]
+fn a_key_over_the_length_cap_is_refused() {
+    let env = Env::new();
+    let output = env.run(
+        &["auth", "login", "--key-stdin", "--no-verify", "--json"],
+        &"k".repeat(1281),
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(error_message(&output).contains("1280"), "{output:?}");
+    assert_eq!(env.keyring_entries(), json!({}));
+}
+
+#[test]
 fn non_interactive_login_needs_key_stdin_or_ref() {
     let env = Env::new();
     for (args, stdin, expected) in [
@@ -472,8 +515,9 @@ fn a_failed_save_removes_a_new_keyring_entry() {
 
 #[cfg(unix)]
 #[test]
-fn a_failed_save_keeps_the_entry_an_existing_profile_uses() {
+fn a_failed_save_restores_the_key_an_existing_profile_uses() {
     let env = Env::new();
+    fs::write(env.keyring(), r#"{"default":"old-key"}"#).unwrap();
     let output = login_with_unwritable_config(&env, |config| {
         fs::write(
             config.dir.path().join("auth.json"),
@@ -482,6 +526,5 @@ fn a_failed_save_keeps_the_entry_an_existing_profile_uses() {
         .unwrap();
     });
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    // The new key replaced the old one, and auth.json still points at it.
-    assert_eq!(env.keyring_entries(), json!({ "default": "new-key" }));
+    assert_eq!(env.keyring_entries(), json!({ "default": "old-key" }));
 }

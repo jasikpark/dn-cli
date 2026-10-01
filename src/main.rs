@@ -141,7 +141,8 @@ struct AuthLoginArgs {
         conflicts_with = "key_stdin"
     )]
     reference: Option<String>,
-    /// Read the API key from stdin instead of prompting for it
+    /// Read the API key from stdin instead of prompting for it. A terminal
+    /// on stdin still gets the hidden prompt
     #[arg(long)]
     key_stdin: bool,
     /// API server for this account, for testing against a mock or
@@ -463,6 +464,9 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
     let name = requested_profile(profile_flag)?
         .or_else(|| planned.default_profile.clone())
         .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
+    if args.reference.is_none() {
+        keystore::ensure_available()?;
+    }
     let key = read_login_key(args)?;
     let saved_url = || {
         args.api_url
@@ -492,20 +496,25 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
 
     // The keyring write can also wait on an unlock prompt, so it happens
     // before the lock too, and before auth.json points at it. If saving the
-    // profile then fails, a keyring entry nothing used before is removed.
+    // profile then fails, the keyring goes back to what auth.json still
+    // describes: the profile's old key, or no entry.
     let had_keyring_entry = planned
         .profiles
         .get(&name)
         .is_some_and(|p| p.uses_keyring());
+    let mut old_key = None;
     if let LoginKey::Keyring(key) = &key {
+        if had_keyring_entry {
+            old_key = keystore::get(&name).ok();
+        }
         keystore::set(&name, key)?;
     }
     let saved = save_login(args, &name, &key);
     let (auth, previous_default, path) = match saved {
         Ok(saved) => saved,
         Err(e) => {
-            if matches!(key, LoginKey::Keyring(_)) && !had_keyring_entry {
-                forget_keyring_entry(&name);
+            if matches!(key, LoginKey::Keyring(_)) {
+                restore_keyring_entry(&name, old_key.as_deref(), had_keyring_entry);
             }
             return Err(e);
         }
@@ -581,6 +590,27 @@ fn forget_keyring_entry(profile: &str) {
             "warning: could not remove the OS keyring entry for profile {profile:?} ({e:#}); \
              it is no longer used"
         );
+    }
+}
+
+/// Put back the keyring entry a failed login replaced. With no `old_key` to
+/// restore, an entry the profile didn't use before is removed, and one it did
+/// use (but couldn't be read) is left holding the new key.
+fn restore_keyring_entry(profile: &str, old_key: Option<&str>, had_entry: bool) {
+    match old_key {
+        Some(old) => {
+            if let Err(e) = keystore::set(profile, old) {
+                eprintln!(
+                    "warning: could not restore the previous key for profile {profile:?} \
+                     in the OS keyring ({e:#}); it now holds the key just entered"
+                );
+            }
+        }
+        None if !had_entry => forget_keyring_entry(profile),
+        None => eprintln!(
+            "warning: the OS keyring entry for profile {profile:?} now holds the key \
+             just entered, though the profile was not saved"
+        ),
     }
 }
 
@@ -724,13 +754,16 @@ fn read_login_key(args: &AuthLoginArgs) -> anyhow::Result<LoginKey> {
     // `--key-stdin` from a terminal would echo the key as it's typed, so a
     // terminal always gets the hidden prompt.
     let key = if args.key_stdin && !std::io::stdin().is_terminal() {
+        // Room for surrounding whitespace; a read that fills the buffer
+        // was cut short, so it can't be judged after trimming.
+        let limit = 2 * MAX_KEY_LEN;
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(
-            &mut std::io::Read::take(std::io::stdin().lock(), MAX_KEY_LEN as u64 + 1),
+            &mut std::io::Read::take(std::io::stdin().lock(), limit as u64),
             &mut bytes,
         )
         .context("failed to read the API key from stdin")?;
-        if bytes.len() > MAX_KEY_LEN {
+        if bytes.len() == limit {
             bail!("the input is longer than {MAX_KEY_LEN} bytes, so it isn't an API key");
         }
         String::from_utf8(bytes)
@@ -747,6 +780,9 @@ fn read_login_key(args: &AuthLoginArgs) -> anyhow::Result<LoginKey> {
     let key = key.trim().to_string();
     if key.is_empty() {
         bail!("no API key entered");
+    }
+    if key.len() > MAX_KEY_LEN {
+        bail!("the input is longer than {MAX_KEY_LEN} bytes, so it isn't an API key");
     }
     if key.starts_with("op://") {
         bail!("that is a 1Password secret reference, not a key; pass it with --ref instead");

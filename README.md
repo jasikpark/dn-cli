@@ -76,7 +76,8 @@ forgets the profile and deletes its keyring entry.
 
 Each login is stored as a named profile, one per Defined Networking account.
 `auth login` without `--profile` saves to the default profile (`default` on a
-fresh setup). Add more for other accounts:
+fresh setup). Profile names are lowercase letters, digits, `-`, `_` and `.`.
+Add more for other accounts:
 
 ```bash
 dn auth login --profile work
