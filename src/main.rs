@@ -395,6 +395,9 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
         }
         match &args.reference {
             Some(reference) => validate_op_ref(&normalize_op_ref(reference))?,
+            None if args.key_stdin && cli.json && std::io::stdin().is_terminal() => {
+                bail!(KEY_STDIN_NEEDS_PIPE)
+            }
             None if args.key_stdin => {}
             None if cli.json || !std::io::stdin().is_terminal() => bail!(LOGIN_NEEDS_KEY),
             None => {}
@@ -453,8 +456,6 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
 const API_KEYS_URL: &str = "https://admin.defined.net/settings/api-keys/add";
 
 fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> anyhow::Result<()> {
-    let key = read_login_key(args)?;
-
     // Verify against the URL the profile will be saved with, before taking
     // the lock: `op read` may wait on a 1Password prompt, and every other
     // `dn` call that migrates or edits credentials would wait with it.
@@ -463,28 +464,29 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
         .or_else(|| planned.default_profile.clone())
         .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
     // Windows Credential Manager can't tell keyring entries apart by case, so
-    // a new profile's name is lowercase and can't case-clash with one saved
-    // before this rule (which keeps working under its old name).
-    if !planned.profiles.contains_key(&name) {
-        if name.bytes().any(|b| b.is_ascii_uppercase()) {
-            return Err(InvalidArgument(anyhow!(
-                "profile names are lowercase; use {:?}",
-                name.to_ascii_lowercase()
-            ))
-            .into());
-        }
-        if let Some(other) = planned
+    // a new profile's name is lowercase, and no profile shares a keyring entry
+    // with a case-clashing one saved before this rule.
+    let is_new = !planned.profiles.contains_key(&name);
+    if is_new && name.bytes().any(|b| b.is_ascii_uppercase()) {
+        return Err(InvalidArgument(anyhow!(
+            "profile names are lowercase; use {:?}",
+            name.to_ascii_lowercase()
+        ))
+        .into());
+    }
+    if (is_new || args.reference.is_none())
+        && let Some(other) = planned
             .profiles
             .keys()
-            .find(|other| other.eq_ignore_ascii_case(&name))
-        {
-            return Err(InvalidArgument(anyhow!(
-                "profile {name:?} differs from the existing {other:?} only in case; \
-                 keyring entries on Windows can't tell them apart, so pick another name"
-            ))
-            .into());
-        }
+            .find(|other| **other != name && other.eq_ignore_ascii_case(&name))
+    {
+        return Err(InvalidArgument(anyhow!(
+            "profile {name:?} differs from the existing {other:?} only in case; \
+             keyring entries on Windows can't tell them apart, so pick another name"
+        ))
+        .into());
     }
+    let key = read_login_key(args)?;
     let saved_url = || {
         args.api_url
             .as_deref()
@@ -716,12 +718,16 @@ fn print_json(value: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
+const KEY_STDIN_NEEDS_PIPE: &str = "--key-stdin reads the key from a pipe, and stdin is a \
+     terminal; under --json `auth login` never prompts, so pipe the key in";
+
 const LOGIN_NEEDS_KEY: &str = "pass --key-stdin, or --ref op://… to use 1Password: \
      `auth login` only prompts for the key in a terminal, and never under --json";
 
-/// Far longer than any Defined Networking API key, and under Windows
-/// Credential Manager's 2560-byte limit on a stored secret.
-const MAX_KEY_LEN: usize = 2048;
+/// Far longer than any Defined Networking API key, and within Windows
+/// Credential Manager's 2560-byte limit on a stored secret once the key is
+/// stored as UTF-16 (two bytes per ASCII character).
+const MAX_KEY_LEN: usize = 1280;
 
 /// The key a login stores, or the 1Password reference that stands for it.
 enum LoginKey {

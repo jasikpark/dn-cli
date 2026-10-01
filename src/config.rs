@@ -919,8 +919,8 @@ impl Config {
         let active = Active::load(profile_flag)?;
         let source = active.source.ok_or_else(|| {
             anyhow!(
-                "No API key configured. Run `dn auth login` (stores a 1Password secret \
-                 reference) or set {API_KEY_ENV}."
+                "No API key configured. Run `dn auth login` (stores the key in the OS \
+                 keyring) or set {API_KEY_ENV}."
             )
         })?;
         // Refuse an unusable URL before `op read`, which may prompt to unlock.

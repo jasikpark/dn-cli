@@ -1,6 +1,9 @@
 //! API keys stored in the OS keyring. Debug builds read `DN_TEST_KEYRING`
 //! as a stand-in keyring (a JSON file of profile → key), so these tests
-//! never touch the machine's real keyring.
+//! never touch the machine's real keyring. Release builds ignore it, so the
+//! file only compiles with debug assertions: under `cargo test --release`
+//! these tests would overwrite and delete the developer's real entries.
+#![cfg(debug_assertions)]
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -467,4 +470,103 @@ fn a_mixed_case_profile_saved_before_the_lowercase_rule_still_works() {
     let again = login("Work");
     assert!(again.status.success(), "{again:?}");
     assert_eq!(env.keyring_entries(), json!({ "Work": "key" }));
+}
+
+#[test]
+fn case_clashing_profiles_saved_earlier_cant_share_a_keyring_entry() {
+    // An older `dn` could save both "Work" and "work". Both exist, but on
+    // Windows they'd share one keyring entry, so neither may move its key
+    // there; a 1Password reference is still fine.
+    let env = Env::new();
+    fs::write(
+        env.dir.path().join("auth.json"),
+        r#"{"version":2,"default_profile":"work","profiles":{
+            "Work":{"key":"op://v/a/f"},"work":{"key":"op://v/b/f"}}}"#,
+    )
+    .unwrap();
+    for profile in ["Work", "work"] {
+        let output = env.run(
+            &[
+                "auth",
+                "login",
+                "--profile",
+                profile,
+                "--key-stdin",
+                "--no-verify",
+                "--json",
+            ],
+            "key",
+            &[],
+        );
+        assert_eq!(output.status.code(), Some(1), "{profile}: {output:?}");
+        assert!(
+            error_message(&output).contains("only in case"),
+            "{output:?}"
+        );
+    }
+    assert_eq!(env.keyring_entries(), json!({}));
+    env.ok(
+        &[
+            "auth",
+            "login",
+            "--profile",
+            "Work",
+            "--ref",
+            "op://v/c/f",
+            "--no-verify",
+            "--json",
+        ],
+        "",
+    );
+}
+
+/// A login whose keyring write succeeds but whose auth.json save fails, in
+/// a config dir made read-only after `setup` runs.
+#[cfg(unix)]
+fn login_with_unwritable_config(env: &Env, setup: impl FnOnce(&Env)) -> Output {
+    use std::os::unix::fs::PermissionsExt;
+
+    let config = env.dir.path().join("config");
+    fs::create_dir(&config).unwrap();
+    let config_env = Env {
+        dir: tempfile::tempdir_in(&config).unwrap(),
+    };
+    setup(&config_env);
+    let mut readonly = fs::metadata(config_env.dir.path()).unwrap().permissions();
+    readonly.set_mode(0o555);
+    fs::set_permissions(config_env.dir.path(), readonly).unwrap();
+    let output = env.run(
+        &["auth", "login", "--key-stdin", "--no-verify", "--json"],
+        "new-key",
+        &[("DN_CONFIG_DIR", config_env.dir.path().to_str().unwrap())],
+    );
+    let mut writable = fs::metadata(config_env.dir.path()).unwrap().permissions();
+    writable.set_mode(0o755);
+    fs::set_permissions(config_env.dir.path(), writable).unwrap();
+    output
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_save_removes_a_new_keyring_entry() {
+    let env = Env::new();
+    let output = login_with_unwritable_config(&env, |_| {});
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(env.keyring_entries(), json!({}));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_save_keeps_the_entry_an_existing_profile_uses() {
+    let env = Env::new();
+    let output = login_with_unwritable_config(&env, |config| {
+        fs::write(
+            config.dir.path().join("auth.json"),
+            r#"{"version":2,"default_profile":"default","profiles":{"default":{"key":"keyring"}}}"#,
+        )
+        .unwrap();
+    });
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    // The new key replaced the old one, and auth.json still points at it.
+    assert_eq!(env.keyring_entries(), json!({ "default": "new-key" }));
 }
