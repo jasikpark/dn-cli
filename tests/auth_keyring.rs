@@ -254,7 +254,7 @@ fn switching_a_profile_to_1password_removes_its_keyring_entry() {
         ],
         "",
     );
-    assert_eq!(out["profiles"][0]["key_source"], "1password");
+    assert_eq!(out["profiles"][0]["key_source"], "file");
     assert_eq!(env.keyring_entries(), json!({}));
 }
 
@@ -411,10 +411,8 @@ fn logout_with_an_unavailable_keyring_warns_and_still_logs_out() {
 }
 
 #[test]
-fn profile_names_that_differ_only_in_case_are_refused() {
-    // Windows Credential Manager can't tell their keyring entries apart.
+fn new_profile_names_must_be_lowercase() {
     let env = Env::new();
-    env.login("work", "key", &[]);
     let output = env.run(
         &[
             "auth",
@@ -425,13 +423,48 @@ fn profile_names_that_differ_only_in_case_are_refused() {
             "--no-verify",
             "--json",
         ],
-        "other-key",
+        "key",
         &[],
     );
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(
-        error_message(&output).contains("only in case"),
-        "{output:?}"
-    );
-    assert_eq!(env.keyring_entries(), json!({ "work": "key" }));
+    let message = error_message(&output);
+    assert!(message.contains(r#"use "work""#), "{message}");
+    assert_eq!(env.keyring_entries(), json!({}));
+}
+
+#[test]
+fn a_mixed_case_profile_saved_before_the_lowercase_rule_still_works() {
+    // auth.json as an older `dn` could write it, with a mixed-case name.
+    // Windows Credential Manager can't tell "Work" and "work" apart, so a
+    // new "work" is refused, while "Work" itself can log in again.
+    let env = Env::new();
+    fs::write(
+        env.dir.path().join("auth.json"),
+        r#"{"version":2,"default_profile":"Work","profiles":{"Work":{"key":"op://v/i/f"}}}"#,
+    )
+    .unwrap();
+    let login = |profile: &str| {
+        env.run(
+            &[
+                "auth",
+                "login",
+                "--profile",
+                profile,
+                "--key-stdin",
+                "--no-verify",
+                "--json",
+            ],
+            "key",
+            &[],
+        )
+    };
+
+    let clash = login("work");
+    assert_eq!(clash.status.code(), Some(1), "{clash:?}");
+    assert!(error_message(&clash).contains("only in case"), "{clash:?}");
+    assert_eq!(env.keyring_entries(), json!({}));
+
+    let again = login("Work");
+    assert!(again.status.success(), "{again:?}");
+    assert_eq!(env.keyring_entries(), json!({ "Work": "key" }));
 }
