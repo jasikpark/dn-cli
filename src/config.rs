@@ -91,8 +91,8 @@ impl fmt::Display for UnsupportedAuthVersion {
 
 impl std::error::Error for UnsupportedAuthVersion {}
 
-/// An `auth.json` naming a profile [`validate_profile_name`] rejects, which
-/// can only come from editing the file by hand.
+/// An `auth.json` naming a profile [`validate_profile_name`] rejects: one
+/// saved by a `dn` that allowed uppercase, or edited by hand.
 #[derive(Debug)]
 pub struct InvalidStoredProfileName(String);
 
@@ -656,9 +656,16 @@ impl Active {
     pub fn load(profile_flag: Option<&str>) -> Result<Self> {
         let requested = requested_profile(profile_flag)?;
         if let Some(source) = resolve_key_source(api_key_env().as_deref(), None)? {
+            // A readable file with a bad name still knows the default
+            // profile's URL; skipping it would send the key to the default API.
             let auth = match AuthFile::load() {
                 Ok(auth) => auth,
-                Err(e) if requested.is_some() => return Err(e),
+                Err(e)
+                    if requested.is_some()
+                        || e.downcast_ref::<InvalidStoredProfileName>().is_some() =>
+                {
+                    return Err(e);
+                }
                 Err(_) => AuthFile::default(),
             };
             let selected = match select_profile(requested.as_deref(), &auth) {

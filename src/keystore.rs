@@ -88,6 +88,14 @@ fn describe(err: keyring::Error, profile: &str) -> anyhow::Error {
         keyring::Error::NoStorageAccess(e) => {
             anyhow!("the OS keyring refused access (is it locked?): {e}")
         }
+        keyring::Error::BadEncoding(_) => anyhow!(
+            "the OS keyring entry for profile {profile:?} is not text; run \
+             `dn auth login --profile {profile}` to replace it"
+        ),
+        keyring::Error::Ambiguous(_) => anyhow!(
+            "the OS keyring has more than one entry for profile {profile:?} under service \
+             {SERVICE}; remove the extras in your keyring manager"
+        ),
         other => anyhow!("OS keyring error: {other}"),
     }
 }

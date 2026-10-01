@@ -49,7 +49,9 @@ parallel. If the user asks to add a profile, give them the
 `dn auth login --profile <name>` command to run, with `--keep-default` unless
 they want it to become the default. `dn auth list --json` gives each profile's
 `key_source` (`keyring`, `file`, or `null` with no key) and its `api_key_ref`
-(the `op://` reference, else `null`).
+(the `op://` reference, else `null`). When the user has logged out or
+switched a profile to `--ref`, a non-empty `keyring_left` in that command's
+output names profiles whose old keyring entry couldn't be deleted; tell them.
 
 ## Always use `--json` when reading data programmatically
 

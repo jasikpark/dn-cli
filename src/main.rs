@@ -521,8 +521,12 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
     };
     // Judged by the profile this save replaced, not `planned`: another login
     // may have pointed it at the keyring while this one waited on a prompt.
-    if replaced.is_some_and(|p| p.uses_keyring()) && matches!(key, LoginKey::Reference(_)) {
-        forget_keyring_entry(&name);
+    let mut keyring_left = Vec::new();
+    if replaced.is_some_and(|p| p.uses_keyring())
+        && matches!(key, LoginKey::Reference(_))
+        && !forget_keyring_entry(&name)
+    {
+        keyring_left.push(name.clone());
     }
     let env_override = warn_env_override();
 
@@ -533,6 +537,7 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
             ("profile".into(), json!(name)),
             ("auth_path".into(), json!(path)),
             ("env_override".into(), json!(env_override)),
+            ("keyring_left".into(), json!(keyring_left)),
         ]);
         return print_json(&out);
     }
@@ -567,7 +572,11 @@ fn save_login(
     let _lock = AuthLock::acquire()?;
     let (mut auth, corrupt) = AuthFile::load_or_reset()?;
     if let Some(err) = corrupt {
-        eprintln!("warning: replacing unreadable auth file ({err:#})");
+        eprintln!(
+            "warning: replacing unreadable auth file ({err:#}); any keys its profiles kept in \
+             the OS keyring (service {}) are left there",
+            keystore::SERVICE
+        );
     }
     let replaced = auth.profiles.get(name).cloned();
     let mut profile = replaced.clone().unwrap_or_default();
@@ -591,13 +600,18 @@ fn save_login(
 }
 
 /// Delete a profile's keyring entry that nothing points at any more. Failing
-/// to is only a warning: the profile change it follows has already happened.
-fn forget_keyring_entry(profile: &str) {
-    if let Err(e) = keystore::delete(profile) {
-        eprintln!(
-            "warning: could not remove the OS keyring entry for profile {profile:?} ({e:#}); \
-             it is no longer used"
-        );
+/// to is only a warning, and `false`: the profile change it follows has
+/// already happened.
+fn forget_keyring_entry(profile: &str) -> bool {
+    match keystore::delete(profile) {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!(
+                "warning: could not remove the OS keyring entry for profile {profile:?} \
+                 ({e:#}); it is no longer used"
+            );
+            false
+        }
     }
 }
 
@@ -637,7 +651,9 @@ fn restore_keyring_entry(profile: &str, old_key: Option<&str>, had_entry: bool) 
                 );
             }
         }
-        None if !had_entry => forget_keyring_entry(profile),
+        None if !had_entry => {
+            forget_keyring_entry(profile);
+        }
         None => eprintln!(
             "warning: the OS keyring entry for profile {profile:?} now holds the key \
              just entered, though the profile was not saved"
@@ -975,7 +991,10 @@ fn auth_logout(
         }
     };
     drop(lock);
-    forget.iter().for_each(|name| forget_keyring_entry(name));
+    let keyring_left: Vec<&String> = forget
+        .iter()
+        .filter(|name| !forget_keyring_entry(name))
+        .collect();
     warn_relogged_profiles(&forget);
     let env_override = warn_env_override();
 
@@ -987,6 +1006,7 @@ fn auth_logout(
             ("profile".into(), json!(profile)),
             ("auth_path".into(), json!(path)),
             ("env_override".into(), json!(env_override)),
+            ("keyring_left".into(), json!(keyring_left)),
         ]);
         return print_json(&out);
     }

@@ -322,6 +322,15 @@ fn a_hand_edited_profile_name_is_refused_and_never_reset() {
             "{output:?}"
         );
     }
+    // DEFINED_API_KEY skips a file it can't read, but not this one, whose
+    // default profile may point at another API.
+    let output = env.run(
+        &["auth", "status", "--json"],
+        "",
+        &[("DEFINED_API_KEY", "env-key")],
+    );
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["source"], "invalid", "{output:?}");
     assert_eq!(fs::read_to_string(&file).unwrap(), text);
     assert_eq!(env.keyring_entries(), json!({}));
 }
@@ -504,6 +513,8 @@ fn logout_with_an_unavailable_keyring_warns_and_still_logs_out() {
         "{stderr}"
     );
     assert!(env.auth_json()["profiles"].get("a").is_none());
+    let out: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(out["keyring_left"], json!(["a"]));
 }
 
 #[test]
