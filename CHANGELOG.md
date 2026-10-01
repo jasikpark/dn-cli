@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.12 (2026-10-01)
+
+### Fixes
+
+- stop cargo-binstall falling back to crates.io (#94)
+
 ## 0.2.11 (2026-10-01)
 
 ### Features
