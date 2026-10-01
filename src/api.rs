@@ -4,6 +4,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
+use ureq::Body;
+use ureq::http::Response;
 
 use crate::config::Config;
 
@@ -80,18 +82,11 @@ impl ApiError {
 
 impl ApiErrorDetail {
     fn from_value(value: &Value) -> Self {
+        let field = |key| value.get(key).and_then(Value::as_str);
         ApiErrorDetail {
-            code: value
-                .get("code")
-                .and_then(Value::as_str)
-                .unwrap_or("ERR_UNKNOWN")
-                .to_string(),
-            message: value
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("(no message)")
-                .to_string(),
-            path: value.get("path").and_then(Value::as_str).map(str::to_owned),
+            code: field("code").unwrap_or("ERR_UNKNOWN").to_string(),
+            message: field("message").unwrap_or("(no message)").to_string(),
+            path: field("path").map(str::to_owned),
         }
     }
 }
@@ -141,10 +136,10 @@ impl Client {
         Self { config, agent }
     }
 
-    fn call_with_retry<F>(&self, send: F) -> Result<ureq::http::Response<ureq::Body>>
-    where
-        F: Fn() -> Result<ureq::http::Response<ureq::Body>, ureq::Error>,
-    {
+    fn call_with_retry(
+        &self,
+        send: impl Fn() -> Result<Response<Body>, ureq::Error>,
+    ) -> Result<Response<Body>> {
         for attempt in 0..MAX_RETRIES {
             let res = send().context("request to Defined API failed")?;
             if res.status().as_u16() != 429 {
@@ -158,7 +153,21 @@ impl Client {
             );
             std::thread::sleep(delay);
         }
-        let res = send().context("request to Defined API failed")?;
+        send().context("request to Defined API failed")
+    }
+
+    /// Send one request to a versioned path and fail on a non-2xx with a
+    /// typed [`ApiError`]. `build` makes the request from the full URL and
+    /// the `Authorization` value.
+    fn send(
+        &self,
+        path: &str,
+        build: impl Fn(&str, &str) -> Result<Response<Body>, ureq::Error>,
+    ) -> Result<Response<Body>> {
+        let url = format!("{}{}", self.config.api_url, path);
+        let auth = format!("Bearer {}", self.config.api_key);
+        let mut res = self.call_with_retry(|| build(&url, &auth))?;
+        error_for_status(&mut res)?;
         Ok(res)
     }
 
@@ -170,75 +179,13 @@ impl Client {
     /// GET a versioned path with query parameters, returning the parsed JSON
     /// body. ureq handles percent-encoding of the values.
     fn get_with_query(&self, path: &str, query: &[(&str, &str)]) -> Result<Value> {
-        let url = format!("{}{}", self.config.api_url, path);
-        let auth = format!("Bearer {}", self.config.api_key);
-
-        let mut res = self.call_with_retry(|| {
-            let mut req = self.agent.get(&url).header("Authorization", &auth);
+        read_json(self.send(path, |url, auth| {
+            let mut req = self.agent.get(url).header("Authorization", auth);
             for (key, value) in query {
                 req = req.query(*key, *value);
             }
             req.call()
-        })?;
-        error_for_status(&mut res)?;
-
-        res.body_mut()
-            .read_json::<Value>()
-            .context("failed to parse Defined API response as JSON")
-    }
-
-    /// POST a JSON body to a versioned path and return the parsed JSON
-    /// response.
-    pub fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
-        let url = format!("{}{}", self.config.api_url, path);
-        let auth = format!("Bearer {}", self.config.api_key);
-
-        let mut res = self.call_with_retry(|| {
-            self.agent
-                .post(&url)
-                .header("Authorization", &auth)
-                .send_json(body)
-        })?;
-        error_for_status(&mut res)?;
-
-        res.body_mut()
-            .read_json::<Value>()
-            .context("failed to parse Defined API response as JSON")
-    }
-
-    /// PUT a JSON body to a versioned path and return the parsed JSON
-    /// response.
-    pub fn put_json(&self, path: &str, body: &Value) -> Result<Value> {
-        let url = format!("{}{}", self.config.api_url, path);
-        let auth = format!("Bearer {}", self.config.api_key);
-
-        let mut res = self.call_with_retry(|| {
-            self.agent
-                .put(&url)
-                .header("Authorization", &auth)
-                .send_json(body)
-        })?;
-        error_for_status(&mut res)?;
-
-        res.body_mut()
-            .read_json::<Value>()
-            .context("failed to parse Defined API response as JSON")
-    }
-
-    /// DELETE a versioned path. A 2xx carries an empty `{data, metadata}`
-    /// envelope, so nothing is parsed — the status is the whole answer.
-    pub fn delete(&self, path: &str) -> Result<()> {
-        let url = format!("{}{}", self.config.api_url, path);
-        let auth = format!("Bearer {}", self.config.api_key);
-
-        let mut res = self.call_with_retry(|| {
-            self.agent
-                .delete(&url)
-                .header("Authorization", &auth)
-                .call()
-        })?;
-
-        error_for_status(&mut res)
+        })?)
     }
 
     /// List every host (v2 endpoint — dual-stack `ipAddresses`), following
@@ -359,13 +306,22 @@ impl Client {
     /// field-partial, so callers GET first and send the modified whole.
     /// v2 network hosts require v3 for mutations.
     pub fn update_host(&self, id: &str, body: &Value) -> Result<Value> {
-        self.put_json(&format!("/v3/hosts/{id}"), body)
+        read_json(self.send(&format!("/v3/hosts/{id}"), |url, auth| {
+            self.agent
+                .put(url)
+                .header("Authorization", auth)
+                .send_json(body)
+        })?)
     }
 
     /// Delete a host, which needs the `hosts:delete` scope. v1 is the only
-    /// version of the API with a host delete.
+    /// version of the API with a host delete. A 2xx carries an empty
+    /// `{data, metadata}` envelope, so nothing is parsed.
     pub fn delete_host(&self, id: &str) -> Result<()> {
-        self.delete(&format!("/v1/hosts/{id}"))
+        self.send(&format!("/v1/hosts/{id}"), |url, auth| {
+            self.agent.delete(url).header("Authorization", auth).call()
+        })
+        .map(drop)
     }
 
     /// Create a host (or lighthouse / relay) AND its enrollment code in one
@@ -374,7 +330,12 @@ impl Client {
     /// host creation, so callers don't have to chase a second request and
     /// reason about partial-failure cleanup.
     pub fn create_host_with_enrollment(&self, body: &Value) -> Result<Value> {
-        self.post_json("/v2/host-and-enrollment-code", body)
+        read_json(self.send("/v2/host-and-enrollment-code", |url, auth| {
+            self.agent
+                .post(url)
+                .header("Authorization", auth)
+                .send_json(body)
+        })?)
     }
 }
 
@@ -383,7 +344,7 @@ impl Client {
 /// them directly. A successful response is left with its body unread, for the
 /// caller to parse or ignore. `x-request-id` is worth surfacing on errors —
 /// it's the handle support uses to find the request server-side.
-fn error_for_status(res: &mut ureq::http::Response<ureq::Body>) -> Result<()> {
+fn error_for_status(res: &mut Response<Body>) -> Result<()> {
     let status = res.status();
     if status.is_success() {
         return Ok(());
@@ -398,7 +359,13 @@ fn error_for_status(res: &mut ureq::http::Response<ureq::Body>) -> Result<()> {
     Err(ApiError::from_response(status.as_u16(), &body, request_id).into())
 }
 
-fn retry_delay(res: &ureq::http::Response<ureq::Body>, attempt: u32) -> Duration {
+fn read_json(mut res: Response<Body>) -> Result<Value> {
+    res.body_mut()
+        .read_json()
+        .context("failed to parse Defined API response as JSON")
+}
+
+fn retry_delay(res: &Response<Body>, attempt: u32) -> Duration {
     let header_val = res
         .headers()
         .get("retry-after")

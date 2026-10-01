@@ -65,69 +65,49 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
     // Run all client-side validation before resolving credentials or touching
     // the network, so `dn host create --lighthouse` (missing required flags)
     // reports the actual problem instead of hiding behind a credentials error.
-    if let Command::Host {
-        command: HostCommand::Create(args),
-    } = &cli.command
-    {
-        validate_create_preflight(args)?;
-    }
-    if let Command::Host {
-        command: HostCommand::Edit(args),
-    } = &cli.command
-    {
-        validate_edit_preflight(args)?;
-    }
-    if let Command::Host {
-        command: HostCommand::Search(args),
-    } = &cli.command
-    {
-        validate_search_preflight(args)?;
-    }
-    if let Command::Role {
-        command: RoleCommand::Get(args),
-    } = &cli.command
-    {
-        validate_role_id(args.role_id.trim())?;
-    }
-    if let Command::Tag {
-        command: TagCommand::Get(args),
-    } = &cli.command
-    {
-        parse_tag(args.tag.trim())?;
-    }
-    if let Command::Host {
-        command: HostCommand::Delete(args),
-    } = &cli.command
-    {
-        validate_host_id(&args.host_id)?;
-        if delete_confirmation(args.yes, cli.json, std::io::stdin().is_terminal())
-            == DeleteConfirmation::Refuse
-        {
-            bail!(DELETE_NEEDS_YES);
-        }
-    }
-    if let Command::Auth {
-        command: AuthCommand::Switch(args),
-    } = &cli.command
-    {
-        validate_profile_name(&args.name)?;
-    }
-    if let Command::Auth {
-        command: AuthCommand::Login(args),
-    } = &cli.command
-    {
-        if let Some(url) = &args.api_url {
-            validate_api_url(url)?;
-        }
-        match &args.reference {
-            Some(reference) => validate_op_ref(&normalize_op_ref(reference))?,
-            None if args.key_stdin && cli.json && std::io::stdin().is_terminal() => {
-                bail!(KEY_STDIN_NEEDS_PIPE)
+    match &cli.command {
+        Command::Host { command } => match command {
+            HostCommand::Create(args) => validate_create_preflight(args)?,
+            HostCommand::Edit(args) => validate_edit_preflight(args)?,
+            HostCommand::Search(args) => validate_search_preflight(args)?,
+            HostCommand::Delete(args) => {
+                validate_host_id(&args.host_id)?;
+                if delete_confirmation(args.yes, cli.json, std::io::stdin().is_terminal())
+                    == DeleteConfirmation::Refuse
+                {
+                    bail!(DELETE_NEEDS_YES);
+                }
             }
-            None if args.key_stdin => {}
-            None if cli.json || !std::io::stdin().is_terminal() => bail!(LOGIN_NEEDS_KEY),
-            None => {}
+            HostCommand::List => {}
+        },
+        Command::Role {
+            command: RoleCommand::Get(args),
+        } => validate_role_id(args.role_id.trim())?,
+        Command::Tag {
+            command: TagCommand::Get(args),
+        } => {
+            parse_tag(args.tag.trim())?;
         }
+        Command::Auth {
+            command: AuthCommand::Switch(args),
+        } => validate_profile_name(&args.name)?,
+        Command::Auth {
+            command: AuthCommand::Login(args),
+        } => {
+            if let Some(url) = &args.api_url {
+                validate_api_url(url)?;
+            }
+            match &args.reference {
+                Some(reference) => validate_op_ref(&normalize_op_ref(reference))?,
+                None if args.key_stdin && cli.json && std::io::stdin().is_terminal() => {
+                    bail!(KEY_STDIN_NEEDS_PIPE)
+                }
+                None if args.key_stdin => {}
+                None if cli.json || !std::io::stdin().is_terminal() => bail!(LOGIN_NEEDS_KEY),
+                None => {}
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -154,26 +134,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 HostCommand::Delete(args) => hosts_delete(&client, args, cli.json)?,
             }
         }
-        Command::Network { command } => {
-            let client = api_client(cli)?;
-            match command {
-                NetworkCommand::List => networks_list(&client, cli.json)?,
-            }
-        }
-        Command::Role { command } => {
-            let client = api_client(cli)?;
-            match command {
-                RoleCommand::List => roles_list(&client, cli.json)?,
-                RoleCommand::Get(args) => roles_get(&client, args, cli.json)?,
-            }
-        }
-        Command::Tag { command } => {
-            let client = api_client(cli)?;
-            match command {
-                TagCommand::List => tags_list(&client, cli.json)?,
-                TagCommand::Get(args) => tags_get(&client, args, cli.json)?,
-            }
-        }
+        Command::Network {
+            command: NetworkCommand::List,
+        } => networks_list(&api_client(cli)?, cli.json)?,
+        Command::Role { command } => match command {
+            RoleCommand::List => roles_list(&api_client(cli)?, cli.json)?,
+            RoleCommand::Get(args) => roles_get(&api_client(cli)?, args, cli.json)?,
+        },
+        Command::Tag { command } => match command {
+            TagCommand::List => tags_list(&api_client(cli)?, cli.json)?,
+            TagCommand::Get(args) => tags_get(&api_client(cli)?, args, cli.json)?,
+        },
     }
 
     Ok(())

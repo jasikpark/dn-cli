@@ -1,54 +1,44 @@
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::api::Client;
 use crate::cli::HostCreateArgs;
 use crate::error::InvalidArgument;
-use crate::output::sanitize_for_display;
+use crate::output::{joined_field, print_json, sanitize_for_display, str_field};
 
 pub fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyhow::Result<()> {
     // Auto-assigning an IPv4 means sending the network's own IPv4 prefix, so
     // the network is fetched only while IPv4 is still undecided.
     let auto_ipv4 = wants_auto_ipv4(args);
     let (network_id, ipv4_cidr) = match &args.network {
-        Some(id) => {
-            let cidr = if auto_ipv4 {
-                let network = client.get_network(id).with_context(|| {
-                    format!(
-                        "could not read network {id} to auto-assign an IPv4 (the API key needs \
-                         networks:read; pass --ipv4 <ADDR|CIDR> or --no-ipv4 to skip the lookup)"
-                    )
-                })?;
-                network_ipv4_cidr(&network["data"])
-            } else {
-                None
-            };
-            (id.clone(), cidr)
+        Some(id) if auto_ipv4 => {
+            let network = client.get_network(id).with_context(|| {
+                format!(
+                    "could not read network {id} to auto-assign an IPv4 (the API key needs \
+                     networks:read; pass --ipv4 <ADDR|CIDR> or --no-ipv4 to skip the lookup)"
+                )
+            })?;
+            (id.clone(), network_ipv4_cidr(&network["data"]))
         }
+        Some(id) => (id.clone(), None),
         None => {
             let networks = client.list_networks()?;
             let network = pick_network(&networks)?;
-            let id = network
-                .get("id")
-                .and_then(Value::as_str)
+            let id = network["id"]
+                .as_str()
                 .ok_or_else(|| anyhow!("network list response missing 'id' on the only entry"))?;
-            let cidr = if auto_ipv4 {
-                network_ipv4_cidr(network)
-            } else {
-                None
-            };
-            (id.to_owned(), cidr)
+            (
+                id.to_owned(),
+                network_ipv4_cidr(network).filter(|_| auto_ipv4),
+            )
         }
     };
 
     let body = build_host_create_body(args, &network_id, ipv4_cidr.as_deref());
     let res = client.create_host_with_enrollment(&body)?;
-
     if json {
-        println!("{}", serde_json::to_string_pretty(&res)?);
-        return Ok(());
+        return print_json(&res);
     }
-
     print!("{}", render_host_create_human(&res));
     Ok(())
 }
@@ -58,20 +48,15 @@ pub fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyho
 /// pairing rules (lighthouse needs static address + non-zero port; relay
 /// needs non-zero port) come straight from the v2 host-create error examples.
 pub fn validate_create_preflight(args: &HostCreateArgs) -> anyhow::Result<()> {
-    if args.lighthouse {
-        if args.static_addresses.is_empty() {
-            return Err(anyhow!(
-                "--lighthouse requires at least one --static-address <ip:port>"
-            ));
-        }
-        if args.listen_port.unwrap_or(0) == 0 {
-            return Err(anyhow!(
-                "--lighthouse requires --listen-port <port> (non-zero)"
-            ));
-        }
+    let has_port = args.listen_port.unwrap_or(0) != 0;
+    if args.lighthouse && args.static_addresses.is_empty() {
+        bail!("--lighthouse requires at least one --static-address <ip:port>");
     }
-    if args.relay && args.listen_port.unwrap_or(0) == 0 {
-        return Err(anyhow!("--relay requires --listen-port <port> (non-zero)"));
+    if args.lighthouse && !has_port {
+        bail!("--lighthouse requires --listen-port <port> (non-zero)");
+    }
+    if args.relay && !has_port {
+        bail!("--relay requires --listen-port <port> (non-zero)");
     }
     Ok(())
 }
@@ -140,44 +125,31 @@ fn build_host_create_body(
     network_id: &str,
     ipv4_auto_cidr: Option<&str>,
 ) -> Value {
-    let mut body = json!({
-        "name": args.name,
-        "networkID": network_id,
-    });
-    let obj = body.as_object_mut().expect("freshly built object");
-
-    if let Some(role) = &args.role {
-        obj.insert("roleID".into(), json!(role));
-    }
     let mut ips: Vec<&str> = Vec::new();
     if !args.no_ipv4
         && let Some(v4) = args.ipv4.as_deref().or(ipv4_auto_cidr)
     {
         ips.push(v4);
     }
-    if let Some(v6) = &args.ipv6 {
-        ips.push(v6);
-    }
-    if !ips.is_empty() {
-        obj.insert("ipAddresses".into(), json!(ips));
-    }
-    if !args.static_addresses.is_empty() {
-        obj.insert("staticAddresses".into(), json!(args.static_addresses));
-    }
-    if let Some(p) = args.listen_port {
-        obj.insert("listenPort".into(), json!(p));
-    }
-    if args.lighthouse {
-        obj.insert("isLighthouse".into(), json!(true));
-    }
-    if args.relay {
-        obj.insert("isRelay".into(), json!(true));
-    }
-    if !args.tags.is_empty() {
-        obj.insert("tags".into(), json!(args.tags));
-    }
-    if let Some(c) = args.code_lifetime {
-        obj.insert("codeLifetimeSeconds".into(), json!(c));
+    ips.extend(args.ipv6.as_deref());
+    let optional = [
+        ("roleID", args.role.as_ref().map(|r| json!(r))),
+        ("ipAddresses", (!ips.is_empty()).then(|| json!(ips))),
+        (
+            "staticAddresses",
+            (!args.static_addresses.is_empty()).then(|| json!(args.static_addresses)),
+        ),
+        ("listenPort", args.listen_port.map(|p| json!(p))),
+        ("isLighthouse", args.lighthouse.then(|| json!(true))),
+        ("isRelay", args.relay.then(|| json!(true))),
+        ("tags", (!args.tags.is_empty()).then(|| json!(args.tags))),
+        ("codeLifetimeSeconds", args.code_lifetime.map(|c| json!(c))),
+    ];
+    let mut body = json!({ "name": args.name, "networkID": network_id });
+    for (key, value) in optional {
+        if let Some(value) = value {
+            body[key] = value;
+        }
     }
     body
 }
@@ -190,48 +162,19 @@ fn build_host_create_body(
 /// are deliberately open to revision; the structure (extract → format → emit)
 /// is what's load-bearing.
 fn render_host_create_human(res: &Value) -> String {
-    let data = res.get("data");
-    let host = data.and_then(|d| d.get("host"));
-    let enrollment = data.and_then(|d| d.get("enrollmentCode"));
-
-    let str_field = |v: Option<&Value>, key: &str| -> String {
-        v.and_then(|h| h.get(key))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    };
-    let name = str_field(host, "name");
-    let id = str_field(host, "id");
-    let ips = host
-        .and_then(|h| h.get("ipAddresses"))
-        .and_then(Value::as_array)
-        .map(|addrs| {
-            addrs
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
-    let is_lighthouse = host
-        .and_then(|h| h.get("isLighthouse"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let is_relay = host
-        .and_then(|h| h.get("isRelay"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let kind = if is_lighthouse {
+    let host = &res["data"]["host"];
+    let flag = |key| host[key].as_bool().unwrap_or(false);
+    let kind = if flag("isLighthouse") {
         "lighthouse"
-    } else if is_relay {
+    } else if flag("isRelay") {
         "relay"
     } else {
         "host"
     };
-    let code = str_field(enrollment, "code");
-
-    let name = sanitize_for_display(&name);
-    let ips = sanitize_for_display(&ips);
+    let id = str_field(host, "id");
+    let code = str_field(&res["data"]["enrollmentCode"], "code");
+    let name = sanitize_for_display(str_field(host, "name"));
+    let ips = sanitize_for_display(&joined_field(host, "ipAddresses"));
 
     let mut out = String::new();
     out.push_str(&format!("Created {kind} \"{name}\" ({id})\n"));
