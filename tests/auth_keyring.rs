@@ -277,6 +277,56 @@ fn a_missing_keyring_entry_says_how_to_fix_it() {
 }
 
 #[test]
+fn a_keyring_entry_edited_outside_dn_is_trimmed_or_refused() {
+    let env = Env::new();
+    let (url, seen) = serve();
+    env.login("work", "key", &["--api-url", &url]);
+
+    fs::write(env.keyring(), r#"{"work":"  edited-key\n"}"#).unwrap();
+    let output = env.run(&["host", "list", "--json"], "", &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        seen.lock().unwrap().last().map(String::as_str),
+        Some("Bearer edited-key")
+    );
+
+    for bad in ["", "two words"] {
+        fs::write(env.keyring(), json!({ "work": bad }).to_string()).unwrap();
+        let output = env.run(&["host", "list", "--json"], "", &[]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(
+            error_message(&output).contains("is not an API key"),
+            "{output:?}"
+        );
+    }
+}
+
+#[test]
+fn a_hand_edited_profile_name_is_refused_and_never_reset() {
+    let env = Env::new();
+    let file = env.dir.path().join("auth.json");
+    let text = r#"{"version":2,"default_profile":"Work","profiles":{"Work":{"key":"keyring"},"work":{"key":"keyring"}}}"#;
+    fs::write(&file, text).unwrap();
+
+    for (args, stdin) in [
+        (&["host", "list", "--json"][..], ""),
+        (
+            &["auth", "login", "--key-stdin", "--no-verify", "--json"][..],
+            "key",
+        ),
+    ] {
+        let output = env.run(args, stdin, &[]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(
+            error_message(&output).contains("rename it in auth.json"),
+            "{output:?}"
+        );
+    }
+    assert_eq!(fs::read_to_string(&file).unwrap(), text);
+    assert_eq!(env.keyring_entries(), json!({}));
+}
+
+#[test]
 fn an_unavailable_keyring_points_at_the_alternatives() {
     let env = Env::new();
     let output = env.run(

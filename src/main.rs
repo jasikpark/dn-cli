@@ -510,7 +510,7 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
         keystore::set(&name, key)?;
     }
     let saved = save_login(args, &name, &key);
-    let (auth, previous_default, path) = match saved {
+    let (auth, replaced, previous_default, path) = match saved {
         Ok(saved) => saved,
         Err(e) => {
             if matches!(key, LoginKey::Keyring(_)) {
@@ -519,7 +519,9 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
             return Err(e);
         }
     };
-    if had_keyring_entry && matches!(key, LoginKey::Reference(_)) {
+    // Judged by the profile this save replaced, not `planned`: another login
+    // may have pointed it at the keyring while this one waited on a prompt.
+    if replaced.is_some_and(|p| p.uses_keyring()) && matches!(key, LoginKey::Reference(_)) {
         forget_keyring_entry(&name);
     }
     let env_override = warn_env_override();
@@ -556,13 +558,19 @@ fn save_login(
     args: &AuthLoginArgs,
     name: &str,
     key: &LoginKey,
-) -> anyhow::Result<(AuthFile, Option<String>, std::path::PathBuf)> {
+) -> anyhow::Result<(
+    AuthFile,
+    Option<Profile>,
+    Option<String>,
+    std::path::PathBuf,
+)> {
     let _lock = AuthLock::acquire()?;
     let (mut auth, corrupt) = AuthFile::load_or_reset()?;
     if let Some(err) = corrupt {
         eprintln!("warning: replacing unreadable auth file ({err:#})");
     }
-    let mut profile = auth.profiles.get(name).cloned().unwrap_or_default();
+    let replaced = auth.profiles.get(name).cloned();
+    let mut profile = replaced.clone().unwrap_or_default();
     if let Some(url) = &args.api_url {
         profile.api_url = Some(normalize_api_url(url));
     }
@@ -579,7 +587,7 @@ fn save_login(
     }
     auth.ensure_default();
     let path = auth.save()?;
-    Ok((auth, previous_default, path))
+    Ok((auth, replaced, previous_default, path))
 }
 
 /// Delete a profile's keyring entry that nothing points at any more. Failing
@@ -590,6 +598,29 @@ fn forget_keyring_entry(profile: &str) {
             "warning: could not remove the OS keyring entry for profile {profile:?} ({e:#}); \
              it is no longer used"
         );
+    }
+}
+
+/// Warn about profiles logged out and deleted from the keyring that a
+/// concurrent `auth login` has since saved again: the key that login stored
+/// may be the one just deleted.
+fn warn_relogged_profiles(forgotten: &[String]) {
+    if forgotten.is_empty() {
+        return;
+    }
+    let Ok(_lock) = AuthLock::acquire() else {
+        return;
+    };
+    let Ok(auth) = AuthFile::load() else {
+        return;
+    };
+    for name in forgotten {
+        if auth.profiles.get(name).is_some_and(|p| p.uses_keyring()) {
+            eprintln!(
+                "warning: profile {name:?} was logged in again while it was being logged \
+                 out, and its key may have been removed; run `dn auth login --profile {name}`"
+            );
+        }
     }
 }
 
@@ -945,6 +976,7 @@ fn auth_logout(
     };
     drop(lock);
     forget.iter().for_each(|name| forget_keyring_entry(name));
+    warn_relogged_profiles(&forget);
     let env_override = warn_env_override();
 
     if json {

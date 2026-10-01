@@ -91,6 +91,23 @@ impl fmt::Display for UnsupportedAuthVersion {
 
 impl std::error::Error for UnsupportedAuthVersion {}
 
+/// An `auth.json` naming a profile [`validate_profile_name`] rejects, which
+/// can only come from editing the file by hand.
+#[derive(Debug)]
+pub struct InvalidStoredProfileName(String);
+
+impl fmt::Display for InvalidStoredProfileName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid profile name {:?}: rename it in auth.json to 1-64 {PROFILE_NAME_CHARS}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for InvalidStoredProfileName {}
+
 /// An exclusive advisory lock on the credentials, held while a command reads,
 /// changes and writes `auth.json` (and, when migrating, `config.json`), so
 /// concurrent `dn` processes can't lose each other's changes. It lives in a
@@ -163,6 +180,13 @@ impl AuthFile {
             }
             Some(version) => return Err(UnsupportedAuthVersion(version.to_string()).into()),
         };
+        // Every name becomes a keyring account name, so one the CLI would
+        // refuse (`Work` beside `work` would share a Windows Credential
+        // Manager entry) is refused here too.
+        let names = auth.profiles.keys().chain(&auth.default_profile);
+        if let Some(bad) = names.into_iter().find(|n| !is_valid_profile_name(n)) {
+            return Err(InvalidStoredProfileName(bad.clone()).into());
+        }
         auth.ensure_default();
         Ok((auth, legacy))
     }
@@ -182,11 +206,17 @@ impl AuthFile {
 
     /// Like [`AuthFile::load`], but an unparsable file comes back as no
     /// profiles plus the error, for `auth login` to replace. A file from a
-    /// newer `dn` is still an error: replacing it would lose its profiles.
+    /// newer `dn`, or one with a hand-edited bad name, is still an error:
+    /// replacing it would lose its profiles and orphan their keyring entries.
     pub fn load_or_reset() -> Result<(Self, Option<anyhow::Error>)> {
         match Self::load() {
             Ok(cfg) => Ok((cfg, None)),
-            Err(e) if e.downcast_ref::<UnsupportedAuthVersion>().is_some() => Err(e),
+            Err(e)
+                if e.downcast_ref::<UnsupportedAuthVersion>().is_some()
+                    || e.downcast_ref::<InvalidStoredProfileName>().is_some() =>
+            {
+                Err(e)
+            }
             Err(e) => Ok((Self::default(), Some(e))),
         }
     }
@@ -559,15 +589,20 @@ impl KeySource {
 /// or `.`, so it is safe as a keyring account name and in messages. Lowercase
 /// because Windows Credential Manager can't tell entries apart by case.
 pub fn validate_profile_name(name: &str) -> Result<()> {
-    let ok = !name.is_empty()
+    if !is_valid_profile_name(name) {
+        bail!("invalid profile name {name:?}: use 1-64 {PROFILE_NAME_CHARS}");
+    }
+    Ok(())
+}
+
+const PROFILE_NAME_CHARS: &str = "lowercase letters, digits, '-', '_' or '.'";
+
+fn is_valid_profile_name(name: &str) -> bool {
+    !name.is_empty()
         && name.len() <= 64
         && name
             .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'));
-    if !ok {
-        bail!("invalid profile name {name:?}: use 1-64 lowercase letters, digits, '-', '_' or '.'");
-    }
-    Ok(())
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
 }
 
 /// The profile named for this call: `--profile`, else `DN_PROFILE`. `None`
@@ -760,6 +795,20 @@ pub fn validate_op_ref(s: &str) -> Result<()> {
     Ok(())
 }
 
+/// The key a profile keeps in the OS keyring, trimmed. Anything not a
+/// plausible key (empty, or with spaces or control characters, as an entry
+/// edited outside `dn` can be) is refused here, not sent to the API.
+fn keyring_key(profile: &str) -> Result<String> {
+    let key = crate::keystore::get(profile)?.trim().to_string();
+    if key.is_empty() || !key.bytes().all(|b| b.is_ascii_graphic()) {
+        bail!(
+            "the OS keyring entry for profile {profile:?} is not an API key; run \
+             `dn auth login --profile {profile}` to replace it"
+        );
+    }
+    Ok(key)
+}
+
 /// Resolve a secret reference through the 1Password CLI. This is the
 /// per-invocation gate: `op` prompts for unlock (biometric or password) per
 /// its own session policy, so a stored reference alone grants nothing.
@@ -936,7 +985,7 @@ impl Config {
         let api_key = match source {
             KeySource::Env(key) => key,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => op_read(&r)?,
-            KeySource::Keyring(profile) => crate::keystore::get(&profile)?,
+            KeySource::Keyring(profile) => keyring_key(&profile)?,
         };
         let mut config = Self::with_key(api_key, active.profile.as_ref());
         config.profile = active.profile_name;
