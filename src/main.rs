@@ -463,29 +463,6 @@ fn auth_login(args: &AuthLoginArgs, profile_flag: Option<&str>, json: bool) -> a
     let name = requested_profile(profile_flag)?
         .or_else(|| planned.default_profile.clone())
         .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
-    // Windows Credential Manager can't tell keyring entries apart by case, so
-    // a new profile's name is lowercase, and no profile shares a keyring entry
-    // with a case-clashing one saved before this rule.
-    let is_new = !planned.profiles.contains_key(&name);
-    if is_new && name.bytes().any(|b| b.is_ascii_uppercase()) {
-        return Err(InvalidArgument(anyhow!(
-            "profile names are lowercase; use {:?}",
-            name.to_ascii_lowercase()
-        ))
-        .into());
-    }
-    if (is_new || args.reference.is_none())
-        && let Some(other) = planned
-            .profiles
-            .keys()
-            .find(|other| **other != name && other.eq_ignore_ascii_case(&name))
-    {
-        return Err(InvalidArgument(anyhow!(
-            "profile {name:?} differs from the existing {other:?} only in case; \
-             keyring entries on Windows can't tell them apart, so pick another name"
-        ))
-        .into());
-    }
     let key = read_login_key(args)?;
     let saved_url = || {
         args.api_url

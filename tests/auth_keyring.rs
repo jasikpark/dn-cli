@@ -414,7 +414,8 @@ fn logout_with_an_unavailable_keyring_warns_and_still_logs_out() {
 }
 
 #[test]
-fn new_profile_names_must_be_lowercase() {
+fn profile_names_must_be_lowercase() {
+    // Windows Credential Manager can't tell "Work" and "work" apart.
     let env = Env::new();
     let output = env.run(
         &[
@@ -430,94 +431,8 @@ fn new_profile_names_must_be_lowercase() {
         &[],
     );
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let message = error_message(&output);
-    assert!(message.contains(r#"use "work""#), "{message}");
+    assert!(error_message(&output).contains("lowercase"), "{output:?}");
     assert_eq!(env.keyring_entries(), json!({}));
-}
-
-#[test]
-fn a_mixed_case_profile_saved_before_the_lowercase_rule_still_works() {
-    // auth.json as an older `dn` could write it, with a mixed-case name.
-    // Windows Credential Manager can't tell "Work" and "work" apart, so a
-    // new "work" is refused, while "Work" itself can log in again.
-    let env = Env::new();
-    fs::write(
-        env.dir.path().join("auth.json"),
-        r#"{"version":2,"default_profile":"Work","profiles":{"Work":{"key":"op://v/i/f"}}}"#,
-    )
-    .unwrap();
-    let login = |profile: &str| {
-        env.run(
-            &[
-                "auth",
-                "login",
-                "--profile",
-                profile,
-                "--key-stdin",
-                "--no-verify",
-                "--json",
-            ],
-            "key",
-            &[],
-        )
-    };
-
-    let clash = login("work");
-    assert_eq!(clash.status.code(), Some(1), "{clash:?}");
-    assert!(error_message(&clash).contains("only in case"), "{clash:?}");
-    assert_eq!(env.keyring_entries(), json!({}));
-
-    let again = login("Work");
-    assert!(again.status.success(), "{again:?}");
-    assert_eq!(env.keyring_entries(), json!({ "Work": "key" }));
-}
-
-#[test]
-fn case_clashing_profiles_saved_earlier_cant_share_a_keyring_entry() {
-    // An older `dn` could save both "Work" and "work". Both exist, but on
-    // Windows they'd share one keyring entry, so neither may move its key
-    // there; a 1Password reference is still fine.
-    let env = Env::new();
-    fs::write(
-        env.dir.path().join("auth.json"),
-        r#"{"version":2,"default_profile":"work","profiles":{
-            "Work":{"key":"op://v/a/f"},"work":{"key":"op://v/b/f"}}}"#,
-    )
-    .unwrap();
-    for profile in ["Work", "work"] {
-        let output = env.run(
-            &[
-                "auth",
-                "login",
-                "--profile",
-                profile,
-                "--key-stdin",
-                "--no-verify",
-                "--json",
-            ],
-            "key",
-            &[],
-        );
-        assert_eq!(output.status.code(), Some(1), "{profile}: {output:?}");
-        assert!(
-            error_message(&output).contains("only in case"),
-            "{output:?}"
-        );
-    }
-    assert_eq!(env.keyring_entries(), json!({}));
-    env.ok(
-        &[
-            "auth",
-            "login",
-            "--profile",
-            "Work",
-            "--ref",
-            "op://v/c/f",
-            "--no-verify",
-            "--json",
-        ],
-        "",
-    );
 }
 
 /// A login whose keyring write succeeds but whose auth.json save fails, in

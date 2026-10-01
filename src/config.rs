@@ -555,16 +555,17 @@ impl KeySource {
     }
 }
 
-/// Validate a profile name: 1–64 ASCII letters, digits, `-`, `_` or `.`, so
-/// it is safe as a keyring account name and in messages.
+/// Validate a profile name: 1–64 lowercase ASCII letters, digits, `-`, `_`
+/// or `.`, so it is safe as a keyring account name and in messages. Lowercase
+/// because Windows Credential Manager can't tell entries apart by case.
 pub fn validate_profile_name(name: &str) -> Result<()> {
     let ok = !name.is_empty()
         && name.len() <= 64
         && name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'));
     if !ok {
-        bail!("invalid profile name {name:?}: use 1-64 letters, digits, '-', '_' or '.'");
+        bail!("invalid profile name {name:?}: use 1-64 lowercase letters, digits, '-', '_' or '.'");
     }
     Ok(())
 }
@@ -1126,7 +1127,7 @@ mod tests {
         for good in ["default", "staging-2", "a.b_c", &"x".repeat(64)] {
             validate_profile_name(good).unwrap();
         }
-        for bad in ["", "a b", "a/b", "prod:1", "é", &"x".repeat(65)] {
+        for bad in ["", "a b", "a/b", "prod:1", "é", "Work", &"x".repeat(65)] {
             assert!(validate_profile_name(bad).is_err(), "{bad:?}");
         }
     }
