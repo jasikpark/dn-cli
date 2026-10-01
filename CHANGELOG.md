@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.11 (2026-10-01)
+
+### Features
+
+- store API keys in the OS keyring by default (#91)
+- identify requests with a dn-cli User-Agent (#93)
+
 ## 0.2.10 (2026-09-30)
 
 ### Features
