@@ -26,11 +26,14 @@ With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), which fetch
 the same prebuilt binary:
 
 ```bash
-cargo binstall --git https://github.com/jasikpark/dn-cli dn-cli
+cargo binstall --git https://github.com/jasikpark/dn-cli dn-cli \
+  || cargo install --git https://github.com/jasikpark/dn-cli
 ```
 
-This reads the version from `main`, so it fails in the gap between a version bump
-landing and its release being published; use the installer above meanwhile.
+binstall reads the version from `main`, so there's no release to fetch between a
+version bump landing and its release being published. binstall's own build
+fallback would look for `dn-cli` on crates.io, where it isn't published, so it's
+disabled; the `cargo install --git` after `||` builds `main` from source instead.
 
 Or build from source with a Rust toolchain:
 
