@@ -33,6 +33,9 @@ the same prebuilt binary:
 cargo binstall --git https://github.com/jasikpark/dn-cli dn-cli
 ```
 
+This reads the version from `main`, so it fails in the gap between a version bump
+landing and its release being published; use the installer above meanwhile.
+
 Or build from source with a Rust toolchain:
 
 ```bash
