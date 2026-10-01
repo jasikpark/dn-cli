@@ -20,8 +20,9 @@ pub fn get(profile: &str) -> Result<String> {
     if let Some(store) = test_store::from_env() {
         return store.get(profile);
     }
-    let entry = entry(profile)?;
-    entry.get_password().map_err(|e| describe(e, profile))
+    entry(profile)?
+        .get_password()
+        .map_err(|e| describe(e, profile))
 }
 
 /// Store `key` for `profile`, replacing any existing one.
@@ -30,8 +31,9 @@ pub fn set(profile: &str, key: &str) -> Result<()> {
     if let Some(store) = test_store::from_env() {
         return store.set(profile, key);
     }
-    let entry = entry(profile)?;
-    entry.set_password(key).map_err(|e| describe(e, profile))
+    entry(profile)?
+        .set_password(key)
+        .map_err(|e| describe(e, profile))
 }
 
 /// Remove the key stored for `profile`. `false` when there was none.
@@ -40,8 +42,7 @@ pub fn delete(profile: &str) -> Result<bool> {
     if let Some(store) = test_store::from_env() {
         return store.delete(profile);
     }
-    let entry = entry(profile)?;
-    match entry.delete_credential() {
+    match entry(profile)?.delete_credential() {
         Ok(()) => Ok(true),
         Err(keyring::Error::NoEntry) => Ok(false),
         Err(e) => Err(describe(e, profile)),
@@ -70,13 +71,17 @@ const UNAVAILABLE_HINT: &str = "no OS keyring is available (on Linux this needs 
     Secret Service such as GNOME Keyring or KWallet, with a D-Bus session). Store a \
     1Password reference instead with `dn auth login --ref op://…`, or set DEFINED_API_KEY";
 
+fn no_entry(profile: &str) -> anyhow::Error {
+    anyhow!(
+        "profile {profile:?} has no key in the OS keyring; run \
+         `dn auth login --profile {profile}` to store one"
+    )
+}
+
 /// Turn a keyring error into a message that says what to do about it.
 fn describe(err: keyring::Error, profile: &str) -> anyhow::Error {
     match err {
-        keyring::Error::NoEntry => anyhow!(
-            "profile {profile:?} has no key in the OS keyring; run \
-             `dn auth login --profile {profile}` to store one"
-        ),
+        keyring::Error::NoEntry => no_entry(profile),
         keyring::Error::NoDefaultStore => match keyring::Entry::store_status() {
             // The reason the store couldn't start (no D-Bus session, no
             // Secret Service on it) is only kept here.
@@ -108,7 +113,7 @@ mod test_store {
     use std::io::ErrorKind;
     use std::path::PathBuf;
 
-    use anyhow::{Context, Result, anyhow, bail};
+    use anyhow::{Context, Result, bail};
     use serde_json::{Map, Value};
 
     pub enum TestStore {
@@ -152,12 +157,7 @@ mod test_store {
                 .get(profile)
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "profile {profile:?} has no key in the OS keyring; run \
-                         `dn auth login --profile {profile}` to store one"
-                    )
-                })
+                .ok_or_else(|| super::no_entry(profile))
         }
 
         pub fn set(&self, profile: &str, key: &str) -> Result<()> {

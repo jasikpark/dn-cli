@@ -3,6 +3,7 @@ mod key_source;
 
 pub use auth_file::{
     AuthFile, AuthLock, InvalidStoredProfileName, Migration, Profile, migrate_to_profiles,
+    remove_file_if_present,
 };
 use key_source::keyring_key;
 pub use key_source::{
