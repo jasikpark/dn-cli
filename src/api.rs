@@ -117,6 +117,16 @@ impl fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+/// The repository URL names this unofficial client, so its traffic can't be
+/// mistaken for a first-party `dn-cli`.
+const USER_AGENT: &str = concat!(
+    "dn-cli/",
+    env!("CARGO_PKG_VERSION"),
+    " (+",
+    env!("CARGO_PKG_REPOSITORY"),
+    ")"
+);
+
 impl Client {
     pub fn new(config: Config) -> Self {
         // Disable ureq's default "non-2xx is an Error::StatusCode" behavior so
@@ -125,6 +135,7 @@ impl Client {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(60)))
+            .user_agent(USER_AGENT)
             .build()
             .into();
         Self { config, agent }
