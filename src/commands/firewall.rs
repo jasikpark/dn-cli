@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use anyhow::{anyhow, bail};
@@ -6,158 +7,95 @@ use serde_json::Value;
 use crate::api::Client;
 use crate::cli::{RoleGetArgs, TagGetArgs};
 use crate::commands::hosts::validate_role_id;
-use crate::output::{print_json, render_table, sanitize_for_display};
+use crate::output::{
+    count_field, print_json, print_list, render_table, sanitize_for_display, str_field,
+};
 
 pub fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
-    let res = client.list_roles()?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&res)?);
-        return Ok(());
-    }
-
-    let empty: Vec<Value> = Vec::new();
-    let rows = res.get("data").and_then(Value::as_array).unwrap_or(&empty);
-    if rows.is_empty() {
-        println!("No roles found.");
-        return Ok(());
-    }
-
-    let table_rows: Vec<Vec<String>> = rows
-        .iter()
-        .map(|row| {
-            let field = |key| {
-                row.get(key)
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string()
-            };
-            let count = |key| {
-                row.get(key)
-                    .and_then(Value::as_u64)
-                    .map(|n| n.to_string())
-                    .unwrap_or_default()
-            };
-            vec![
-                field("id"),
-                field("name"),
-                count("firewallRulesCount"),
-                count("hostCount"),
-                field("description"),
-            ]
-        })
-        .collect();
-    print!(
-        "{}",
-        render_table(
-            &["ID", "NAME", "RULES", "HOSTS", "DESCRIPTION"],
-            &table_rows
-        )
-    );
-
-    if let Some(total) = res
-        .get("metadata")
-        .and_then(|m| m.get("totalCount"))
-        .and_then(Value::as_u64)
-    {
-        println!("\n{} shown / {total} total", rows.len());
-    }
-
-    Ok(())
+    let headers = ["ID", "NAME", "RULES", "HOSTS", "DESCRIPTION"];
+    print_list(
+        &client.list_roles()?,
+        json,
+        "No roles found.",
+        &headers,
+        |rows| {
+            rows.iter()
+                .map(|row| {
+                    vec![
+                        str_field(row, "id").to_string(),
+                        str_field(row, "name").to_string(),
+                        count_field(row, "firewallRulesCount"),
+                        count_field(row, "hostCount"),
+                        str_field(row, "description").to_string(),
+                    ]
+                })
+                .collect()
+        },
+    )
 }
 
 pub fn tags_list(client: &Client, json: bool) -> anyhow::Result<()> {
-    let res = client.list_tags()?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&res)?);
-        return Ok(());
-    }
-
-    let empty: Vec<Value> = Vec::new();
-    let rows = res.get("data").and_then(Value::as_array).unwrap_or(&empty);
-    if rows.is_empty() {
-        println!("No tags found.");
-        return Ok(());
-    }
-
-    // Highest priority first, matching the admin panel's tag list.
-    let priority = |row: &Value| row.get("priority").and_then(Value::as_i64);
-    let mut rows: Vec<&Value> = rows.iter().collect();
-    rows.sort_by_key(|row| std::cmp::Reverse(priority(row)));
-
-    let table_rows: Vec<Vec<String>> = rows
-        .iter()
-        .map(|row| {
-            let field = |key| {
-                row.get(key)
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string()
-            };
-            let count = |key| {
-                row.get(key)
-                    .and_then(Value::as_u64)
-                    .map(|n| n.to_string())
-                    .unwrap_or_default()
-            };
-            // The API omits `firewallRulesCount` on tags when it is zero.
-            let rules = row
-                .get("firewallRulesCount")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            vec![
-                field("name"),
-                rules.to_string(),
-                count("hostCount"),
-                field("description"),
-                priority(row).map(|n| n.to_string()).unwrap_or_default(),
-            ]
-        })
-        .collect();
-    print!(
-        "{}",
-        render_table(
-            &["NAME", "RULES", "HOSTS", "DESCRIPTION", "PRIORITY"],
-            &table_rows
-        )
-    );
-
-    Ok(())
+    let headers = ["NAME", "RULES", "HOSTS", "DESCRIPTION", "PRIORITY"];
+    print_list(
+        &client.list_tags()?,
+        json,
+        "No tags found.",
+        &headers,
+        |rows| {
+            // Highest priority first, matching the admin panel's tag list.
+            let priority = |row: &Value| row.get("priority").and_then(Value::as_i64);
+            let mut rows: Vec<&Value> = rows.iter().collect();
+            rows.sort_by_key(|row| Reverse(priority(row)));
+            rows.into_iter()
+                .map(|row| {
+                    vec![
+                        str_field(row, "name").to_string(),
+                        // The API omits `firewallRulesCount` on tags when it is zero.
+                        row["firewallRulesCount"].as_u64().unwrap_or(0).to_string(),
+                        count_field(row, "hostCount"),
+                        str_field(row, "description").to_string(),
+                        priority(row).map(|n| n.to_string()).unwrap_or_default(),
+                    ]
+                })
+                .collect()
+        },
+    )
 }
 
 pub fn roles_get(client: &Client, args: &RoleGetArgs, json: bool) -> anyhow::Result<()> {
     let id = args.role_id.trim();
     validate_role_id(id)?;
-    let res = client.get_role(id)?;
-
-    if json {
-        return print_json(&res);
-    }
-
-    let data = res
-        .get("data")
-        .filter(|d| d.is_object())
-        .ok_or_else(|| anyhow!("unexpected response: missing role data"))?;
-    let role_names = rule_role_names(client, data);
-    print!("{}", render_role(data, &role_names)?);
-    Ok(())
+    print_rule_holder(client, &client.get_role(id)?, json, "role", render_role)
 }
 
 pub fn tags_get(client: &Client, args: &TagGetArgs, json: bool) -> anyhow::Result<()> {
     let name = args.tag.trim();
-    let res = client.get_tag(name)?;
+    print_rule_holder(
+        client,
+        &client.get_tag(name)?,
+        json,
+        "tag",
+        |data, names| render_tag(data, name, names),
+    )
+}
 
+/// Print a `role get` / `tag get` response: the raw envelope for `--json`,
+/// otherwise `render` of its `data` with rule role names resolved.
+fn print_rule_holder(
+    client: &Client,
+    res: &Value,
+    json: bool,
+    holder: &str,
+    render: impl FnOnce(&Value, &HashMap<String, String>) -> anyhow::Result<String>,
+) -> anyhow::Result<()> {
     if json {
-        return print_json(&res);
+        return print_json(res);
     }
-
     let data = res
         .get("data")
         .filter(|d| d.is_object())
-        .ok_or_else(|| anyhow!("unexpected response: missing tag data"))?;
-    let role_names = rule_role_names(client, data);
-    print!("{}", render_tag(data, name, &role_names)?);
+        .ok_or_else(|| anyhow!("unexpected response: missing {holder} data"))?;
+    print!("{}", render(data, &rule_role_names(client, data))?);
     Ok(())
 }
 
@@ -205,27 +143,23 @@ fn role_names_by_id(res: &Value) -> HashMap<String, String> {
 /// lenient default here (no role, no tags, any port) would read as a wider
 /// rule than the API holds.
 fn render_role(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Result<String> {
-    let field = |key| data.get(key).and_then(Value::as_str).unwrap_or_default();
     let rules = checked_firewall_rules(data)?;
 
     let mut out = String::new();
-    let id = sanitize_for_display(field("id"));
-    match sanitize_for_display(field("name")) {
+    let id = sanitize_for_display(str_field(data, "id"));
+    match sanitize_for_display(str_field(data, "name")) {
         name if name.is_empty() => out.push_str(&format!("{id}\n")),
         name => out.push_str(&format!("{name} ({id})\n")),
     }
     push_description_and_hosts(&mut out, data);
-    push_rules_count_mismatch(&mut out, data, rules);
-
-    if rules.is_empty() {
-        out.push_str(
-            "\nNo firewall rules: this role allows no inbound traffic. \
-             Rules on a host's tags can still allow some.\n",
-        );
-        return Ok(out);
-    }
-    push_allow_everything_warning(&mut out, rules, "role");
-    push_firewall_rules(&mut out, rules, role_names);
+    push_rules(
+        &mut out,
+        data,
+        rules,
+        role_names,
+        "role",
+        "this role allows no inbound traffic. Rules on a host's tags can still allow some.",
+    );
     Ok(out)
 }
 
@@ -239,7 +173,7 @@ fn render_tag(
 ) -> anyhow::Result<String> {
     let rules = checked_firewall_rules(data)?;
 
-    let returned = data.get("name").and_then(Value::as_str).unwrap_or_default();
+    let returned = str_field(data, "name");
     let shown = sanitize_for_display(returned);
     let mut out = match shown.trim() {
         "" => format!("{}\n", sanitize_for_display(requested)),
@@ -255,49 +189,65 @@ fn render_tag(
     if let Some(n) = data.get("priority").and_then(Value::as_i64) {
         out.push_str(&format!("Priority: {n}\n"));
     }
-    push_rules_count_mismatch(&mut out, data, rules);
-
-    if rules.is_empty() {
-        out.push_str(
-            "\nNo firewall rules: this tag adds no inbound traffic. \
-             The host's role and other tags still apply.\n",
-        );
-        return Ok(out);
-    }
-    push_allow_everything_warning(&mut out, rules, "tag");
-    push_firewall_rules(&mut out, rules, role_names);
+    push_rules(
+        &mut out,
+        data,
+        rules,
+        role_names,
+        "tag",
+        "this tag adds no inbound traffic. The host's role and other tags still apply.",
+    );
     Ok(out)
 }
 
-/// Rules add up across a host's role and tags, so one allow-everything rule
-/// opens the host whatever else applies — worth saying even when it's alone.
-/// `holder` names what carries the rules: "role" or "tag".
-fn push_allow_everything_warning(out: &mut String, rules: &[Value], holder: &str) {
-    if !rules.iter().any(is_allow_everything_rule) {
-        return;
-    }
-    out.push_str(&format!(
-        "\nWarning: a rule allows all hosts on any protocol and port, \
-         so every host with this {holder} accepts all inbound traffic.\n"
-    ));
-    if rules.len() > 1 {
-        out.push_str("The more specific rules have no effect.\n");
-    }
-}
-
-/// Flag a `firewallRulesCount` that disagrees with the rules listed, since
-/// the table would then show fewer (or more) rules than the API holds.
-fn push_rules_count_mismatch(out: &mut String, data: &Value, rules: &[Value]) {
-    let Some(count) = data.get("firewallRulesCount").and_then(Value::as_u64) else {
-        return;
-    };
-    if count != rules.len() as u64 {
+/// The rules section shared by role and tag views: a warning when
+/// `firewallRulesCount` disagrees with the rules listed (the table would show
+/// fewer or more than the API holds), `none` when there are no rules,
+/// otherwise an allow-everything warning and the rule table sorted like the
+/// admin panel. `holder` names what carries the rules: "role" or "tag".
+fn push_rules(
+    out: &mut String,
+    data: &Value,
+    rules: &[Value],
+    role_names: &HashMap<String, String>,
+    holder: &str,
+    none: &str,
+) {
+    if let Some(count) = data["firewallRulesCount"].as_u64()
+        && count != rules.len() as u64
+    {
         out.push_str(&format!(
             "\nWarning: the response counts {count} firewall rules but lists {}; \
              this view may be incomplete.\n",
             rules.len()
         ));
     }
+    if rules.is_empty() {
+        out.push_str(&format!("\nNo firewall rules: {none}\n"));
+        return;
+    }
+    // Rules add up across a host's role and tags, so one allow-everything
+    // rule opens the host whatever else applies — worth saying even alone.
+    if rules.iter().any(is_allow_everything_rule) {
+        out.push_str(&format!(
+            "\nWarning: a rule allows all hosts on any protocol and port, \
+             so every host with this {holder} accepts all inbound traffic.\n"
+        ));
+        if rules.len() > 1 {
+            out.push_str("The more specific rules have no effect.\n");
+        }
+    }
+    let mut sorted: Vec<&Value> = rules.iter().collect();
+    sorted.sort_by(|a, b| compare_firewall_rules(a, b));
+    let rows: Vec<Vec<String>> = sorted
+        .into_iter()
+        .map(|r| firewall_rule_row(r, role_names))
+        .collect();
+    out.push('\n');
+    out.push_str(&render_table(
+        &["ALLOWED HOSTS", "PROTOCOL", "PORTS", "DESCRIPTION"],
+        &rows,
+    ));
 }
 
 /// `data.firewallRules`, failing on a missing or non-list value or on a
@@ -315,32 +265,13 @@ fn checked_firewall_rules(data: &Value) -> anyhow::Result<&Vec<Value>> {
 }
 
 fn push_description_and_hosts(out: &mut String, data: &Value) {
-    let description = data
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let description = sanitize_for_display(description);
+    let description = sanitize_for_display(str_field(data, "description"));
     if !description.trim().is_empty() {
         out.push_str(&format!("{description}\n"));
     }
     if let Some(n) = data.get("hostCount").and_then(Value::as_u64) {
         out.push_str(&format!("Hosts: {n}\n"));
     }
-}
-
-/// The rule table, sorted like the admin panel.
-fn push_firewall_rules(out: &mut String, rules: &[Value], role_names: &HashMap<String, String>) {
-    let mut sorted: Vec<&Value> = rules.iter().collect();
-    sorted.sort_by(|a, b| compare_firewall_rules(a, b));
-    let rows: Vec<Vec<String>> = sorted
-        .into_iter()
-        .map(|r| firewall_rule_row(r, role_names))
-        .collect();
-    out.push('\n');
-    out.push_str(&render_table(
-        &["ALLOWED HOSTS", "PROTOCOL", "PORTS", "DESCRIPTION"],
-        &rows,
-    ));
 }
 
 /// Check the shape of one firewall rule: `protocol` one of `ANY`, `TCP`,

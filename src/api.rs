@@ -300,8 +300,7 @@ impl Client {
     /// The Defined API returns one page per call (`{ data, metadata }`); an
     /// agent consuming a single page would silently see only the first slice,
     /// so we walk the cursor and return one merged envelope. The last page's
-    /// `metadata` (carrying `totalCount`) is preserved so the count still
-    /// reflects the server's view.
+    /// `metadata` is passed through for `--json`.
     /// `params` are extra query pairs applied to every page (e.g. a
     /// `filter.search` term); the cursor is threaded in on top of them.
     fn list_all(&self, path: &str, params: &[(&str, &str)]) -> Result<Value> {
