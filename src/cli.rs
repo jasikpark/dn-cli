@@ -33,13 +33,13 @@ pub enum Command {
         #[command(subcommand)]
         command: NetworkCommand,
     },
-    /// Inspect firewall roles
+    /// Inspect and delete firewall roles
     #[command(alias = "roles")]
     Role {
         #[command(subcommand)]
         command: RoleCommand,
     },
-    /// Inspect tags
+    /// Inspect and delete tags
     #[command(alias = "tags")]
     Tag {
         #[command(subcommand)]
@@ -59,6 +59,8 @@ pub enum RoleCommand {
     List,
     /// Show one role and its inbound firewall rules
     Get(RoleGetArgs),
+    /// Delete a role. Asks for confirmation unless --yes is passed.
+    Delete(RoleDeleteArgs),
 }
 
 #[derive(Args)]
@@ -73,12 +75,34 @@ pub enum TagCommand {
     List,
     /// Show one tag and the inbound firewall rules it adds to its hosts
     Get(TagGetArgs),
+    /// Delete a tag. Asks for confirmation unless --yes is passed.
+    Delete(TagDeleteArgs),
 }
 
 #[derive(Args)]
 pub struct TagGetArgs {
     /// Tag name in `key:value` form, e.g. `env:prod`
     pub tag: String,
+}
+
+#[derive(Args)]
+pub struct RoleDeleteArgs {
+    /// Role id (role-…). Find ids with `dn role list`.
+    pub role_id: String,
+    /// Skip the confirmation prompt (required when stdin is not a terminal or
+    /// with --json)
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+}
+
+#[derive(Args)]
+pub struct TagDeleteArgs {
+    /// Tag name in `key:value` form, e.g. `env:prod`
+    pub tag: String,
+    /// Skip the confirmation prompt (required when stdin is not a terminal or
+    /// with --json)
+    #[arg(short = 'y', long)]
+    pub yes: bool,
 }
 
 #[derive(Subcommand)]
@@ -275,6 +299,32 @@ mod tests {
         };
         assert_eq!(args.host_id, "host-1");
         assert!(args.yes);
+    }
+
+    #[test]
+    fn parses_role_delete_with_long_yes() {
+        let cli = Cli::try_parse_from(["dn", "roles", "delete", "role-1", "--yes"]).unwrap();
+        let Command::Role {
+            command: RoleCommand::Delete(args),
+        } = cli.command
+        else {
+            panic!("expected `role delete` to parse into RoleCommand::Delete");
+        };
+        assert_eq!(args.role_id, "role-1");
+        assert!(args.yes);
+    }
+
+    #[test]
+    fn parses_tag_delete_without_yes() {
+        let cli = Cli::try_parse_from(["dn", "tag", "delete", "env:prod"]).unwrap();
+        let Command::Tag {
+            command: TagCommand::Delete(args),
+        } = cli.command
+        else {
+            panic!("expected `tag delete` to parse into TagCommand::Delete");
+        };
+        assert_eq!(args.tag, "env:prod");
+        assert!(!args.yes);
     }
 
     #[test]

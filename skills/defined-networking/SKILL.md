@@ -241,6 +241,20 @@ Without `--json`, rules print sorted the way the admin panel shows them, and
 a warning appears when a rule allows all hosts on any protocol and port,
 since every host with the role then accepts all inbound traffic.
 
+### Delete a role — `dn role delete`
+
+```bash
+dn role delete <ROLE_ID> --yes --json
+```
+
+Returns `{ "id": "role-…", "deleted": true }`. Same `--yes` rule as
+`host delete`. Key permission: `roles:delete`.
+
+**You MUST confirm with the user before running this**, naming the role and
+how many hosts it is assigned to (`hostCount` from `dn role list --json`).
+Its firewall rules are gone for every host that had it, so traffic those
+rules allowed stops. One id per call.
+
 ### List tags — `dn tag list`
 
 ```bash
@@ -269,6 +283,20 @@ allow-everything warning. It also warns when the server returns a different
 tag than the one asked for, or when `firewallRulesCount` disagrees with the
 rules listed. Use `--json` for config overrides and route subscriptions. Key
 permission: `tags:read`.
+
+### Delete a tag — `dn tag delete`
+
+```bash
+dn tag delete <KEY:VALUE> --yes --json
+```
+
+Returns `{ "name": "key:value", "deleted": true }`. Same `--yes` rule as
+`host delete`. Key permission: `tags:delete`.
+
+**You MUST confirm with the user before running this**, naming the tag and
+how many hosts carry it (`hostCount` from `dn tag list --json`). Its firewall
+rules stop applying to those hosts, and rules elsewhere that list it in
+`allowedTags` stop matching them. One tag per call.
 
 ### List networks — `dn network list`
 
@@ -299,6 +327,7 @@ concluding anything from the hosts list alone.
 | `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
 | `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
 | `host delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |
+| `role delete`, `tag delete` | destructive and irreversible: the firewall rules go with it, changing what traffic every host that had it can receive. Always get explicit user confirmation for the specific role or tag. |
 
 ## Where this is going (not built yet)
 

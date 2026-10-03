@@ -3,7 +3,7 @@ mod delete;
 mod edit;
 
 pub use create::{hosts_create, validate_create_preflight};
-pub use delete::{DELETE_NEEDS_YES, DeleteConfirmation, delete_confirmation, hosts_delete};
+pub use delete::hosts_delete;
 pub use edit::{hosts_edit, validate_edit_preflight};
 
 use anyhow::{anyhow, bail};

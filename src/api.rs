@@ -315,10 +315,25 @@ impl Client {
     }
 
     /// Delete a host, which needs the `hosts:delete` scope. v1 is the only
-    /// version of the API with a host delete. A 2xx carries an empty
-    /// `{data, metadata}` envelope, so nothing is parsed.
+    /// version of the API with a host delete.
     pub fn delete_host(&self, id: &str) -> Result<()> {
-        self.send(&format!("/v1/hosts/{id}"), |url, auth| {
+        self.delete(&format!("/v1/hosts/{id}"))
+    }
+
+    /// Delete a role, which needs the `roles:delete` scope.
+    pub fn delete_role(&self, id: &str) -> Result<()> {
+        self.delete(&format!("/v1/roles/{id}"))
+    }
+
+    /// Delete a tag (`key:value`), which needs the `tags:delete` scope.
+    pub fn delete_tag(&self, name: &str) -> Result<()> {
+        self.delete(&tag_path(name))
+    }
+
+    /// DELETE a versioned path. A 2xx carries an empty `{data, metadata}`
+    /// envelope, so nothing is parsed.
+    fn delete(&self, path: &str) -> Result<()> {
+        self.send(path, |url, auth| {
             self.agent.delete(url).header("Authorization", auth).call()
         })
         .map(drop)
