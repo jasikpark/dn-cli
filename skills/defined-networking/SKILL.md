@@ -1,6 +1,6 @@
 ---
 name: defined-networking
-description: View and manage a Defined Networking (Nebula mesh VPN) network with the `dn` CLI. Use when the user asks about their Defined Networking or Nebula hosts, lighthouses, relays, network, or roles/tags — e.g. "list my hosts", "what's on my mesh network", "is my laptop online" — or wants to add/set up/enroll a new device on their network, or remove one from it.
+description: View and manage a Defined Networking (Nebula mesh VPN) network with the `dn` CLI. Use when the user asks about their Defined Networking or Nebula hosts, lighthouses, relays, network, or roles/tags — e.g. "list my hosts", "what's on my mesh network", "is my laptop online" — or wants to add/set up/enroll a new device on their network, remove one from it, or delete a role, tag, or network.
 ---
 
 # Defined Networking (`dn`) CLI
@@ -252,8 +252,9 @@ Returns `{ "id": "role-…", "deleted": true }`. Same `--yes` rule as
 
 **You MUST confirm with the user before running this**, naming the role and
 how many hosts it is assigned to (`hostCount` from `dn role list --json`).
-Its firewall rules are gone for every host that had it, so traffic those
-rules allowed stops. One id per call.
+The API docs don't say what happens to hosts still assigned the role (it may
+refuse, or unassign it), so treat any traffic its rules allowed as at risk;
+a refusal comes back as an API error. One id per call.
 
 ### List tags — `dn tag list`
 
@@ -294,9 +295,10 @@ Returns `{ "name": "key:value", "deleted": true }`. Same `--yes` rule as
 `host delete`. Key permission: `tags:delete`.
 
 **You MUST confirm with the user before running this**, naming the tag and
-how many hosts carry it (`hostCount` from `dn tag list --json`). Its firewall
-rules stop applying to those hosts, and rules elsewhere that list it in
-`allowedTags` stop matching them. One tag per call.
+how many hosts carry it (`hostCount` from `dn tag list --json`). The API
+docs don't say what happens to hosts still carrying it or to rules that list
+it in `allowedTags`, so treat traffic its rules or those rules allow as at
+risk; a refusal comes back as an API error. One tag per call.
 
 ### List networks — `dn network list`
 
@@ -342,7 +344,7 @@ One id per call.
 | `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
 | `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
 | `host delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |
-| `role delete`, `tag delete` | destructive and irreversible: the firewall rules go with it, changing what traffic every host that had it can receive. Always get explicit user confirmation for the specific role or tag. |
+| `role delete`, `tag delete` | destructive and irreversible: the firewall rules go with it, which can change what traffic hosts that had it can receive. Always get explicit user confirmation for the specific role or tag. |
 | `network delete` | destructive and irreversible, though the API refuses while the network has hosts. Always get explicit user confirmation for the specific network. |
 
 ## Where this is going (not built yet)

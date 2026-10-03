@@ -120,6 +120,19 @@ fn tag_delete_json_echoes_the_name_and_keeps_it_in_one_path_segment() {
 }
 
 #[test]
+fn tag_delete_sanitizes_the_typed_name_it_prints() {
+    let (url, seen) = serve();
+    let out = dn(&url, &["tag", "delete", "env:a\u{1b}[2Jb", "--yes"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "Deleted tag env:a [2Jb.\n"
+    );
+    // The raw name is still what gets deleted.
+    assert_eq!(*seen.lock().unwrap(), ["DELETE /v1/tags/env:a%1B%5B2Jb"]);
+}
+
+#[test]
 fn deletes_without_yes_are_refused_before_any_request() {
     for args in [
         &["host", "delete", "host-1"][..],

@@ -1,12 +1,12 @@
-//! The confirm-then-delete flow shared by `host delete`, `role delete` and
-//! `tag delete`.
+//! The confirm-then-delete flow shared by `host delete`, `role delete`,
+//! `tag delete` and `network delete`.
 
 use std::io::{BufRead, IsTerminal, Write};
 
 use anyhow::bail;
 use serde_json::{Value, json};
 
-use crate::output::print_json;
+use crate::output::{print_json, sanitize_for_display};
 
 pub const DELETE_NEEDS_YES: &str =
     "pass --yes to delete without a confirmation prompt when running non-interactively";
@@ -50,7 +50,7 @@ pub struct Described {
 
 /// One resource a `delete` command is about to remove.
 pub struct DeleteTarget<'a> {
-    /// `host`, `role` or `tag`: used in the prompt and messages.
+    /// `host`, `role`, `tag` or `network`: used in the prompt and messages.
     pub kind: &'a str,
     /// The id (or, for tags, the `key:value` name) the user typed.
     pub id: &'a str,
@@ -71,15 +71,46 @@ pub fn confirm_and_delete(
     lookup: impl FnOnce() -> anyhow::Result<Described>,
     delete: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
+    let confirmation = delete_confirmation(yes, json, std::io::stdin().is_terminal());
+    let name = run_delete(
+        target,
+        confirmation,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stderr(),
+        lookup,
+        delete,
+    )?;
+
+    if json {
+        return print_json(&delete_json_payload(target.json_key, target.id));
+    }
+    println!(
+        "Deleted {}.",
+        label(target.kind, &sanitize_for_display(target.id), &name)
+    );
+    Ok(())
+}
+
+/// The confirm-then-delete steps with the terminal passed in, so tests can
+/// answer the prompt. Returns the looked-up display name (empty when the
+/// prompt was skipped). `delete` runs only once the confirmation passed.
+/// A tag's id is user-typed and may hold control characters, so it is
+/// sanitized for every message; the raw id is still what gets deleted.
+fn run_delete(
+    target: &DeleteTarget,
+    confirmation: DeleteConfirmation,
+    input: &mut impl BufRead,
+    prompt_out: &mut impl Write,
+    lookup: impl FnOnce() -> anyhow::Result<Described>,
+    delete: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<String> {
     let DeleteTarget {
-        kind,
-        id,
-        json_key,
-        read_scope,
+        kind, read_scope, ..
     } = *target;
+    let id = sanitize_for_display(target.id);
     let mut name = String::new();
 
-    match delete_confirmation(yes, json, std::io::stdin().is_terminal()) {
+    match confirmation {
         DeleteConfirmation::Skip => {}
         DeleteConfirmation::Refuse => bail!(DELETE_NEEDS_YES),
         DeleteConfirmation::Prompt => {
@@ -91,11 +122,14 @@ pub fn confirm_and_delete(
             })?;
             name = found.name;
 
-            let mut err = std::io::stderr();
-            write!(err, "{}", delete_prompt(kind, id, &name, &found.detail))?;
-            err.flush()?;
+            write!(
+                prompt_out,
+                "{}",
+                delete_prompt(kind, &id, &name, &found.detail)
+            )?;
+            prompt_out.flush()?;
             let mut line = String::new();
-            std::io::stdin().lock().read_line(&mut line)?;
+            input.read_line(&mut line)?;
             if !confirmation_accepted(&line) {
                 bail!("aborted, {kind} not deleted");
             }
@@ -103,12 +137,7 @@ pub fn confirm_and_delete(
     }
 
     delete()?;
-
-    if json {
-        return print_json(&delete_json_payload(json_key, id));
-    }
-    println!("Deleted {}.", label(kind, id, &name));
-    Ok(())
+    Ok(name)
 }
 
 /// `y` / `yes`, case- and whitespace-insensitive. Everything else — a bare
@@ -192,6 +221,112 @@ mod tests {
             delete_confirmation(false, false, true),
             DeleteConfirmation::Prompt
         );
+    }
+
+    use std::cell::Cell;
+
+    const ROLE: DeleteTarget = DeleteTarget {
+        kind: "role",
+        id: "role-1",
+        json_key: "id",
+        read_scope: "roles:read",
+    };
+
+    fn web_role() -> anyhow::Result<Described> {
+        Ok(Described {
+            name: "web".into(),
+            detail: "3 hosts".into(),
+        })
+    }
+
+    /// Run [`run_delete`] answering `answer`, returning its result, what was
+    /// written to the prompt stream, and whether `delete` ran.
+    fn run(
+        target: &DeleteTarget,
+        confirmation: DeleteConfirmation,
+        answer: &str,
+        lookup: impl FnOnce() -> anyhow::Result<Described>,
+    ) -> (anyhow::Result<String>, String, bool) {
+        let deleted = Cell::new(false);
+        let mut out = Vec::new();
+        let res = run_delete(
+            target,
+            confirmation,
+            &mut answer.as_bytes(),
+            &mut out,
+            lookup,
+            || {
+                deleted.set(true);
+                Ok(())
+            },
+        );
+        (res, String::from_utf8(out).unwrap(), deleted.get())
+    }
+
+    #[test]
+    fn run_delete_prompts_then_deletes_on_yes() {
+        let (res, prompt, deleted) = run(&ROLE, DeleteConfirmation::Prompt, "y\n", web_role);
+        assert_eq!(res.unwrap(), "web");
+        assert_eq!(prompt, "Delete role \"web\" (role-1; 3 hosts)? [y/N] ");
+        assert!(deleted);
+    }
+
+    #[test]
+    fn run_delete_never_deletes_on_a_decline_or_eof() {
+        for answer in ["n\n", "\n", ""] {
+            let (res, _, deleted) = run(&ROLE, DeleteConfirmation::Prompt, answer, web_role);
+            let err = res.unwrap_err().to_string();
+            assert_eq!(err, "aborted, role not deleted", "{answer:?}");
+            assert!(!deleted, "{answer:?}");
+        }
+    }
+
+    #[test]
+    fn run_delete_never_deletes_when_the_lookup_fails() {
+        let (res, prompt, deleted) = run(&ROLE, DeleteConfirmation::Prompt, "y\n", || {
+            anyhow::bail!("HTTP 403")
+        });
+        let err = format!("{:#}", res.unwrap_err());
+        assert!(err.contains("could not read role role-1"), "{err}");
+        assert!(err.contains("roles:read"), "{err}");
+        assert!(err.contains("HTTP 403"), "{err}");
+        assert!(prompt.is_empty());
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn run_delete_skip_deletes_without_a_lookup_or_prompt() {
+        let (res, prompt, deleted) = run(&ROLE, DeleteConfirmation::Skip, "", || {
+            panic!("--yes must not look the resource up")
+        });
+        assert_eq!(res.unwrap(), "");
+        assert!(prompt.is_empty());
+        assert!(deleted);
+    }
+
+    #[test]
+    fn run_delete_refuse_neither_looks_up_nor_deletes() {
+        let (res, prompt, deleted) = run(&ROLE, DeleteConfirmation::Refuse, "y\n", || {
+            panic!("a refused run must not look the resource up")
+        });
+        assert_eq!(res.unwrap_err().to_string(), DELETE_NEEDS_YES);
+        assert!(prompt.is_empty());
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn run_delete_sanitizes_a_tag_name_in_the_prompt() {
+        let tag = DeleteTarget {
+            kind: "tag",
+            id: "env:a\u{1b}[2Jb",
+            json_key: "name",
+            read_scope: "tags:read",
+        };
+        let (_, prompt, _) = run(&tag, DeleteConfirmation::Prompt, "n\n", || {
+            Ok(Described::default())
+        });
+        assert!(!prompt.contains('\u{1b}'), "{prompt:?}");
+        assert!(prompt.starts_with("Delete tag env:a"), "{prompt:?}");
     }
 
     #[test]
