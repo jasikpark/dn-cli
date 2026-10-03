@@ -330,6 +330,13 @@ impl Client {
         self.delete(&tag_path(name))
     }
 
+    /// Delete a network, which needs the `networks:delete` scope. Only v1
+    /// has a network delete; the API refuses (`ERR_HAS_DEPENDENTS`) while
+    /// the network still has hosts.
+    pub fn delete_network(&self, id: &str) -> Result<()> {
+        self.delete(&format!("/v1/networks/{id}"))
+    }
+
     /// DELETE a versioned path. A 2xx carries an empty `{data, metadata}`
     /// envelope, so nothing is parsed.
     fn delete(&self, path: &str) -> Result<()> {

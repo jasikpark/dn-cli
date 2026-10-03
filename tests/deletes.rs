@@ -81,6 +81,21 @@ fn role_delete_with_yes_deletes_on_v1_without_a_lookup() {
 }
 
 #[test]
+fn network_delete_with_yes_deletes_on_v1_without_a_lookup() {
+    let (url, seen) = serve();
+    let out = dn(
+        &url,
+        &["--json", "network", "delete", "network-XYZ", "--yes"],
+    );
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        stdout_json(&out),
+        serde_json::json!({"id": "network-XYZ", "deleted": true})
+    );
+    assert_eq!(*seen.lock().unwrap(), ["DELETE /v1/networks/network-XYZ"]);
+}
+
+#[test]
 fn tag_delete_with_yes_prints_the_tag_it_deleted() {
     let (url, seen) = serve();
     let out = dn(&url, &["tags", "delete", "env:prod", "--yes"]);
@@ -111,6 +126,8 @@ fn deletes_without_yes_are_refused_before_any_request() {
         &["--json", "host", "delete", "host-1"],
         &["role", "delete", "role-1"],
         &["--json", "role", "delete", "role-1"],
+        &["network", "delete", "network-1"],
+        &["--json", "network", "delete", "network-1"],
         &["tag", "delete", "env:prod"],
         &["--json", "tag", "delete", "env:prod"],
     ] {
@@ -130,6 +147,7 @@ fn deletes_reject_malformed_ids_before_any_request() {
     for args in [
         &["role", "delete", "role/../hosts", "--yes"][..],
         &["tag", "delete", "nocolon", "--yes"],
+        &["network", "delete", "network-1/x", "--yes"],
         &["host", "delete", "host-1?x", "--yes"],
     ] {
         let (url, seen) = serve();

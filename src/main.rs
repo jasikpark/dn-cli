@@ -26,7 +26,7 @@ use crate::commands::{
         validate_create_preflight, validate_edit_preflight, validate_host_id, validate_role_id,
         validate_search_preflight,
     },
-    networks::networks_list,
+    networks::{networks_delete, networks_list, validate_network_id},
 };
 use crate::config::{
     Config, Migration, migrate_to_profiles, normalize_op_ref, validate_op_ref,
@@ -84,6 +84,12 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             command: RoleCommand::Delete(args),
         } => {
             validate_role_id(args.role_id.trim())?;
+            preflight_delete(args.yes, cli.json)?;
+        }
+        Command::Network {
+            command: NetworkCommand::Delete(args),
+        } => {
+            validate_network_id(args.network_id.trim())?;
             preflight_delete(args.yes, cli.json)?;
         }
         Command::Tag {
@@ -153,9 +159,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 HostCommand::Delete(args) => hosts_delete(&client, args, cli.json)?,
             }
         }
-        Command::Network {
-            command: NetworkCommand::List,
-        } => networks_list(&api_client(cli)?, cli.json)?,
+        Command::Network { command } => match command {
+            NetworkCommand::List => networks_list(&api_client(cli)?, cli.json)?,
+            NetworkCommand::Delete(args) => networks_delete(&api_client(cli)?, args, cli.json)?,
+        },
         Command::Role { command } => match command {
             RoleCommand::List => roles_list(&api_client(cli)?, cli.json)?,
             RoleCommand::Get(args) => roles_get(&api_client(cli)?, args, cli.json)?,

@@ -27,7 +27,7 @@ pub enum Command {
         #[command(subcommand)]
         command: HostCommand,
     },
-    /// Inspect networks
+    /// Inspect and delete networks
     #[command(alias = "networks")]
     Network {
         #[command(subcommand)]
@@ -51,6 +51,19 @@ pub enum Command {
 pub enum NetworkCommand {
     /// List networks
     List,
+    /// Delete a network. It must have no hosts left. Asks for confirmation
+    /// unless --yes is passed.
+    Delete(NetworkDeleteArgs),
+}
+
+#[derive(Args)]
+pub struct NetworkDeleteArgs {
+    /// Network id (network-…). Find ids with `dn network list`.
+    pub network_id: String,
+    /// Skip the confirmation prompt (required when stdin is not a terminal or
+    /// with --json)
+    #[arg(short = 'y', long)]
+    pub yes: bool,
 }
 
 #[derive(Subcommand)]
@@ -325,6 +338,19 @@ mod tests {
         };
         assert_eq!(args.tag, "env:prod");
         assert!(!args.yes);
+    }
+
+    #[test]
+    fn parses_network_delete_with_short_yes() {
+        let cli = Cli::try_parse_from(["dn", "networks", "delete", "network-1", "-y"]).unwrap();
+        let Command::Network {
+            command: NetworkCommand::Delete(args),
+        } = cli.command
+        else {
+            panic!("expected `network delete` to parse into NetworkCommand::Delete");
+        };
+        assert_eq!(args.network_id, "network-1");
+        assert!(args.yes);
     }
 
     #[test]

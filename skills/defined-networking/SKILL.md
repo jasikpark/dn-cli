@@ -319,6 +319,21 @@ Use it to find the id for `host create --network`, and to answer "how do my
 hosts find each other" or "do I have relays" — check these flags before
 concluding anything from the hosts list alone.
 
+### Delete a network — `dn network delete`
+
+```bash
+dn network delete <NETWORK_ID> --yes --json
+```
+
+Returns `{ "id": "network-…", "deleted": true }`. Same `--yes` rule as
+`host delete`. Key permission: `networks:delete`. The API refuses with
+`ERR_HAS_DEPENDENTS` while the network still has hosts (`hostCount` above 0
+in `dn network list --json`); delete those first, each with its own
+confirmation.
+
+**You MUST confirm with the user before running this**, naming the network.
+One id per call.
+
 ## Safety
 
 | operation | gate |
@@ -328,6 +343,7 @@ concluding anything from the hosts list alone.
 | `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
 | `host delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |
 | `role delete`, `tag delete` | destructive and irreversible: the firewall rules go with it, changing what traffic every host that had it can receive. Always get explicit user confirmation for the specific role or tag. |
+| `network delete` | destructive and irreversible, though the API refuses while the network has hosts. Always get explicit user confirmation for the specific network. |
 
 ## Where this is going (not built yet)
 
