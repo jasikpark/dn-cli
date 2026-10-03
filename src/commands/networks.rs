@@ -1,7 +1,10 @@
+use anyhow::bail;
 use serde_json::Value;
 
 use crate::api::Client;
-use crate::output::{count_field, joined_field, print_list, str_field};
+use crate::cli::NetworkDeleteArgs;
+use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
+use crate::output::{count_field, joined_field, print_list, sanitize_for_display, str_field};
 
 pub fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
     let headers = [
@@ -22,6 +25,52 @@ pub fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
         &headers,
         |rows| rows.iter().map(network_row).collect(),
     )
+}
+
+/// Delete one network. The API refuses while it still has hosts, so the
+/// confirmation shows the host count alongside the name.
+pub fn networks_delete(
+    client: &Client,
+    args: &NetworkDeleteArgs,
+    json: bool,
+) -> anyhow::Result<()> {
+    let id = args.network_id.trim();
+    validate_network_id(id)?;
+    let target = DeleteTarget {
+        kind: "network",
+        id,
+        json_key: "id",
+        read_scope: "networks:read",
+    };
+    confirm_and_delete(
+        &target,
+        args.yes,
+        json,
+        || {
+            let data = &client.get_network(id)?["data"];
+            Ok(Described {
+                name: sanitize_for_display(str_field(data, "name")),
+                detail: host_count_detail(data),
+            })
+        },
+        || client.delete_network(id),
+    )
+}
+
+/// Reject network ids that are empty or contain anything but ASCII letters,
+/// digits, `-` and `_` (ids look like `network-ABC123`), so a typo can't
+/// become a different request path.
+pub fn validate_network_id(id: &str) -> anyhow::Result<()> {
+    if id.is_empty() {
+        bail!("network id must not be empty");
+    }
+    if let Some(c) = id
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_')))
+    {
+        bail!("network id contains invalid character {c:?}");
+    }
+    Ok(())
 }
 
 /// The columns the human network table renders. Strings fall back to empty
@@ -61,6 +110,14 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn validate_network_id_accepts_ids_and_rejects_path_characters() {
+        assert!(validate_network_id("network-ZJOW3QUQ_X5").is_ok());
+        assert!(validate_network_id("").is_err());
+        assert!(validate_network_id("network-1/../hosts").is_err());
+        assert!(validate_network_id("network-1?x").is_err());
+    }
 
     #[test]
     fn network_row_renders_dual_stack_network() {

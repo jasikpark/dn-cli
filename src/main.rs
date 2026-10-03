@@ -19,13 +19,14 @@ use crate::commands::{
         KEY_STDIN_NEEDS_PIPE, LOGIN_NEEDS_KEY, auth_list, auth_login, auth_logout, auth_status,
         auth_switch, validate_api_url,
     },
-    firewall::{roles_get, roles_list, tags_get, tags_list},
+    delete::{DELETE_NEEDS_YES, DeleteConfirmation, delete_confirmation},
+    firewall::{roles_delete, roles_get, roles_list, tags_delete, tags_get, tags_list},
     hosts::{
-        DELETE_NEEDS_YES, DeleteConfirmation, delete_confirmation, hosts_create, hosts_delete,
-        hosts_edit, hosts_list, hosts_search, parse_tag, validate_create_preflight,
-        validate_edit_preflight, validate_host_id, validate_role_id, validate_search_preflight,
+        hosts_create, hosts_delete, hosts_edit, hosts_list, hosts_search, parse_tag,
+        validate_create_preflight, validate_edit_preflight, validate_host_id, validate_role_id,
+        validate_search_preflight,
     },
-    networks::networks_list,
+    networks::{networks_delete, networks_list, validate_network_id},
 };
 use crate::config::{
     Config, Migration, migrate_to_profiles, normalize_op_ref, validate_op_ref,
@@ -72,21 +73,35 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             HostCommand::Search(args) => validate_search_preflight(args)?,
             HostCommand::Delete(args) => {
                 validate_host_id(&args.host_id)?;
-                if delete_confirmation(args.yes, cli.json, std::io::stdin().is_terminal())
-                    == DeleteConfirmation::Refuse
-                {
-                    bail!(DELETE_NEEDS_YES);
-                }
+                preflight_delete(args.yes, cli.json)?;
             }
             HostCommand::List => {}
         },
         Command::Role {
             command: RoleCommand::Get(args),
         } => validate_role_id(args.role_id.trim())?,
+        Command::Role {
+            command: RoleCommand::Delete(args),
+        } => {
+            validate_role_id(args.role_id.trim())?;
+            preflight_delete(args.yes, cli.json)?;
+        }
+        Command::Network {
+            command: NetworkCommand::Delete(args),
+        } => {
+            validate_network_id(args.network_id.trim())?;
+            preflight_delete(args.yes, cli.json)?;
+        }
         Command::Tag {
             command: TagCommand::Get(args),
         } => {
             parse_tag(args.tag.trim())?;
+        }
+        Command::Tag {
+            command: TagCommand::Delete(args),
+        } => {
+            parse_tag(args.tag.trim())?;
+            preflight_delete(args.yes, cli.json)?;
         }
         Command::Auth {
             command: AuthCommand::Switch(args),
@@ -108,6 +123,16 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+/// Refuse a delete that has nobody to confirm it and no `--yes`, before
+/// credentials are resolved.
+fn preflight_delete(yes: bool, json: bool) -> anyhow::Result<()> {
+    if delete_confirmation(yes, json, std::io::stdin().is_terminal()) == DeleteConfirmation::Refuse
+    {
+        bail!(DELETE_NEEDS_YES);
     }
     Ok(())
 }
@@ -134,16 +159,19 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 HostCommand::Delete(args) => hosts_delete(&client, args, cli.json)?,
             }
         }
-        Command::Network {
-            command: NetworkCommand::List,
-        } => networks_list(&api_client(cli)?, cli.json)?,
+        Command::Network { command } => match command {
+            NetworkCommand::List => networks_list(&api_client(cli)?, cli.json)?,
+            NetworkCommand::Delete(args) => networks_delete(&api_client(cli)?, args, cli.json)?,
+        },
         Command::Role { command } => match command {
             RoleCommand::List => roles_list(&api_client(cli)?, cli.json)?,
             RoleCommand::Get(args) => roles_get(&api_client(cli)?, args, cli.json)?,
+            RoleCommand::Delete(args) => roles_delete(&api_client(cli)?, args, cli.json)?,
         },
         Command::Tag { command } => match command {
             TagCommand::List => tags_list(&api_client(cli)?, cli.json)?,
             TagCommand::Get(args) => tags_get(&api_client(cli)?, args, cli.json)?,
+            TagCommand::Delete(args) => tags_delete(&api_client(cli)?, args, cli.json)?,
         },
     }
 

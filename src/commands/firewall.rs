@@ -5,7 +5,8 @@ use anyhow::{anyhow, bail};
 use serde_json::Value;
 
 use crate::api::Client;
-use crate::cli::{RoleGetArgs, TagGetArgs};
+use crate::cli::{RoleDeleteArgs, RoleGetArgs, TagDeleteArgs, TagGetArgs};
+use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
 use crate::commands::hosts::validate_role_id;
 use crate::output::{
     count_field, print_json, print_list, render_table, sanitize_for_display, str_field,
@@ -76,6 +77,56 @@ pub fn tags_get(client: &Client, args: &TagGetArgs, json: bool) -> anyhow::Resul
         json,
         "tag",
         |data, names| render_tag(data, name, names),
+    )
+}
+
+/// Delete one role. The confirmation names it and says how many hosts it is
+/// assigned to.
+pub fn roles_delete(client: &Client, args: &RoleDeleteArgs, json: bool) -> anyhow::Result<()> {
+    let id = args.role_id.trim();
+    validate_role_id(id)?;
+    let target = DeleteTarget {
+        kind: "role",
+        id,
+        json_key: "id",
+        read_scope: "roles:read",
+    };
+    confirm_and_delete(
+        &target,
+        args.yes,
+        json,
+        || {
+            let data = &client.get_role(id)?["data"];
+            Ok(Described {
+                name: sanitize_for_display(str_field(data, "name")),
+                detail: host_count_detail(data),
+            })
+        },
+        || client.delete_role(id),
+    )
+}
+
+/// Delete one tag. Tags are named by `key:value`, so the confirmation adds
+/// only how many hosts carry it.
+pub fn tags_delete(client: &Client, args: &TagDeleteArgs, json: bool) -> anyhow::Result<()> {
+    let name = args.tag.trim();
+    let target = DeleteTarget {
+        kind: "tag",
+        id: name,
+        json_key: "name",
+        read_scope: "tags:read",
+    };
+    confirm_and_delete(
+        &target,
+        args.yes,
+        json,
+        || {
+            Ok(Described {
+                name: String::new(),
+                detail: host_count_detail(&client.get_tag(name)?["data"]),
+            })
+        },
+        || client.delete_tag(name),
     )
 }
 
