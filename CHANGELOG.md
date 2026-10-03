@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.13 (2026-10-03)
+
+### Features
+
+- add `dn role delete`, `dn tag delete`, and `dn network delete` (#102)
+
 ## 0.2.12 (2026-10-01)
 
 ### Fixes
