@@ -1,5 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
+use crate::api::MAX_PAGE_SIZE;
+
 #[derive(Parser)]
 #[command(name = "dn", version, about = "CLI for the Defined Networking API")]
 pub struct Cli {
@@ -45,12 +47,73 @@ pub enum Command {
         #[command(subcommand)]
         command: TagCommand,
     },
+    /// Read the account's audit log: who changed what, and when
+    #[command(alias = "audit-logs")]
+    AuditLog {
+        #[command(subcommand)]
+        command: AuditLogCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AuditLogCommand {
+    /// List audit log entries, newest first
+    List(AuditLogListArgs),
+}
+
+#[derive(Args)]
+pub struct AuditLogListArgs {
+    #[command(flatten)]
+    pub page: PageArgs,
+    /// Only entries about this resource, by id (e.g. host-…, role-…)
+    #[arg(long, value_name = "ID", value_parser = non_blank)]
+    pub target: Option<String>,
+    /// Only entries about this kind of resource, e.g. host, role, network,
+    /// apiKey, user, ca, oidcProvider
+    #[arg(long, value_name = "TYPE", value_parser = non_blank)]
+    pub target_type: Option<String>,
+}
+
+/// Which page of a list to fetch. Lists return one page at a time; the
+/// human view prints the next and previous cursors on stderr, `--json`
+/// carries them in `metadata`.
+#[derive(Args, Clone, Debug, Default)]
+pub struct PageArgs {
+    /// Fetch the page this cursor points at (a `nextCursor` or `prevCursor`
+    /// from an earlier call with the same filters)
+    #[arg(
+        long,
+        value_parser = non_blank,
+        allow_hyphen_values = true,
+        overrides_with = "cursor"
+    )]
+    pub cursor: Option<String>,
+    /// How many items to fetch, at most 500 per call; `--cursor` continues
+    /// past them
+    #[arg(
+        long,
+        visible_alias = "page-size",
+        default_value_t = MAX_PAGE_SIZE,
+        value_parser = clap::value_parser!(u32).range(1..=i64::from(MAX_PAGE_SIZE))
+    )]
+    pub limit: u32,
+}
+
+/// A flag value trimmed of surrounding whitespace, refusing one with nothing
+/// left: an empty filter or cursor would quietly widen the request instead of
+/// narrowing it.
+fn non_blank(s: &str) -> Result<String, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("must not be blank".to_string());
+    }
+    Ok(s.to_string())
 }
 
 #[derive(Subcommand)]
 pub enum NetworkCommand {
     /// List networks
-    List,
+    List(PageArgs),
     /// Show one network: its address ranges, host count, and lighthouse
     /// settings
     Get(NetworkGetArgs),
@@ -78,7 +141,7 @@ pub struct NetworkDeleteArgs {
 #[derive(Subcommand)]
 pub enum RoleCommand {
     /// List firewall roles
-    List,
+    List(PageArgs),
     /// Show one role and its inbound firewall rules
     Get(RoleGetArgs),
     /// Delete a role. Asks for confirmation unless --yes is passed.
@@ -94,7 +157,7 @@ pub struct RoleGetArgs {
 #[derive(Subcommand)]
 pub enum TagCommand {
     /// List tags
-    List,
+    List(PageArgs),
     /// Show one tag and the inbound firewall rules it adds to its hosts
     Get(TagGetArgs),
     /// Delete a tag. Asks for confirmation unless --yes is passed.
@@ -188,7 +251,7 @@ pub struct AuthLoginArgs {
 #[derive(Subcommand)]
 pub enum HostCommand {
     /// List hosts
-    List,
+    List(PageArgs),
     /// Show one host: its addresses, role, tags, and when it was last seen
     Get(HostGetArgs),
     /// Search hosts by name, IP, role name, or tag (server-side, whole
@@ -213,6 +276,8 @@ pub struct HostSearchArgs {
     /// space, so `dn host search web server` searches for "web server".
     #[arg(required = true, num_args = 1.., value_name = "QUERY")]
     pub query: Vec<String>,
+    #[command(flatten)]
+    pub page: PageArgs,
 }
 
 /// Arguments for `dn host create`. Mirrors the
@@ -515,34 +580,106 @@ mod tests {
     }
 
     #[test]
+    fn parses_audit_log_list_with_filters() {
+        let cli = Cli::try_parse_from([
+            "dn",
+            "audit-logs",
+            "list",
+            "--limit",
+            "5",
+            "--cursor",
+            "c1",
+            "--target",
+            "host-1",
+            "--target-type",
+            "host",
+        ])
+        .unwrap();
+        let Command::AuditLog {
+            command: AuditLogCommand::List(args),
+        } = cli.command
+        else {
+            panic!("expected `audit-log list`");
+        };
+        assert_eq!(args.page.limit, 5);
+        assert_eq!(args.page.cursor.as_deref(), Some("c1"));
+        assert_eq!(args.target.as_deref(), Some("host-1"));
+        assert_eq!(args.target_type.as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn limit_defaults_to_the_api_maximum_and_stays_in_range() {
+        let cli = Cli::try_parse_from(["dn", "audit-log", "list"]).unwrap();
+        let Command::AuditLog {
+            command: AuditLogCommand::List(args),
+        } = cli.command
+        else {
+            panic!("expected `audit-log list`");
+        };
+        assert_eq!(args.page.limit, 500);
+        assert!(args.page.cursor.is_none());
+        for flag in ["--limit", "--page-size"] {
+            for bad in ["0", "501"] {
+                assert!(Cli::try_parse_from(["dn", "host", "list", flag, bad]).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn the_last_cursor_wins_and_may_start_with_a_hyphen() {
+        // Paging appends the hinted cursor to a command that may already
+        // carry one; cursors are opaque and can begin with `-`.
+        let cli = Cli::try_parse_from(["dn", "host", "list", "--cursor", "p2", "--cursor", "-p3"])
+            .unwrap();
+        let Command::Host {
+            command: HostCommand::List(page),
+        } = cli.command
+        else {
+            panic!("expected `host list`");
+        };
+        assert_eq!(page.cursor.as_deref(), Some("-p3"));
+    }
+
+    #[test]
+    fn blank_cursor_and_filters_are_rejected() {
+        for args in [
+            ["dn", "host", "list", "--cursor", "  "],
+            ["dn", "audit-log", "list", "--target", ""],
+            ["dn", "audit-log", "list", "--target-type", " "],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
     fn plural_command_names_still_parse() {
         // The old plural names stay as aliases so existing scripts keep working.
         let cli = Cli::try_parse_from(["dn", "hosts", "list"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Host {
-                command: HostCommand::List
+                command: HostCommand::List(_)
             }
         ));
         let cli = Cli::try_parse_from(["dn", "networks", "list"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Network {
-                command: NetworkCommand::List
+                command: NetworkCommand::List(_)
             }
         ));
         let cli = Cli::try_parse_from(["dn", "roles", "list"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Role {
-                command: RoleCommand::List
+                command: RoleCommand::List(_)
             }
         ));
         let cli = Cli::try_parse_from(["dn", "tags", "list"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Tag {
-                command: TagCommand::List
+                command: TagCommand::List(_)
             }
         ));
         let cli = Cli::try_parse_from(["dn", "tags", "get", "env:prod"]).unwrap();

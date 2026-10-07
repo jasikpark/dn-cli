@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use ureq::Body;
 use ureq::http::Response;
 
+use crate::cli::PageArgs;
 use crate::config::Config;
 
 const MAX_RETRIES: u32 = 3;
@@ -188,17 +189,16 @@ impl Client {
         })?)
     }
 
-    /// List every host (v2 endpoint — dual-stack `ipAddresses`), following
-    /// cursor pagination to completion.
+    /// One page of hosts (v2 endpoint — dual-stack `ipAddresses`).
     ///
     /// TODO(write-phase): add ?networkID= filtering once the exact query
     /// param is confirmed against the live API.
-    pub fn list_hosts(&self) -> Result<Value> {
-        self.list_all("/v2/hosts", &[])
+    pub fn list_hosts(&self, page: &PageArgs) -> Result<Value> {
+        self.list_page("/v2/hosts", &[], page)
     }
 
-    /// Search hosts by a free-text query, following cursor pagination to
-    /// completion. Wraps `GET /v2/hosts?filter.search=<q>` — a server-side
+    /// One page of hosts matching a free-text query. Wraps
+    /// `GET /v2/hosts?filter.search=<q>` — a server-side
     /// case-insensitive LIKE across a host's name, IP addresses, assigned
     /// role name, and tags (the same surface the admin panel's host search
     /// box drives). The API rejects a query shorter than two characters with
@@ -208,12 +208,18 @@ impl Client {
     /// `filter.search` is undocumented in the public OpenAPI spec (only the
     /// structured `filter.*` params are), so this is pinned to the admin panel's
     /// observed behaviour rather than a published contract.
-    pub fn search_hosts(&self, query: &str) -> Result<Value> {
-        self.list_all("/v2/hosts", &[("filter.search", query)])
+    pub fn search_hosts(&self, query: &str, page: &PageArgs) -> Result<Value> {
+        self.list_page("/v2/hosts", &[("filter.search", query)], page)
     }
 
-    /// List every role, following cursor pagination to completion.
-    pub fn list_roles(&self) -> Result<Value> {
+    /// One page of roles.
+    pub fn list_roles(&self, page: &PageArgs) -> Result<Value> {
+        self.list_page("/v1/roles", &[], page)
+    }
+
+    /// Every role, following cursor pagination to completion, for resolving
+    /// role ids to names.
+    pub fn all_roles(&self) -> Result<Value> {
         self.list_all("/v1/roles", &[])
     }
 
@@ -223,10 +229,12 @@ impl Client {
         self.get(&format!("/v1/roles/{id}"))
     }
 
-    /// List every tag, following cursor pagination to completion. Tags list
-    /// only on v2; `GET /v1/tags` answers 405. Needs the `tags:list` scope.
-    pub fn list_tags(&self) -> Result<Value> {
-        self.list_all("/v2/tags", &[])
+    /// One page of tags. Tags list only on v2; `GET /v1/tags` answers 405.
+    /// Needs the `tags:list` scope.
+    pub fn list_tags(&self, page: &PageArgs) -> Result<Value> {
+        // Highest priority first, matching the admin panel; the API sorts
+        // tags by priority only, ascending unless asked otherwise.
+        self.list_page("/v2/tags", &[("sortDirection", "desc")], page)
     }
 
     /// Fetch one tag (`key:value`) with its `firewallRules`, config
@@ -235,31 +243,55 @@ impl Client {
         self.get(&tag_path(name))
     }
 
-    /// List every network, following cursor pagination to completion. Backs
-    /// `networks list`; `hosts create` auto-picks from it when the account
-    /// has exactly one network.
-    pub fn list_networks(&self) -> Result<Value> {
+    /// One page of networks.
+    pub fn list_networks(&self, page: &PageArgs) -> Result<Value> {
+        self.list_page("/v2/networks", &[], page)
+    }
+
+    /// Every network, following cursor pagination to completion; `hosts
+    /// create` auto-picks from it when the account has exactly one network.
+    pub fn all_networks(&self) -> Result<Value> {
         self.list_all("/v2/networks", &[])
     }
 
-    /// Fetch every page of a list endpoint and return one merged envelope.
-    ///
-    /// The Defined API returns one page per call (`{ data, metadata }`); an
-    /// agent consuming a single page would silently see only the first slice,
-    /// so we walk the cursor and return one merged envelope. The last page's
-    /// `metadata` is passed through for `--json`.
-    /// `params` are extra query pairs applied to every page (e.g. a
-    /// `filter.search` term); the cursor is threaded in on top of them.
+    /// One page of audit log entries, newest first. `params` carries the
+    /// `filter.targetID` / `filter.targetType` pairs. Needs the
+    /// `audit-logs:list` scope.
+    pub fn list_audit_logs(&self, params: &[(&str, &str)], page: &PageArgs) -> Result<Value> {
+        // The API sorts oldest first unless asked otherwise.
+        let mut params = params.to_vec();
+        params.push(("sortDirection", "desc"));
+        self.list_page("/v1/audit-logs", &params, page)
+    }
+
+    /// Fetch the one page of a list endpoint that `page` names. The envelope
+    /// passes through untouched, so `metadata` keeps `nextCursor` and
+    /// `prevCursor` for the caller to resume from.
+    fn list_page(&self, path: &str, params: &[(&str, &str)], page: &PageArgs) -> Result<Value> {
+        let mut query = params.to_vec();
+        if let Some(cursor) = &page.cursor {
+            query.push(("cursor", cursor.as_str()));
+        }
+        let size = page.limit.to_string();
+        query.push(("pageSize", &size));
+        self.get_with_query(path, &query)
+    }
+
+    /// Walk a list endpoint's cursor to the end and return one merged
+    /// envelope, carrying the last page's `metadata`. For lookups that need
+    /// the whole set; user-facing lists fetch one page with [`Self::list_page`].
     fn list_all(&self, path: &str, params: &[(&str, &str)]) -> Result<Value> {
         let mut data: Vec<Value> = Vec::new();
         let mut metadata = Value::Null;
         let mut cursor: Option<String> = None;
+        let size = MAX_PAGE_SIZE.to_string();
 
         loop {
             let mut query: Vec<(&str, &str)> = params.to_vec();
             if let Some(c) = &cursor {
                 query.push(("cursor", c));
             }
+            query.push(("pageSize", &size));
             let page = self.get_with_query(path, &query)?;
 
             if let Some(rows) = page.get("data").and_then(Value::as_array) {
@@ -422,7 +454,7 @@ fn cheap_jitter() -> f64 {
 /// advance when `hasNextPage` is true *and* a non-empty cursor is present, so
 /// a missing/false flag stops the walk cleanly. `cursor` is accepted as a
 /// fallback purely as insurance against field-name drift.
-fn next_cursor(metadata: Option<&Value>) -> Option<String> {
+pub fn next_cursor(metadata: Option<&Value>) -> Option<String> {
     let metadata = metadata?;
     if !metadata
         .get("hasNextPage")
@@ -439,6 +471,9 @@ fn next_cursor(metadata: Option<&Value>) -> Option<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
 }
+
+/// The largest page the API serves; it clamps a bigger `pageSize` to this.
+pub const MAX_PAGE_SIZE: u32 = 500;
 
 fn tag_path(name: &str) -> String {
     format!("/v1/tags/{}", encode_path_segment(name))

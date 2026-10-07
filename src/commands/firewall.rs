@@ -1,21 +1,20 @@
-use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use anyhow::{anyhow, bail};
 use serde_json::Value;
 
 use crate::api::Client;
-use crate::cli::{RoleDeleteArgs, RoleGetArgs, TagDeleteArgs, TagGetArgs};
+use crate::cli::{PageArgs, RoleDeleteArgs, RoleGetArgs, TagDeleteArgs, TagGetArgs};
 use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
 use crate::ids::validate_id;
 use crate::output::{
     count_field, data_object, print_json, print_list, render_table, sanitize_for_display, str_field,
 };
 
-pub fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
+pub fn roles_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Result<()> {
     let headers = ["ID", "NAME", "RULES", "HOSTS", "DESCRIPTION"];
     print_list(
-        &client.list_roles()?,
+        &client.list_roles(page)?,
         json,
         "No roles found.",
         &headers,
@@ -35,19 +34,15 @@ pub fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
     )
 }
 
-pub fn tags_list(client: &Client, json: bool) -> anyhow::Result<()> {
+pub fn tags_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Result<()> {
     let headers = ["NAME", "RULES", "HOSTS", "DESCRIPTION", "PRIORITY"];
     print_list(
-        &client.list_tags()?,
+        &client.list_tags(page)?,
         json,
         "No tags found.",
         &headers,
         |rows| {
-            // Highest priority first, matching the admin panel's tag list.
-            let priority = |row: &Value| row.get("priority").and_then(Value::as_i64);
-            let mut rows: Vec<&Value> = rows.iter().collect();
-            rows.sort_by_key(|row| Reverse(priority(row)));
-            rows.into_iter()
+            rows.iter()
                 .map(|row| {
                     vec![
                         str_field(row, "name").to_string(),
@@ -55,7 +50,10 @@ pub fn tags_list(client: &Client, json: bool) -> anyhow::Result<()> {
                         row["firewallRulesCount"].as_u64().unwrap_or(0).to_string(),
                         count_field(row, "hostCount"),
                         str_field(row, "description").to_string(),
-                        priority(row).map(|n| n.to_string()).unwrap_or_default(),
+                        row["priority"]
+                            .as_i64()
+                            .map(|n| n.to_string())
+                            .unwrap_or_default(),
                     ]
                 })
                 .collect()
@@ -158,7 +156,7 @@ fn rule_role_names(client: &Client, data: &Value) -> HashMap<String, String> {
     if !references_roles {
         return HashMap::new();
     }
-    match client.list_roles() {
+    match client.all_roles() {
         Ok(r) => role_names_by_id(&r),
         Err(e) => {
             let e = sanitize_for_display(&format!("{e:#}"));
@@ -168,7 +166,7 @@ fn rule_role_names(client: &Client, data: &Value) -> HashMap<String, String> {
     }
 }
 
-/// Map role id to role name from a `list_roles` response.
+/// Map role id to role name from a roles list response.
 fn role_names_by_id(res: &Value) -> HashMap<String, String> {
     res.get("data")
         .and_then(Value::as_array)

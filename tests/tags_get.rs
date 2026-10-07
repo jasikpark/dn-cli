@@ -70,7 +70,8 @@ fn tags_get_names_rule_roles_from_the_roles_list() {
     assert!(stdout.contains("\"Admins\" hosts"), "{stdout}");
     let seen = seen.lock().unwrap();
     assert_eq!(seen[0], "/v1/tags/env:prod");
-    assert!(seen[1].starts_with("/v1/roles"), "{seen:?}");
+    // The lookup walks every role, a full page at a time.
+    assert_eq!(seen[1], "/v1/roles?pageSize=500");
 }
 
 #[test]
@@ -129,9 +130,9 @@ fn tags_get_json_keeps_the_api_key_order() {
 #[test]
 fn tags_list_reads_v2_and_prints_a_table() {
     let (url, seen) = serve(
-        r#"{"data":[{"name":"env:dev","description":"","priority":7,"hostCount":3},
-        {"name":"env:prod","description":"Production hosts","priority":9,
-        "hostCount":10,"firewallRulesCount":2}],
+        r#"{"data":[{"name":"env:prod","description":"Production hosts","priority":9,
+        "hostCount":10,"firewallRulesCount":2},
+        {"name":"env:dev","description":"","priority":7,"hostCount":3}],
         "metadata":{"hasNextPage":false}}"#,
     );
     let out = dn(&url, &["tag", "list"]);
@@ -143,11 +144,14 @@ fn tags_list_reads_v2_and_prints_a_table() {
         header,
         ["NAME", "RULES", "HOSTS", "DESCRIPTION", "PRIORITY"]
     );
-    // Highest priority first, whatever order the API sent.
+    // Rows keep the API's order.
     let row: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
     assert_eq!(row, ["env:prod", "2", "10", "Production", "hosts", "9"]);
     // No `firewallRulesCount` key means the tag has no rules.
     let row: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
     assert_eq!(row, ["env:dev", "0", "3", "7"]);
-    assert_eq!(seen.lock().unwrap()[0], "/v2/tags");
+    assert_eq!(
+        seen.lock().unwrap()[0],
+        "/v2/tags?sortDirection=desc&pageSize=500"
+    );
 }
