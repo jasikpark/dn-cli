@@ -30,6 +30,15 @@ pub fn print_list(
     Ok(())
 }
 
+/// The `data` object of a single-resource response such as `GET /v2/hosts/{id}`,
+/// failing when it is missing or not an object. `kind` names the resource in
+/// the error.
+pub fn data_object<'a>(res: &'a Value, kind: &str) -> anyhow::Result<&'a Value> {
+    res.get("data")
+        .filter(|d| d.is_object())
+        .ok_or_else(|| anyhow::anyhow!("unexpected response: missing {kind} data"))
+}
+
 /// A string field, empty when absent or not a string.
 pub fn str_field<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or_default()
@@ -104,6 +113,28 @@ pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     out
 }
 
+/// Render `label: value` lines with every value starting in the same column.
+/// Rows whose value is empty are left out, so callers pass optional fields
+/// unconditionally. Values are sanitized like table cells.
+pub fn render_details(rows: &[(&str, String)]) -> String {
+    let rows: Vec<(&str, String)> = rows
+        .iter()
+        .filter(|(_, v)| !v.trim().is_empty())
+        .map(|(label, v)| (*label, sanitize_for_display(v)))
+        .collect();
+    let width = rows
+        .iter()
+        .map(|(label, _)| display_width(label))
+        .max()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for (label, value) in rows {
+        let pad = width - display_width(label);
+        out.push_str(&format!("{label}:{}  {value}\n", " ".repeat(pad)));
+    }
+    out
+}
+
 /// Append one padded row (newline-terminated) to `out`. The last cell is
 /// emitted without trailing padding.
 fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
@@ -126,6 +157,40 @@ fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_details_aligns_values_and_skips_empty_rows() {
+        let rows = [
+            ("ID", "host-1".to_string()),
+            ("Role", String::new()),
+            ("IP addresses", "10.0.0.1".to_string()),
+            ("Tags", "  ".to_string()),
+        ];
+        assert_eq!(
+            render_details(&rows),
+            "ID:            host-1\nIP addresses:  10.0.0.1\n"
+        );
+    }
+
+    #[test]
+    fn render_details_sanitizes_values() {
+        let rows = [("Name", "evil\x1b[2Jname".to_string())];
+        assert_eq!(render_details(&rows), "Name:  evil [2Jname\n");
+    }
+
+    #[test]
+    fn data_object_rejects_missing_or_non_object_data() {
+        let ok = serde_json::json!({"data": {"id": "host-1"}});
+        assert_eq!(data_object(&ok, "host").unwrap()["id"], "host-1");
+        for bad in [
+            serde_json::json!({}),
+            serde_json::json!({"data": []}),
+            serde_json::json!({"data": null}),
+        ] {
+            let err = data_object(&bad, "host").unwrap_err().to_string();
+            assert_eq!(err, "unexpected response: missing host data");
+        }
+    }
 
     #[test]
     fn render_table_aligns_columns_no_trailing_space() {

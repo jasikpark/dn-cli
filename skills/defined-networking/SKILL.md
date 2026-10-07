@@ -109,6 +109,19 @@ Use this to answer questions like "what hosts do I have", "is <device> online"
 (check `metadata.lastSeenAt`), "which hosts need an update"
 (`metadata.updateAvailable`), or "which are lighthouses".
 
+### Show one host — `dn host get`
+
+```bash
+dn host get <HOST_ID> --json
+```
+
+Returns `{ "data": host, "metadata": {} }` with the same host fields as
+`host list`, plus `createdAt`, `modifiedAt`, `listenPort`,
+`endpointOIDCUserID`, and `configOverrides`. Use it when you already have the
+id and want one host's current state. Without `--json` it also looks up the
+role's name, which needs `roles:read`; a key without it shows the role id
+instead. Key permission: `hosts:read`.
+
 ### Search hosts — `dn host search`
 
 ```bash
@@ -321,6 +334,16 @@ Use it to find the id for `host create --network`, and to answer "how do my
 hosts find each other" or "do I have relays" — check these flags before
 concluding anything from the hosts list alone.
 
+### Show one network — `dn network get`
+
+```bash
+dn network get <NETWORK_ID> --json
+```
+
+Returns `{ "data": network, "metadata": {} }` with the same fields as
+`network list`, plus `signingCAID` and `createdAt`. Key permission:
+`networks:read`.
+
 ### Delete a network — `dn network delete`
 
 ```bash
@@ -340,7 +363,7 @@ One id per call.
 
 | operation | gate |
 |-----------|------|
-| `host list`, `host search`, `role list`, `role get`, `tag get`, `network list` | free — reads change nothing |
+| `host list`, `host get`, `host search`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get` | free — reads change nothing |
 | `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
 | `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
 | `host delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |

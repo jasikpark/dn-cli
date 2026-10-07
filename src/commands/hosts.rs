@@ -1,10 +1,12 @@
 mod create;
 mod delete;
 mod edit;
+mod get;
 
 pub use create::{hosts_create, validate_create_preflight};
 pub use delete::hosts_delete;
 pub use edit::{hosts_edit, validate_edit_preflight};
+pub use get::hosts_get;
 
 use anyhow::{anyhow, bail};
 use serde_json::Value;

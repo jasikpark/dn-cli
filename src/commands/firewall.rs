@@ -9,7 +9,7 @@ use crate::cli::{RoleDeleteArgs, RoleGetArgs, TagDeleteArgs, TagGetArgs};
 use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
 use crate::commands::hosts::validate_role_id;
 use crate::output::{
-    count_field, print_json, print_list, render_table, sanitize_for_display, str_field,
+    count_field, data_object, print_json, print_list, render_table, sanitize_for_display, str_field,
 };
 
 pub fn roles_list(client: &Client, json: bool) -> anyhow::Result<()> {
@@ -142,10 +142,7 @@ fn print_rule_holder(
     if json {
         return print_json(res);
     }
-    let data = res
-        .get("data")
-        .filter(|d| d.is_object())
-        .ok_or_else(|| anyhow!("unexpected response: missing {holder} data"))?;
+    let data = data_object(res, holder)?;
     print!("{}", render(data, &rule_role_names(client, data))?);
     Ok(())
 }

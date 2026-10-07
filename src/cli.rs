@@ -51,9 +51,18 @@ pub enum Command {
 pub enum NetworkCommand {
     /// List networks
     List,
+    /// Show one network: its address ranges, host count, and lighthouse
+    /// settings
+    Get(NetworkGetArgs),
     /// Delete a network. It must have no hosts left. Asks for confirmation
     /// unless --yes is passed.
     Delete(NetworkDeleteArgs),
+}
+
+#[derive(Args)]
+pub struct NetworkGetArgs {
+    /// Network id (network-…). Find ids with `dn network list`.
+    pub network_id: String,
 }
 
 #[derive(Args)]
@@ -180,6 +189,8 @@ pub struct AuthLoginArgs {
 pub enum HostCommand {
     /// List hosts
     List,
+    /// Show one host: its addresses, role, tags, and when it was last seen
+    Get(HostGetArgs),
     /// Search hosts by name, IP, role name, or tag (server-side, whole
     /// account). The query must be at least two characters.
     Search(HostSearchArgs),
@@ -284,6 +295,12 @@ pub struct HostEditArgs {
     /// Remove a tag (exact key:value match). Repeatable.
     #[arg(long, value_name = "TAG")]
     pub remove_tag: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct HostGetArgs {
+    /// Host id (host-…). Find ids with `dn host list` or `dn host search`.
+    pub host_id: String,
 }
 
 #[derive(Args)]
@@ -533,6 +550,20 @@ mod tests {
             cli.command,
             Command::Tag {
                 command: TagCommand::Get(_)
+            }
+        ));
+        let cli = Cli::try_parse_from(["dn", "hosts", "get", "host-1"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Host {
+                command: HostCommand::Get(_)
+            }
+        ));
+        let cli = Cli::try_parse_from(["dn", "networks", "get", "network-1"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Network {
+                command: NetworkCommand::Get(_)
             }
         ));
     }
