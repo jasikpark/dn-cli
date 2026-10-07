@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.2.14 (2026-10-07)
+
+### Features
+
+- add `dn host get` and `dn network get` (#105)
+
 ## 0.2.13 (2026-10-03)
 
 ### Features
