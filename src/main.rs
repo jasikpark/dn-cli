@@ -22,11 +22,11 @@ use crate::commands::{
     delete::{DELETE_NEEDS_YES, DeleteConfirmation, delete_confirmation},
     firewall::{roles_delete, roles_get, roles_list, tags_delete, tags_get, tags_list},
     hosts::{
-        hosts_create, hosts_delete, hosts_edit, hosts_list, hosts_search, parse_tag,
+        hosts_create, hosts_delete, hosts_edit, hosts_get, hosts_list, hosts_search, parse_tag,
         validate_create_preflight, validate_edit_preflight, validate_host_id, validate_role_id,
         validate_search_preflight,
     },
-    networks::{networks_delete, networks_list, validate_network_id},
+    networks::{networks_delete, networks_get, networks_list, validate_network_id},
 };
 use crate::config::{
     Config, Migration, migrate_to_profiles, normalize_op_ref, validate_op_ref,
@@ -75,6 +75,7 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
                 validate_host_id(&args.host_id)?;
                 preflight_delete(args.yes, cli.json)?;
             }
+            HostCommand::Get(args) => validate_host_id(&args.host_id)?,
             HostCommand::List => {}
         },
         Command::Role {
@@ -86,6 +87,9 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             validate_role_id(args.role_id.trim())?;
             preflight_delete(args.yes, cli.json)?;
         }
+        Command::Network {
+            command: NetworkCommand::Get(args),
+        } => validate_network_id(args.network_id.trim())?,
         Command::Network {
             command: NetworkCommand::Delete(args),
         } => {
@@ -153,6 +157,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             let client = api_client(cli)?;
             match command {
                 HostCommand::List => hosts_list(&client, cli.json)?,
+                HostCommand::Get(args) => hosts_get(&client, args, cli.json)?,
                 HostCommand::Search(args) => hosts_search(&client, args, cli.json)?,
                 HostCommand::Create(args) => hosts_create(&client, args, cli.json)?,
                 HostCommand::Edit(args) => hosts_edit(&client, args, cli.json)?,
@@ -161,6 +166,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Network { command } => match command {
             NetworkCommand::List => networks_list(&api_client(cli)?, cli.json)?,
+            NetworkCommand::Get(args) => networks_get(&api_client(cli)?, args, cli.json)?,
             NetworkCommand::Delete(args) => networks_delete(&api_client(cli)?, args, cli.json)?,
         },
         Command::Role { command } => match command {

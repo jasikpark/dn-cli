@@ -2,9 +2,12 @@ use anyhow::bail;
 use serde_json::Value;
 
 use crate::api::Client;
-use crate::cli::NetworkDeleteArgs;
+use crate::cli::{NetworkDeleteArgs, NetworkGetArgs};
 use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
-use crate::output::{count_field, joined_field, print_list, sanitize_for_display, str_field};
+use crate::output::{
+    count_field, data_object, joined_field, print_json, print_list, render_details,
+    sanitize_for_display, str_field,
+};
 
 pub fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
     let headers = [
@@ -23,8 +26,52 @@ pub fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
         json,
         "No networks found.",
         &headers,
-        |rows| rows.iter().map(network_row).collect(),
+        |rows| rows.iter().map(|r| network_row(r).to_vec()).collect(),
     )
+}
+
+pub fn networks_get(client: &Client, args: &NetworkGetArgs, json: bool) -> anyhow::Result<()> {
+    let id = args.network_id.trim();
+    validate_network_id(id)?;
+    let res = client.get_network(id)?;
+    if json {
+        return print_json(&res);
+    }
+    print!("{}", render_network(data_object(&res, "network")?));
+    Ok(())
+}
+
+/// The human view of a v2 network: its name, then the `network list` columns
+/// as aligned `label: value` lines, plus the signing CA and creation time.
+fn render_network(data: &Value) -> String {
+    let [
+        id,
+        name,
+        cidrs,
+        hosts,
+        managed,
+        lh_relays,
+        curve,
+        cert,
+        description,
+    ] = network_row(data);
+    let mut out = match sanitize_for_display(&name).trim() {
+        "" => format!("{}\n", sanitize_for_display(&id)),
+        shown => format!("{shown}\n"),
+    };
+    out.push_str(&render_details(&[
+        ("Description", description),
+        ("ID", id),
+        ("CIDRs", cidrs),
+        ("Hosts", hosts),
+        ("Managed lighthouses", managed),
+        ("Lighthouses as relays", lh_relays),
+        ("Curve", curve),
+        ("Cert version", cert),
+        ("Signing CA", str_field(data, "signingCAID").to_string()),
+        ("Created", str_field(data, "createdAt").to_string()),
+    ]));
+    out
 }
 
 /// Delete one network. The API refuses while it still has hosts, so the
@@ -80,7 +127,7 @@ pub fn validate_network_id(id: &str) -> anyhow::Result<()> {
 /// `host list`, so this table is where that setting is visible; the API
 /// stores it inverted (`disableManagedLighthouses`) and the column reports it
 /// the way the admin panel does — whether managed lighthouses are on.
-fn network_row(row: &Value) -> Vec<String> {
+fn network_row(row: &Value) -> [String; 9] {
     let yes_no = |key, invert: bool| {
         row.get(key)
             .and_then(Value::as_bool)
@@ -92,7 +139,7 @@ fn network_row(row: &Value) -> Vec<String> {
         .and_then(Value::as_u64)
         .map(|v| format!("v{v}"))
         .unwrap_or_default();
-    vec![
+    [
         str_field(row, "id").to_string(),
         str_field(row, "name").to_string(),
         joined_field(row, "cidrs"),
@@ -146,6 +193,49 @@ mod tests {
                 "main site",
             ]
         );
+    }
+
+    #[test]
+    fn render_network_shows_every_field() {
+        let data = json!({
+            "id": "network-EXAMPLE",
+            "signingCAID": "ca-EXAMPLE",
+            "name": "office",
+            "description": "main site",
+            "cidrs": ["100.100.0.0/22", "fd00:c0:c0::/80"],
+            "certVersion": 2,
+            "hostCount": 12,
+            "lighthousesAsRelays": false,
+            "disableManagedLighthouses": false,
+            "curve": "25519",
+            "createdAt": "2023-02-14T20:34:59Z"
+        });
+        assert_eq!(
+            render_network(&data),
+            "office\n\
+             Description:            main site\n\
+             ID:                     network-EXAMPLE\n\
+             CIDRs:                  100.100.0.0/22, fd00:c0:c0::/80\n\
+             Hosts:                  12\n\
+             Managed lighthouses:    yes\n\
+             Lighthouses as relays:  no\n\
+             Curve:                  25519\n\
+             Cert version:           v2\n\
+             Signing CA:             ca-EXAMPLE\n\
+             Created:                2023-02-14T20:34:59Z\n"
+        );
+    }
+
+    #[test]
+    fn render_network_sanitizes_an_id_used_as_the_title() {
+        let out = render_network(&json!({"id": "network-\u{1b}[31m"}));
+        assert!(out.starts_with("network- [31m\n"), "{out:?}");
+    }
+
+    #[test]
+    fn render_network_titles_a_nameless_network_by_id() {
+        let out = render_network(&json!({"id": "network-EXAMPLE", "hostCount": 0}));
+        assert_eq!(out, "network-EXAMPLE\nID:     network-EXAMPLE\nHosts:  0\n");
     }
 
     #[test]
