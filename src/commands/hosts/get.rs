@@ -46,7 +46,7 @@ fn render_host(data: &Value, role_name: Option<&str>) -> String {
     let name = sanitize_for_display(str_field(data, "name"));
     let mut out = match name.trim() {
         "" => format!("{}\n", sanitize_for_display(id)),
-        _ => format!("{name}\n"),
+        shown => format!("{shown}\n"),
     };
 
     let flag = |key| data[key].as_bool().unwrap_or(false);
@@ -186,8 +186,9 @@ mod tests {
 
     #[test]
     fn render_host_falls_back_to_the_role_id() {
-        let data = json!({"id": "host-1", "name": "web", "roleID": "role-1"});
+        let data = json!({"id": "host-1", "name": "  web  ", "roleID": "role-1"});
         let out = render_host(&data, None);
+        assert!(out.starts_with("web\n"), "{out:?}");
         assert!(out.contains("Role:  role-1\n"), "{out}");
         // No metadata object at all says nothing about when it was seen.
         assert!(!out.contains("Last seen"), "{out}");
