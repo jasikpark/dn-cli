@@ -1,6 +1,6 @@
 ---
 name: defined-networking
-description: View and manage a Defined Networking (Nebula mesh VPN) network with the `dn` CLI. Use when the user asks about their Defined Networking or Nebula hosts, lighthouses, relays, network, or roles/tags — e.g. "list my hosts", "what's on my mesh network", "is my laptop online" — or wants to add/set up/enroll a new device on their network, remove one from it, or delete a role, tag, or network.
+description: View and manage a Defined Networking (Nebula mesh VPN) network with the `dn` CLI. Use when the user asks about their Defined Networking or Nebula hosts, lighthouses, relays, network, or roles/tags — e.g. "list my hosts", "what's on my mesh network", "is my laptop online" — or wants to add/set up/enroll a new device on their network, remove one from it, delete a role, tag, or network, or find out who changed something and when (the audit log).
 ---
 
 # Defined Networking (`dn`) CLI
@@ -82,6 +82,22 @@ failed; branch on `errors[].code`:
   missing argument. Check `dn <command> --help`: the installed `dn` may be
   older than this skill.
 
+### Pagination
+
+Every `list` and `host search` returns **one page**: up to 500 items by
+default (`--limit 1..500`, alias `--page-size`). `metadata.hasNextPage` / `hasPrevPage` say
+whether more exist, and `metadata.nextCursor` / `prevCursor` fetch them:
+rerun the same command, same filters, with `--cursor=<nextCursor>` (a later
+`--cursor` replaces an earlier one). Without `--json`, stderr prints the
+full command for each neighbouring page, ready to run. Check `hasNextPage` before concluding something doesn't exist — a
+501st host is on page two.
+
+A cursor carries the position, not the filters: repeat every argument
+(`--target`, the search query) or the next call pages through the unfiltered
+list. A cursor the API doesn't recognize — cut short, or from another
+command — returns the **first** page, not an error; after following a
+`nextCursor`, `hasPrevPage: false` means that happened.
+
 ## Commands
 
 ### List hosts — `dn host list`
@@ -90,8 +106,8 @@ failed; branch on `errors[].code`:
 dn host list --json
 ```
 
-Returns `{ "data": [ host… ], "metadata": { … } }`, following cursor pagination
-to completion (one merged result). Each host includes:
+Returns one page of `{ "data": [ host… ], "metadata": { … } }` (see
+Pagination). Each host includes:
 
 | field | meaning |
 |-------|---------|
@@ -357,11 +373,36 @@ confirmation.
 **You MUST confirm with the user before running this**, naming the network.
 One id per call.
 
+### Read the audit log — `dn audit-log list`
+
+```bash
+dn audit-log list --json                                 # 500 most recent entries
+dn audit-log list --target <ID> --json                   # one resource's history
+dn audit-log list --target-type host --limit 50 --json   # one kind of resource
+```
+
+Returns one page of `{ "data": [ entry… ], "metadata": { … } }`, newest
+first; `--cursor=<nextCursor>` goes further back. Each entry has
+`timestamp`, `event.type` (`CREATED`, `UPDATED`, `DELETED`, `ENROLLED`, `RENEWED`, `BLOCKED_HOST`, …), `target`
+(`{type, id}` — the resource acted on), `actor` (who did it: a `user`, an
+SSO `oidcUser`, or an `endpointOIDCUser` — someone who enrolled a device by
+signing in — with an `email`, an `apiKey` or `host` with an `id` and
+`name`, or `support` / `system`), and `event.before` / `event.after`, the
+resource's state either side of the change (shape varies by target; `null`
+on a create or delete). Key permission: `audit-logs:list`.
+
+Use it to answer "who deleted that host", "when did this role's rules
+change", or "what has this API key done". Start with `--target` when the
+question names a resource, so its history isn't spread across pages.
+`ENROLLED` and `RENEWED` entries carry a host's whole config and CA
+certificates (about 10 KB each), so a smaller `--limit` keeps output
+manageable.
+
 ## Safety
 
 | operation | gate |
 |-----------|------|
-| `host list`, `host get`, `host search`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get` | free — reads change nothing |
+| `host list`, `host get`, `host search`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get`, `audit-log list` | free — reads change nothing |
 | `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
 | `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
 | `host delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |

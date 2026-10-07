@@ -22,7 +22,7 @@ pub fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyho
         }
         Some(id) => (id.clone(), None),
         None => {
-            let networks = client.list_networks()?;
+            let networks = client.all_networks()?;
             let network = pick_network(&networks)?;
             let id = network["id"]
                 .as_str()

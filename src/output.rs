@@ -1,6 +1,8 @@
 use serde_json::Value;
 use unicode_width::UnicodeWidthChar;
 
+use crate::api::next_cursor;
+
 pub fn print_json(value: &Value) -> anyhow::Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
@@ -22,12 +24,67 @@ pub fn print_list(
         .get("data")
         .and_then(Value::as_array)
         .map_or(&[][..], Vec::as_slice);
-    if data.is_empty() {
-        println!("{empty}");
-    } else {
+    let args: Vec<String> = std::env::args_os()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let hints = page_hints(res.get("metadata").unwrap_or(&Value::Null), &args);
+    if !data.is_empty() {
         print!("{}", render_table(headers, &rows(data)));
+    } else if hints.is_empty() {
+        println!("{empty}");
+    }
+    for line in hints {
+        eprintln!("{line}");
     }
     Ok(())
+}
+
+/// The command that fetches each neighbouring page, one line each, for
+/// stderr: the table on stdout stays clean to pipe. `args` is this call's
+/// command line, program name first. `--json` carries the same cursors in
+/// `metadata`.
+fn page_hints(metadata: &Value, args: &[String]) -> Vec<String> {
+    let mut hints = Vec::new();
+    if let Some(c) = next_cursor(Some(metadata)) {
+        hints.push(format!("next page: {}", rerun_with_cursor(args, &c)));
+    }
+    let prev = str_field(metadata, "prevCursor");
+    if metadata["hasPrevPage"] == true && !prev.is_empty() {
+        hints.push(format!("previous page: {}", rerun_with_cursor(args, prev)));
+    }
+    hints
+}
+
+/// The command line `args` with any `--cursor` replaced by `cursor`, quoted
+/// for a POSIX shell so the line pastes as-is. The program name is kept as
+/// invoked, so a `cargo run` build hints at itself rather than an installed
+/// `dn`.
+fn rerun_with_cursor(args: &[String], cursor: &str) -> String {
+    let (program, args) = args
+        .split_first()
+        .map_or(("dn", &[][..]), |(p, a)| (p.as_str(), a));
+    let mut words = vec![shell_quote(program)];
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--cursor" {
+            args.next();
+        } else if !arg.starts_with("--cursor=") {
+            words.push(shell_quote(arg));
+        }
+    }
+    words.push(format!("--cursor={}", shell_quote(cursor)));
+    sanitize_for_display(&words.join(" "))
+}
+
+/// `s` as one shell word: bare when every character is inert, otherwise
+/// single-quoted. A leading `=` is quoted because zsh expands `=cmd` to a path.
+fn shell_quote(s: &str) -> String {
+    let inert = |c: char| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c);
+    if !s.is_empty() && !s.starts_with('=') && s.chars().all(inert) {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
 }
 
 /// The `data` object of a single-resource response such as `GET /v2/hosts/{id}`,
@@ -156,7 +213,83 @@ fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
+    #[test]
+    fn page_hints_name_each_neighbouring_page() {
+        let args = ["dn", "role", "list"].map(String::from);
+        let both = json!({"hasNextPage": true, "nextCursor": "n1",
+                          "hasPrevPage": true, "prevCursor": "p1"});
+        assert_eq!(
+            page_hints(&both, &args),
+            [
+                "next page: dn role list --cursor=n1",
+                "previous page: dn role list --cursor=p1"
+            ]
+        );
+        let last = json!({"hasNextPage": false, "nextCursor": "",
+                          "hasPrevPage": true, "prevCursor": "p1"});
+        assert_eq!(
+            page_hints(&last, &args),
+            ["previous page: dn role list --cursor=p1"]
+        );
+        let flagged_but_empty = json!({"hasNextPage": true, "nextCursor": ""});
+        assert!(page_hints(&flagged_but_empty, &args).is_empty());
+        assert!(page_hints(&Value::Null, &args).is_empty());
+        // The same fallback field the internal page walk accepts.
+        let legacy = json!({"hasNextPage": true, "cursor": "c1"});
+        assert_eq!(
+            page_hints(&legacy, &args),
+            ["next page: dn role list --cursor=c1"]
+        );
+    }
+
+    #[test]
+    fn rerun_with_cursor_replaces_every_earlier_cursor() {
+        let args: Vec<String> = [
+            "dn",
+            "--profile",
+            "work",
+            "audit-log",
+            "list",
+            "--cursor",
+            "a",
+            "--target-type",
+            "host",
+            "--cursor=-b",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            rerun_with_cursor(&args, "-c"),
+            "dn --profile work audit-log list --target-type host --cursor=-c"
+        );
+    }
+
+    #[test]
+    fn rerun_with_cursor_falls_back_to_dn_without_a_program_name() {
+        assert_eq!(rerun_with_cursor(&[], "c"), "dn --cursor=c");
+    }
+
+    #[test]
+    fn rerun_with_cursor_quotes_what_a_shell_would_split_or_expand() {
+        let args: Vec<String> = [
+            "/tmp/my bin/dn",
+            "host",
+            "search",
+            "it's a $HOME",
+            "=ls",
+            "",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            rerun_with_cursor(&args, "x y\nz"),
+            r#"'/tmp/my bin/dn' host search 'it'\''s a $HOME' '=ls' '' --cursor='x y z'"#
+        );
+    }
 
     #[test]
     fn render_details_aligns_values_and_skips_empty_rows() {

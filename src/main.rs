@@ -14,8 +14,12 @@ use anyhow::bail;
 use clap::Parser;
 
 use crate::api::Client;
-use crate::cli::{AuthCommand, Cli, Command, HostCommand, NetworkCommand, RoleCommand, TagCommand};
+use crate::cli::{
+    AuditLogCommand, AuthCommand, Cli, Command, HostCommand, NetworkCommand, RoleCommand,
+    TagCommand,
+};
 use crate::commands::{
+    audit_log::audit_log_list,
     auth::{
         KEY_STDIN_NEEDS_PIPE, LOGIN_NEEDS_KEY, auth_list, auth_login, auth_logout, auth_status,
         auth_switch, validate_api_url,
@@ -77,7 +81,7 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
                 preflight_delete(args.yes, cli.json)?;
             }
             HostCommand::Get(args) => validate_id("host", &args.host_id)?,
-            HostCommand::List => {}
+            HostCommand::List(_) => {}
         },
         Command::Role {
             command: RoleCommand::Get(args),
@@ -157,7 +161,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Host { command } => {
             let client = api_client(cli)?;
             match command {
-                HostCommand::List => hosts_list(&client, cli.json)?,
+                HostCommand::List(page) => hosts_list(&client, page, cli.json)?,
                 HostCommand::Get(args) => hosts_get(&client, args, cli.json)?,
                 HostCommand::Search(args) => hosts_search(&client, args, cli.json)?,
                 HostCommand::Create(args) => hosts_create(&client, args, cli.json)?,
@@ -166,19 +170,22 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
         }
         Command::Network { command } => match command {
-            NetworkCommand::List => networks_list(&api_client(cli)?, cli.json)?,
+            NetworkCommand::List(page) => networks_list(&api_client(cli)?, page, cli.json)?,
             NetworkCommand::Get(args) => networks_get(&api_client(cli)?, args, cli.json)?,
             NetworkCommand::Delete(args) => networks_delete(&api_client(cli)?, args, cli.json)?,
         },
         Command::Role { command } => match command {
-            RoleCommand::List => roles_list(&api_client(cli)?, cli.json)?,
+            RoleCommand::List(page) => roles_list(&api_client(cli)?, page, cli.json)?,
             RoleCommand::Get(args) => roles_get(&api_client(cli)?, args, cli.json)?,
             RoleCommand::Delete(args) => roles_delete(&api_client(cli)?, args, cli.json)?,
         },
         Command::Tag { command } => match command {
-            TagCommand::List => tags_list(&api_client(cli)?, cli.json)?,
+            TagCommand::List(page) => tags_list(&api_client(cli)?, page, cli.json)?,
             TagCommand::Get(args) => tags_get(&api_client(cli)?, args, cli.json)?,
             TagCommand::Delete(args) => tags_delete(&api_client(cli)?, args, cli.json)?,
+        },
+        Command::AuditLog { command } => match command {
+            AuditLogCommand::List(args) => audit_log_list(&api_client(cli)?, args, cli.json)?,
         },
     }
 

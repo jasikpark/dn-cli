@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::api::Client;
-use crate::cli::{NetworkDeleteArgs, NetworkGetArgs};
+use crate::cli::{NetworkDeleteArgs, NetworkGetArgs, PageArgs};
 use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
 use crate::ids::validate_id;
 use crate::output::{
@@ -9,7 +9,7 @@ use crate::output::{
     sanitize_for_display, str_field,
 };
 
-pub fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
+pub fn networks_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Result<()> {
     let headers = [
         "ID",
         "NAME",
@@ -22,7 +22,7 @@ pub fn networks_list(client: &Client, json: bool) -> anyhow::Result<()> {
         "DESCRIPTION",
     ];
     print_list(
-        &client.list_networks()?,
+        &client.list_networks(page)?,
         json,
         "No networks found.",
         &headers,

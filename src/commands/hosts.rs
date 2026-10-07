@@ -12,11 +12,11 @@ use anyhow::{anyhow, bail};
 use serde_json::Value;
 
 use crate::api::Client;
-use crate::cli::HostSearchArgs;
+use crate::cli::{HostSearchArgs, PageArgs};
 use crate::output::{joined_field, print_list, sanitize_for_display, str_field};
 
-pub fn hosts_list(client: &Client, json: bool) -> anyhow::Result<()> {
-    let res = client.list_hosts()?;
+pub fn hosts_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Result<()> {
+    let res = client.list_hosts(page)?;
     render_hosts(&res, json, "No hosts found.")
 }
 
@@ -41,7 +41,7 @@ pub fn validate_search_preflight(args: &HostSearchArgs) -> anyhow::Result<()> {
 
 pub fn hosts_search(client: &Client, args: &HostSearchArgs, json: bool) -> anyhow::Result<()> {
     let query = search_query(args);
-    let res = client.search_hosts(&query)?;
+    let res = client.search_hosts(&query, &args.page)?;
     render_hosts(
         &res,
         json,
@@ -159,6 +159,7 @@ mod tests {
     fn search_args(query: &[&str]) -> HostSearchArgs {
         HostSearchArgs {
             query: query.iter().map(|s| (*s).to_string()).collect(),
+            page: PageArgs::default(),
         }
     }
 
