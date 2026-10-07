@@ -1,15 +1,16 @@
 use anyhow::{anyhow, bail};
 use serde_json::{Value, json};
 
-use super::{host_fields, parse_tag, validate_host_id, validate_role_id};
+use super::{host_fields, parse_tag};
 use crate::api::Client;
 use crate::cli::HostEditArgs;
+use crate::ids::validate_id;
 use crate::output::{print_json, sanitize_for_display, str_field};
 
 /// Catch user errors (empty flags, bad tag format) before credentials are
 /// resolved, matching `validate_create_preflight`'s contract.
 pub fn validate_edit_preflight(args: &HostEditArgs) -> anyhow::Result<()> {
-    validate_host_id(&args.host_id)?;
+    validate_id("host", &args.host_id)?;
     if args.name.is_none()
         && args.role.is_none()
         && !args.clear_role
@@ -24,7 +25,7 @@ pub fn validate_edit_preflight(args: &HostEditArgs) -> anyhow::Result<()> {
         bail!("--name must not be empty");
     }
     if let Some(r) = &args.role {
-        validate_role_id(r.trim()).map_err(|e| anyhow!("--role: {e}"))?;
+        validate_id("role", r.trim()).map_err(|e| anyhow!("--role: {e}"))?;
     }
     for raw in &args.add_tag {
         parse_tag(raw.trim())?;

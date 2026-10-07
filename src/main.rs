@@ -3,6 +3,7 @@ mod cli;
 mod commands;
 mod config;
 mod error;
+mod ids;
 mod keystore;
 mod output;
 
@@ -23,16 +24,16 @@ use crate::commands::{
     firewall::{roles_delete, roles_get, roles_list, tags_delete, tags_get, tags_list},
     hosts::{
         hosts_create, hosts_delete, hosts_edit, hosts_get, hosts_list, hosts_search, parse_tag,
-        validate_create_preflight, validate_edit_preflight, validate_host_id, validate_role_id,
-        validate_search_preflight,
+        validate_create_preflight, validate_edit_preflight, validate_search_preflight,
     },
-    networks::{networks_delete, networks_get, networks_list, validate_network_id},
+    networks::{networks_delete, networks_get, networks_list},
 };
 use crate::config::{
     Config, Migration, migrate_to_profiles, normalize_op_ref, validate_op_ref,
     validate_profile_name,
 };
 use crate::error::{InvalidArgument, json_requested, report_error, report_usage_error};
+use crate::ids::validate_id;
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
@@ -72,28 +73,28 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             HostCommand::Edit(args) => validate_edit_preflight(args)?,
             HostCommand::Search(args) => validate_search_preflight(args)?,
             HostCommand::Delete(args) => {
-                validate_host_id(&args.host_id)?;
+                validate_id("host", &args.host_id)?;
                 preflight_delete(args.yes, cli.json)?;
             }
-            HostCommand::Get(args) => validate_host_id(&args.host_id)?,
+            HostCommand::Get(args) => validate_id("host", &args.host_id)?,
             HostCommand::List => {}
         },
         Command::Role {
             command: RoleCommand::Get(args),
-        } => validate_role_id(args.role_id.trim())?,
+        } => validate_id("role", args.role_id.trim())?,
         Command::Role {
             command: RoleCommand::Delete(args),
         } => {
-            validate_role_id(args.role_id.trim())?;
+            validate_id("role", args.role_id.trim())?;
             preflight_delete(args.yes, cli.json)?;
         }
         Command::Network {
             command: NetworkCommand::Get(args),
-        } => validate_network_id(args.network_id.trim())?,
+        } => validate_id("network", args.network_id.trim())?,
         Command::Network {
             command: NetworkCommand::Delete(args),
         } => {
-            validate_network_id(args.network_id.trim())?;
+            validate_id("network", args.network_id.trim())?;
             preflight_delete(args.yes, cli.json)?;
         }
         Command::Tag {
