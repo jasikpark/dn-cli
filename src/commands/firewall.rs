@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::api::Client;
 use crate::cli::{RoleDeleteArgs, RoleGetArgs, TagDeleteArgs, TagGetArgs};
 use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
-use crate::commands::hosts::validate_role_id;
+use crate::ids::validate_id;
 use crate::output::{
     count_field, data_object, print_json, print_list, render_table, sanitize_for_display, str_field,
 };
@@ -65,7 +65,7 @@ pub fn tags_list(client: &Client, json: bool) -> anyhow::Result<()> {
 
 pub fn roles_get(client: &Client, args: &RoleGetArgs, json: bool) -> anyhow::Result<()> {
     let id = args.role_id.trim();
-    validate_role_id(id)?;
+    validate_id("role", id)?;
     print_rule_holder(client, &client.get_role(id)?, json, "role", render_role)
 }
 
@@ -84,7 +84,7 @@ pub fn tags_get(client: &Client, args: &TagGetArgs, json: bool) -> anyhow::Resul
 /// assigned to.
 pub fn roles_delete(client: &Client, args: &RoleDeleteArgs, json: bool) -> anyhow::Result<()> {
     let id = args.role_id.trim();
-    validate_role_id(id)?;
+    validate_id("role", id)?;
     let target = DeleteTarget {
         kind: "role",
         id,

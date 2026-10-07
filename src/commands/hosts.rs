@@ -68,39 +68,6 @@ fn render_hosts(res: &Value, json: bool, empty_msg: &str) -> anyhow::Result<()> 
     )
 }
 
-/// Reject host ids that are empty or contain anything but ASCII letters,
-/// digits, `-` and `_` (ids look like `host-ABC123`), so a typo or a `.`/`..`
-/// segment a proxy might normalize can't become a different request path.
-pub fn validate_host_id(id: &str) -> anyhow::Result<()> {
-    if id.is_empty() {
-        bail!("host id must not be empty");
-    }
-    if let Some(c) = id
-        .chars()
-        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_')))
-    {
-        bail!("host id contains invalid character {c:?}");
-    }
-    Ok(())
-}
-
-/// Reject role IDs that are empty or contain anything but ASCII letters,
-/// digits, `-` and `_` (ids look like `role-ABC123`). The API is the
-/// authority on whether the id exists; this only keeps a typo from turning
-/// into a malformed request path or body.
-pub fn validate_role_id(id: &str) -> anyhow::Result<()> {
-    if id.is_empty() {
-        bail!("role id must not be empty");
-    }
-    if let Some(c) = id
-        .chars()
-        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_')))
-    {
-        bail!("role id contains invalid character {c:?}");
-    }
-    Ok(())
-}
-
 /// Parse and validate a `key:value` tag, matching the server's rules:
 /// exactly one colon, key 1–20 chars, value 1–50 chars, no
 /// leading/trailing whitespace on either part.
@@ -261,20 +228,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_host_id_rejects_url_structural_chars() {
-        assert!(validate_host_id("host-ABC123").is_ok());
-        assert!(validate_host_id("host_A-1").is_ok());
-        assert!(validate_host_id(".").is_err());
-        assert!(validate_host_id("..").is_err());
-        assert!(validate_host_id("host-1%2F..").is_err());
-        assert!(validate_host_id(" host-1").is_err());
-        assert!(validate_host_id("host-1?admin=true").is_err());
-        assert!(validate_host_id("host-1#frag").is_err());
-        assert!(validate_host_id("host-1/../../etc").is_err());
-        assert!(validate_host_id("").is_err());
-    }
-
-    #[test]
     fn parse_tag_rejects_long_key() {
         let long_key = "k".repeat(21);
         assert!(parse_tag(&format!("{long_key}:v")).is_err());
@@ -294,21 +247,6 @@ mod tests {
     fn parse_tag_rejects_whitespace_padding() {
         assert!(parse_tag(" key :value").is_err());
         assert!(parse_tag("key: value ").is_err());
-    }
-
-    #[test]
-    fn validate_role_id_allows_only_id_characters() {
-        assert!(validate_role_id("role-ABC_123").is_ok());
-        for bad in [
-            "",
-            "role abc",
-            "role/abc",
-            "role%2F",
-            "role-\u{202e}x",
-            "rôle",
-        ] {
-            assert!(validate_role_id(bad).is_err(), "{bad:?}");
-        }
     }
 
     #[test]
