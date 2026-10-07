@@ -1,5 +1,5 @@
 # Release automation. On every push to main, if there are unreleased
-# conventional commits, Knope opens (or updates) a "chore: prepare release X"
+# changesets, Knope opens (or updates) a "chore: prepare release X"
 # PR that bumps Cargo.toml + writes CHANGELOG.md. Merging that PR runs
 # tag-release.yml, which pushes vX -- cargo-dist's release.yml then fires on
 # the tag push and handles the build + npm publish + GitHub Release.
@@ -63,3 +63,9 @@ allow_empty = true
 # squash merges keep only the PR title, which drops commit bodies and footers.
 [changes]
 ignore_conventional_commits = true
+
+# Knope Bot requires a changeset on every PR except those carrying one of these
+# labels. renovate.json applies "renovate" to dependency updates, which ship
+# with the next release without a note of their own.
+[bot.checks]
+skip_labels = ["renovate"]
