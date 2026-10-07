@@ -58,3 +58,8 @@ name = "check-release"
 [[workflows.steps]]
 type = "PrepareRelease"
 allow_empty = true
+
+# Release notes come only from .changeset/*.md files, not commit messages:
+# squash merges keep only the PR title, which drops commit bodies and footers.
+[changes]
+ignore_conventional_commits = true
