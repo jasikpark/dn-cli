@@ -41,9 +41,8 @@ pub fn networks_get(client: &Client, args: &NetworkGetArgs, json: bool) -> anyho
     Ok(())
 }
 
-/// The human view of a v2 network: its name and description, then the
-/// `network list` columns as aligned `label: value` lines, plus the signing
-/// CA and creation time.
+/// The human view of a v2 network: its name, then the `network list` columns
+/// as aligned `label: value` lines, plus the signing CA and creation time.
 fn render_network(data: &Value) -> String {
     let [
         id,
@@ -57,14 +56,11 @@ fn render_network(data: &Value) -> String {
         description,
     ] = network_row(data);
     let mut out = match sanitize_for_display(&name).trim() {
-        "" => format!("{id}\n"),
+        "" => format!("{}\n", sanitize_for_display(&id)),
         shown => format!("{shown}\n"),
     };
-    let description = sanitize_for_display(&description);
-    if !description.trim().is_empty() {
-        out.push_str(&format!("{description}\n"));
-    }
     out.push_str(&render_details(&[
+        ("Description", description),
         ("ID", id),
         ("CIDRs", cidrs),
         ("Hosts", hosts),
@@ -217,7 +213,7 @@ mod tests {
         assert_eq!(
             render_network(&data),
             "office\n\
-             main site\n\
+             Description:            main site\n\
              ID:                     network-EXAMPLE\n\
              CIDRs:                  100.100.0.0/22, fd00:c0:c0::/80\n\
              Hosts:                  12\n\
@@ -228,6 +224,12 @@ mod tests {
              Signing CA:             ca-EXAMPLE\n\
              Created:                2023-02-14T20:34:59Z\n"
         );
+    }
+
+    #[test]
+    fn render_network_sanitizes_an_id_used_as_the_title() {
+        let out = render_network(&json!({"id": "network-\u{1b}[31m"}));
+        assert!(out.starts_with("network- [31m\n"), "{out:?}");
     }
 
     #[test]

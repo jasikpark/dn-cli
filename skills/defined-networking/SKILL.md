@@ -115,10 +115,9 @@ Use this to answer questions like "what hosts do I have", "is <device> online"
 dn host get <HOST_ID> --json
 ```
 
-Returns `{ "data": host, "metadata": {} }` with the same host fields as
-`host list`, plus `createdAt`, `modifiedAt`, `listenPort`,
-`endpointOIDCUserID`, and `configOverrides`. Use it when you already have the
-id and want one host's current state. Without `--json` it also looks up the
+Returns `{ "data": host, "metadata": {} }`: one host with the same fields as a
+`host list` entry. Use it when you already have the id; for fields across many
+hosts, one `host list` beats a `host get` per host. Without `--json` it also looks up the
 role's name, which needs `roles:read`; a key without it shows the role id
 instead. Key permission: `hosts:read`.
 
@@ -340,9 +339,8 @@ concluding anything from the hosts list alone.
 dn network get <NETWORK_ID> --json
 ```
 
-Returns `{ "data": network, "metadata": {} }` with the same fields as
-`network list`, plus `signingCAID` and `createdAt`. Key permission:
-`networks:read`.
+Returns `{ "data": network, "metadata": {} }`: one network with the same
+fields as a `network list` entry. Key permission: `networks:read`.
 
 ### Delete a network — `dn network delete`
 

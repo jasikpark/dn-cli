@@ -166,6 +166,8 @@ fn gets_reject_malformed_ids_before_any_request() {
     for args in [
         ["host", "get", "host-1/../roles"],
         ["host", "get", ""],
+        ["host", "get", ".."],
+        ["host", "get", "host-1%2F.."],
         ["network", "get", "network-1?x"],
     ] {
         let (url, seen) = serve(HOST, ROLE_OK);
@@ -173,4 +175,16 @@ fn gets_reject_malformed_ids_before_any_request() {
         assert!(!out.status.success(), "{args:?}: {out:?}");
         assert!(seen.lock().unwrap().is_empty(), "{args:?}");
     }
+}
+
+#[test]
+fn hosts_get_skips_the_role_lookup_for_a_malformed_role_id() {
+    const BAD_ROLE: &str = r#"{"data":{"id":"host-EXAMPLE","name":"web-1",
+        "roleID":"role-1/../../v2/hosts"},"metadata":{}}"#;
+    let (url, seen) = serve(BAD_ROLE, ROLE_OK);
+    let out = dn(&url, &["host", "get", "host-EXAMPLE"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(*seen.lock().unwrap(), ["/v2/hosts/host-EXAMPLE"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("role-1/../../v2/hosts"), "{stdout}");
 }

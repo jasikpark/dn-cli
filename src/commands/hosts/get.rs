@@ -45,7 +45,7 @@ fn render_host(data: &Value, role_name: Option<&str>) -> String {
     let id = str_field(data, "id");
     let name = sanitize_for_display(str_field(data, "name"));
     let mut out = match name.trim() {
-        "" => format!("{id}\n"),
+        "" => format!("{}\n", sanitize_for_display(id)),
         _ => format!("{name}\n"),
     };
 
@@ -175,6 +175,13 @@ mod tests {
         assert!(out.contains("Config overrides:  1\n"), "{out}");
         assert!(out.contains("Last seen:         never\n"), "{out}");
         assert!(!out.contains("Client:"), "{out}");
+    }
+
+    #[test]
+    fn render_host_sanitizes_an_id_used_as_the_title() {
+        let out = render_host(&json!({"id": "host-\u{1b}]0;x\u{7}", "name": ""}), None);
+        assert!(out.starts_with("host- ]0;x \n"), "{out:?}");
+        assert!(!out.contains('\u{1b}'), "{out:?}");
     }
 
     #[test]

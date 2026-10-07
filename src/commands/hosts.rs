@@ -68,13 +68,18 @@ fn render_hosts(res: &Value, json: bool, empty_msg: &str) -> anyhow::Result<()> 
     )
 }
 
-/// Reject host IDs that contain URL-structural characters.
+/// Reject host ids that are empty or contain anything but ASCII letters,
+/// digits, `-` and `_` (ids look like `host-ABC123`), so a typo or a `.`/`..`
+/// segment a proxy might normalize can't become a different request path.
 pub fn validate_host_id(id: &str) -> anyhow::Result<()> {
     if id.is_empty() {
         bail!("host id must not be empty");
     }
-    if let Some(c) = id.chars().find(|c| matches!(c, '?' | '#' | '/' | '\\')) {
-        bail!("host id contains invalid character '{c}'");
+    if let Some(c) = id
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_')))
+    {
+        bail!("host id contains invalid character {c:?}");
     }
     Ok(())
 }
@@ -258,6 +263,11 @@ mod tests {
     #[test]
     fn validate_host_id_rejects_url_structural_chars() {
         assert!(validate_host_id("host-ABC123").is_ok());
+        assert!(validate_host_id("host_A-1").is_ok());
+        assert!(validate_host_id(".").is_err());
+        assert!(validate_host_id("..").is_err());
+        assert!(validate_host_id("host-1%2F..").is_err());
+        assert!(validate_host_id(" host-1").is_err());
         assert!(validate_host_id("host-1?admin=true").is_err());
         assert!(validate_host_id("host-1#frag").is_err());
         assert!(validate_host_id("host-1/../../etc").is_err());

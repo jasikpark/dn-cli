@@ -119,8 +119,8 @@ pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
 pub fn render_details(rows: &[(&str, String)]) -> String {
     let rows: Vec<(&str, String)> = rows
         .iter()
-        .filter(|(_, v)| !v.trim().is_empty())
         .map(|(label, v)| (*label, sanitize_for_display(v)))
+        .filter(|(_, v)| !v.trim().is_empty())
         .collect();
     let width = rows
         .iter()
@@ -165,6 +165,7 @@ mod tests {
             ("Role", String::new()),
             ("IP addresses", "10.0.0.1".to_string()),
             ("Tags", "  ".to_string()),
+            ("Client", "\x1b".to_string()),
         ];
         assert_eq!(
             render_details(&rows),
