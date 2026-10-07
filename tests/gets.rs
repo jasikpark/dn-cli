@@ -84,7 +84,12 @@ fn hosts_get_reads_v2_and_names_the_role() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.starts_with("web-1\n"), "{stdout}");
     assert!(stdout.contains("Web servers (role-WEB)"), "{stdout}");
-    assert!(stdout.contains("never"), "{stdout}");
+    let last_seen = stdout.lines().find(|l| l.starts_with("Last seen:"));
+    assert_eq!(
+        last_seen.map(|l| l.split_whitespace().collect::<Vec<_>>()),
+        Some(vec!["Last", "seen:", "never"]),
+        "{stdout}"
+    );
     assert_eq!(
         *seen.lock().unwrap(),
         ["/v2/hosts/host-EXAMPLE", "/v1/roles/role-WEB"]
@@ -121,7 +126,7 @@ fn hosts_get_json_passes_the_response_through_without_a_role_lookup() {
     let got: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let want: serde_json::Value = serde_json::from_str(HOST).unwrap();
     assert_eq!(got, want);
-    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(*seen.lock().unwrap(), ["/v2/hosts/host-EXAMPLE"]);
 }
 
 #[test]
@@ -137,12 +142,13 @@ fn networks_get_reads_v2() {
 
 #[test]
 fn networks_get_json_passes_the_response_through() {
-    let (url, _) = serve(NETWORK, ROLE_OK);
+    let (url, seen) = serve(NETWORK, ROLE_OK);
     let out = dn(&url, &["--json", "networks", "get", "network-EXAMPLE"]);
     assert!(out.status.success(), "{out:?}");
     let got: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let want: serde_json::Value = serde_json::from_str(NETWORK).unwrap();
     assert_eq!(got, want);
+    assert_eq!(*seen.lock().unwrap(), ["/v2/networks/network-EXAMPLE"]);
 }
 
 #[test]
@@ -163,17 +169,19 @@ fn gets_reject_non_object_data() {
 
 #[test]
 fn gets_reject_malformed_ids_before_any_request() {
-    for args in [
-        ["host", "get", "host-1/../roles"],
-        ["host", "get", ""],
-        ["host", "get", ".."],
-        ["host", "get", "host-1%2F.."],
-        ["network", "get", "network-1?x"],
+    for (args, expected) in [
+        (["host", "get", "host-1/../roles"], "invalid character '/'"),
+        (["host", "get", ""], "must not be empty"),
+        (["host", "get", ".."], "invalid character '.'"),
+        (["host", "get", "host-1%2F.."], "invalid character '%'"),
+        (["network", "get", "network-1?x"], "invalid character '?'"),
     ] {
         let (url, seen) = serve(HOST, ROLE_OK);
         let out = dn(&url, &args);
         assert!(!out.status.success(), "{args:?}: {out:?}");
         assert!(seen.lock().unwrap().is_empty(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(expected), "{args:?}: {stderr}");
     }
 }
 

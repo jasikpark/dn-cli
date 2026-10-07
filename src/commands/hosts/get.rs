@@ -83,8 +83,11 @@ fn render_host(data: &Value, role_name: Option<&str>) -> String {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    if !client.is_empty() && meta["updateAvailable"].as_bool() == Some(true) {
-        client.push_str(" (update available)");
+    if meta["updateAvailable"].as_bool() == Some(true) {
+        client = match client.as_str() {
+            "" => "update available".to_string(),
+            _ => format!("{client} (update available)"),
+        };
     }
 
     out.push_str(&render_details(&[
@@ -175,6 +178,12 @@ mod tests {
         assert!(out.contains("Config overrides:  1\n"), "{out}");
         assert!(out.contains("Last seen:         never\n"), "{out}");
         assert!(!out.contains("Client:"), "{out}");
+    }
+
+    #[test]
+    fn render_host_shows_an_update_without_platform_or_version() {
+        let data = json!({"id": "host-1", "name": "web", "metadata": {"updateAvailable": true}});
+        assert!(render_host(&data, None).contains("Client:  update available\n"));
     }
 
     #[test]

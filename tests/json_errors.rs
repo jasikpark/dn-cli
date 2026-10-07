@@ -102,6 +102,11 @@ fn argument_errors_are_invalid_argument_before_credentials() {
             "invalid character '/'",
         ),
         (&["host", "delete", "host-1", "--json"], "pass --yes"),
+        (&["host", "get", "a/b", "--json"], "invalid character '/'"),
+        (
+            &["network", "get", "network-1?x", "--json"],
+            "invalid character '?'",
+        ),
         (&["auth", "login", "--ref", "notop", "--json"], "op://"),
         (&["auth", "login", "--json"], "pass --key-stdin"),
     ] {
