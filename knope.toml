@@ -59,13 +59,8 @@ name = "check-release"
 type = "PrepareRelease"
 allow_empty = true
 
-# Release notes come only from .changeset/*.md files, not commit messages:
-# squash merges keep only the PR title, which drops commit bodies and footers.
-[changes]
-ignore_conventional_commits = true
-
-# Knope Bot requires a changeset on every PR except those carrying one of these
-# labels. renovate.json applies "renovate" to dependency updates, which ship
-# with the next release without a note of their own.
+# Knope Bot requires a change file or conventional commit on every PR except
+# those carrying one of these labels. renovate.json applies "renovate" to
+# dependency updates, which ship with the next release without a note of their own.
 [bot.checks]
 skip_labels = ["renovate"]

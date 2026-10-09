@@ -57,13 +57,32 @@ going to `https://api.defined.net`, `dn` says so on stderr (never under
 
 ## Changelog and releases
 
-`CHANGELOG.md` is generated from commit subjects, so every user-visible change
-needs a [conventional commit](https://www.conventionalcommits.org/): `feat:`
-and `fix:` become entries under the next version, `feat!:` (or a
-`BREAKING CHANGE:` footer) marks a breaking change, and other types (`docs:`,
-`chore:`, `test:`) stay out of the changelog. Write the subject as the line a
-user should read in the release notes. The `Require changes to be documented`
-check on each PR is [Knope](https://knope.tech) looking for exactly that.
+[Knope](https://knope.tech) builds `CHANGELOG.md` from two sources:
+[conventional commit](https://www.conventionalcommits.org/) subjects and
+change files in `.changeset/`. The `Require changes to be documented` check on
+each PR passes when it finds either one.
+
+Every PR title is a conventional commit, since squash merges keep only the
+title. `feat:` and `fix:` become entries under the next version, `feat!:` marks
+a breaking change, and other types (`docs:`, `chore:`, `test:`) stay out of the
+changelog.
+
+A change users should read about also gets a change file: Squash merges drop
+the commit body, so a change file is the only way to give a release note more
+than one line. Add `.changeset/<short-name>.md`:
+
+```markdown
+---
+default: minor
+---
+
+# The heading users read in the release notes
+
+Optional body: what changed, and anything a user has to do about it.
+```
+
+`default` is the package; its value is `major` (Breaking Changes), `minor`
+(Features), or `patch` (Fixes).
 
 On every push to `main`, Knope opens or updates a `chore: prepare release X`
 PR that bumps `Cargo.toml` and writes `CHANGELOG.md`. Merging it pushes the
