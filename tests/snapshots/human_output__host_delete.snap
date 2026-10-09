@@ -1,8 +1,8 @@
 ---
 source: tests/human_output.rs
-description: Host delete with --yes.
+description: Host delete with --yes names the deleted host.
 ---
 $ dn host delete host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI --yes
-Deleted host host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI.
+Deleted host "Build Server" (host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI).
 --- stderr
 note: using <API_URL> (from DEFINED_API_URL)

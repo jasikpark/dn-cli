@@ -88,6 +88,7 @@ pub fn networks_delete(
         id,
         json_key: "id",
         read_scope: "networks:read",
+        named: true,
     };
     confirm_and_delete(
         &target,

@@ -252,6 +252,19 @@ const ERROR_ROUTES: &[Route] = &[
         "403 Forbidden",
         r#"{"errors":[{"code":"ERR_FORBIDDEN","message":"missing scope networks:list"}]}"#,
     ),
+    (
+        "GET",
+        "/v2/hosts/host-NOREAD",
+        "403 Forbidden",
+        r#"{"errors":[{"code":"ERR_FORBIDDEN","message":"missing scope hosts:read"}]}"#,
+    ),
+    ("DELETE", "/v1/hosts/host-NOREAD", OK, DELETED),
+    (
+        "DELETE",
+        "/v1/hosts/host-MISSING",
+        "404 Not Found",
+        r#"{"errors":[{"code":"ERR_NOT_FOUND","message":"host not found"}]}"#,
+    ),
 ];
 
 const AUTH_FILE: &[(&str, &str)] = &[(
@@ -274,7 +287,7 @@ human_output! {
         HOST_ROUTES, &[], &["host", "edit", HOST_ID, "--add-tag", "team:infra", "--remove-tag", "gone:1"];
     host_edit_unchanged: "An edit that changes nothing skips the update and says so.",
         HOST_ROUTES, &[], &["host", "edit", HOST_ID, "--add-tag", "env:prod"];
-    host_delete: "Host delete with --yes.",
+    host_delete: "Host delete with --yes names the deleted host.",
         HOST_ROUTES, &[], &["host", "delete", HOST_ID, "--yes"];
     host_delete_needs_yes: "Without --yes and without a terminal to prompt on, delete refuses.",
         HOST_ROUTES, &[], &["host", "delete", HOST_ID];
@@ -283,21 +296,21 @@ human_output! {
         NETWORK_ROUTES, &[], &["network", "list"];
     network_get: "Network detail view.",
         NETWORK_ROUTES, &[], &["network", "get", "network-EXAMPLE"];
-    network_delete: "Network delete with --yes.",
+    network_delete: "Network delete with --yes names the deleted network.",
         NETWORK_ROUTES, &[], &["network", "delete", "network-EXAMPLE", "--yes"];
 
     role_list: "Role table.",
         ROLE_ROUTES, &[], &["role", "list"];
     role_get: "Role with its firewall rules; a rule allowing another role shows it by name.",
         ROLE_ROUTES, &[], &["role", "get", "role-WEB"];
-    role_delete: "Role delete with --yes.",
+    role_delete: "Role delete with --yes names the deleted role.",
         ROLE_ROUTES, &[], &["role", "delete", "role-WEB", "--yes"];
 
     tag_list: "Tag table.",
         TAG_ROUTES, &[], &["tag", "list"];
     tag_get: "Tag with its priority and a rule allowing hosts by tag.",
         TAG_ROUTES, &[], &["tag", "get", "env:prod"];
-    tag_delete: "Tag delete with --yes.",
+    tag_delete: "Tag delete with --yes; tags are named by their id.",
         TAG_ROUTES, &[], &["tag", "delete", "env:prod", "--yes"];
 
     audit_log_list: "Audit log table with each actor kind (user email, API key name, system) and a next-page hint.",
@@ -320,6 +333,10 @@ human_output! {
         ERROR_ROUTES, &[], &["host", "get", "host-MISSING"];
     error_forbidden: "A 403 on a list, naming the missing scope.",
         ERROR_ROUTES, &[], &["network", "list"];
+    host_delete_without_read_scope: "Host delete with --yes on a key that can't read the host still deletes, named by id alone.",
+        ERROR_ROUTES, &[], &["host", "delete", "host-NOREAD", "--yes"];
+    host_delete_missing: "Host delete with --yes on an id that doesn't exist: the DELETE's own 404 is the error.",
+        ERROR_ROUTES, &[], &["host", "delete", "host-MISSING", "--yes"];
 
     auth_status: "Auth status with the key taken from DEFINED_API_KEY.",
         &[], &[], &["auth", "status"];
