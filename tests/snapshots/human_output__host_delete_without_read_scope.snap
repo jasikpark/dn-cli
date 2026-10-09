@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: "Host delete with --yes on a key that can't read the host still deletes, named by id alone."
+---
+$ dn host delete host-NOREAD --yes
+Deleted host host-NOREAD.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

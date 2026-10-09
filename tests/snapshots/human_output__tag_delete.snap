@@ -1,6 +1,6 @@
 ---
 source: tests/human_output.rs
-description: Tag delete with --yes.
+description: Tag delete with --yes; tags are named by their id.
 ---
 $ dn tag delete env:prod --yes
 Deleted tag env:prod.

@@ -88,6 +88,7 @@ pub fn roles_delete(client: &Client, args: &RoleDeleteArgs, json: bool) -> anyho
         id,
         json_key: "id",
         read_scope: "roles:read",
+        named: true,
     };
     confirm_and_delete(
         &target,
@@ -113,6 +114,7 @@ pub fn tags_delete(client: &Client, args: &TagDeleteArgs, json: bool) -> anyhow:
         id: name,
         json_key: "name",
         read_scope: "tags:read",
+        named: false,
     };
     confirm_and_delete(
         &target,

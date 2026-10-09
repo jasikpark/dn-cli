@@ -17,6 +17,10 @@ pub enum DeleteConfirmation {
     /// Delete straight away: no lookup, no prompt. Only the `*:delete` scope
     /// is needed.
     Skip,
+    /// Delete without asking, but look the resource up first so the result
+    /// line can name it. The lookup is best-effort: a key without the read
+    /// scope still deletes, and the result names the id alone.
+    Announce,
     /// Look the resource up, then ask on stderr.
     Prompt,
     /// Nowhere to ask — the run has to opt in with `--yes` instead.
@@ -25,10 +29,13 @@ pub enum DeleteConfirmation {
 
 /// `--yes` is the only way a non-interactive run reaches the DELETE: a prompt
 /// with no terminal behind it would hang a `--json` caller or a script, so it
-/// is refused rather than skipped.
+/// is refused rather than skipped. `--json` output never shows a name, so it
+/// skips the lookup too.
 pub fn delete_confirmation(yes: bool, json: bool, stdin_is_tty: bool) -> DeleteConfirmation {
-    if yes {
+    if yes && json {
         DeleteConfirmation::Skip
+    } else if yes {
+        DeleteConfirmation::Announce
     } else if json || !stdin_is_tty {
         DeleteConfirmation::Refuse
     } else {
@@ -58,6 +65,9 @@ pub struct DeleteTarget<'a> {
     pub json_key: &'a str,
     /// The scope the confirmation lookup needs, named when it fails.
     pub read_scope: &'a str,
+    /// Whether the resource has a display name apart from its id. A tag
+    /// doesn't, so `--yes` has nothing to look up for one.
+    pub named: bool,
 }
 
 /// Delete one resource, confirming interactively unless `--yes` says not to.
@@ -92,8 +102,8 @@ pub fn confirm_and_delete(
 }
 
 /// The confirm-then-delete steps with the terminal passed in, so tests can
-/// answer the prompt. Returns the looked-up display name (empty when the
-/// prompt was skipped). `delete` runs only once the confirmation passed.
+/// answer the prompt. Returns the looked-up display name (empty when there
+/// was no lookup, or an `Announce` lookup failed). `delete` runs only once the confirmation passed.
 /// A tag's id is user-typed and may hold control characters, so it is
 /// sanitized for every message; the raw id is still what gets deleted.
 fn run_delete(
@@ -112,12 +122,17 @@ fn run_delete(
 
     match confirmation {
         DeleteConfirmation::Skip => {}
+        DeleteConfirmation::Announce => {
+            if target.named {
+                name = lookup().map(|found| found.name).unwrap_or_default();
+            }
+        }
         DeleteConfirmation::Refuse => bail!(DELETE_NEEDS_YES),
         DeleteConfirmation::Prompt => {
             let found = lookup().map_err(|e| {
                 e.context(format!(
                     "could not read {kind} {id} to confirm the deletion (the API key needs \
-                     {read_scope}; pass --yes to skip the lookup)"
+                     {read_scope}; pass --yes to delete without confirming)"
                 ))
             })?;
             name = found.name;
@@ -189,15 +204,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn delete_confirmation_skips_the_prompt_whenever_yes_is_passed() {
-        for json in [false, true] {
-            for tty in [false, true] {
-                assert_eq!(
-                    delete_confirmation(true, json, tty),
-                    DeleteConfirmation::Skip,
-                    "--yes must win over json={json} tty={tty}"
-                );
-            }
+    fn delete_confirmation_never_prompts_when_yes_is_passed() {
+        for tty in [false, true] {
+            assert_eq!(
+                delete_confirmation(true, true, tty),
+                DeleteConfirmation::Skip,
+                "--yes --json, tty={tty}"
+            );
+            assert_eq!(
+                delete_confirmation(true, false, tty),
+                DeleteConfirmation::Announce,
+                "--yes, tty={tty}"
+            );
         }
     }
 
@@ -230,6 +248,7 @@ mod tests {
         id: "role-1",
         json_key: "id",
         read_scope: "roles:read",
+        named: true,
     };
 
     fn web_role() -> anyhow::Result<Described> {
@@ -305,6 +324,41 @@ mod tests {
     }
 
     #[test]
+    fn run_delete_announce_names_the_resource_without_a_prompt() {
+        let (res, prompt, deleted) = run(&ROLE, DeleteConfirmation::Announce, "", web_role);
+        assert_eq!(res.unwrap(), "web");
+        assert!(prompt.is_empty());
+        assert!(deleted);
+    }
+
+    #[test]
+    fn run_delete_announce_still_deletes_when_the_lookup_fails() {
+        // A key scoped to `roles:delete` alone can't read the role.
+        let (res, prompt, deleted) = run(&ROLE, DeleteConfirmation::Announce, "", || {
+            anyhow::bail!("HTTP 403")
+        });
+        assert_eq!(res.unwrap(), "");
+        assert!(prompt.is_empty());
+        assert!(deleted);
+    }
+
+    #[test]
+    fn run_delete_announce_skips_the_lookup_for_an_unnamed_resource() {
+        let tag = DeleteTarget {
+            kind: "tag",
+            id: "env:prod",
+            json_key: "name",
+            read_scope: "tags:read",
+            named: false,
+        };
+        let (res, _, deleted) = run(&tag, DeleteConfirmation::Announce, "", || {
+            panic!("a tag is named by its id, so there is nothing to look up")
+        });
+        assert_eq!(res.unwrap(), "");
+        assert!(deleted);
+    }
+
+    #[test]
     fn run_delete_refuse_neither_looks_up_nor_deletes() {
         let (res, prompt, deleted) = run(&ROLE, DeleteConfirmation::Refuse, "y\n", || {
             panic!("a refused run must not look the resource up")
@@ -321,6 +375,7 @@ mod tests {
             id: "env:a\u{1b}[2Jb",
             json_key: "name",
             read_scope: "tags:read",
+            named: false,
         };
         let (_, prompt, _) = run(&tag, DeleteConfirmation::Prompt, "n\n", || {
             Ok(Described::default())

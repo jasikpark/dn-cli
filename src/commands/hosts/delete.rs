@@ -15,6 +15,7 @@ pub fn hosts_delete(client: &Client, args: &HostDeleteArgs, json: bool) -> anyho
         id,
         json_key: "id",
         read_scope: "hosts:read",
+        named: true,
     };
     confirm_and_delete(
         &target,
