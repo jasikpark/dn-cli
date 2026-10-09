@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: Host list with no rows.
+---
+$ dn host list
+No hosts found.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: Tag list with no rows.
+---
+$ dn tag list
+No tags found.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

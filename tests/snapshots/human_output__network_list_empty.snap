@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: Network list with no rows.
+---
+$ dn network list
+No networks found.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

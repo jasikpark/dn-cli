@@ -1,0 +1,18 @@
+---
+source: tests/human_output.rs
+description: Network detail view.
+---
+$ dn network get network-EXAMPLE
+office
+Description:            Head office
+ID:                     network-EXAMPLE
+CIDRs:                  100.100.0.0/22, fd00:c0:c0::/80
+Hosts:                  3
+Managed lighthouses:    no
+Lighthouses as relays:  no
+Curve:                  25519
+Cert version:           v2
+Signing CA:             ca-EXAMPLE
+Created:                2025-11-02T09:00:00Z
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

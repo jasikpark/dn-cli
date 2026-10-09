@@ -1,0 +1,9 @@
+---
+source: src/commands/hosts.rs
+description: "Human host table: a dual-stack row, a long OIDC host name, a single-IP row, and an emoji name."
+---
+ID                               NAME                                 IP ADDRESSES
+host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI  Build Server                         10.128.0.12, fd00:c0:c0:2966:d3bf:a55d:49a0:6f18
+host-RPWX5N2TQZ7HDK3MAYCEVLJ4GB  alex@example.com-oidc-host-3niCOb0p  10.128.1.66, fd00:c0:c0:2966:d3bf:4aef:886d:b175
+host-M6TLA3VZQ2NXKC7EWJR5PBYHFO  Pixel Phone                          10.128.1.39
+host-Z3HWQ5ATVK2MRXE7NC4YLBPJDG  ☁️ cloud relay                        10.128.2.7

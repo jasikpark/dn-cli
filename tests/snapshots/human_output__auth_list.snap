@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: "Auth list with two profiles, the default marked *."
+---
+$ dn auth list
+   PROFILE  API URL                          KEY
+*  prod     https://api.defined.net          op://Example/dn/credential
+   staging  https://api.staging.example.com  keyring

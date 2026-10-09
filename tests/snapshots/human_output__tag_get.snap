@@ -1,0 +1,14 @@
+---
+source: tests/human_output.rs
+description: Tag with its priority and a rule allowing hosts by tag.
+---
+$ dn tag get env:prod
+env:prod
+Production
+Hosts: 2
+Priority: 10
+
+ALLOWED HOSTS                PROTOCOL  PORTS  DESCRIPTION
+All hosts tagged "site:hou"  UDP       53     dns
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

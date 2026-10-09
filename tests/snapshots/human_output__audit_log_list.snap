@@ -1,0 +1,12 @@
+---
+source: tests/human_output.rs
+description: "Audit log table with each actor kind (user email, API key name, system) and a next-page hint."
+---
+$ dn audit-log list
+TIME                  EVENT    TARGET TYPE  TARGET                           ACTOR
+2026-01-03T00:00:00Z  UPDATED  host         host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI  alex@example.com
+2026-01-02T00:00:00Z  CREATED  role         role-WEB                         API key ci
+2026-01-01T00:00:00Z  CREATED  ca           ca-EXAMPLE                       system
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
+next page: dn audit-log list --cursor=page-2

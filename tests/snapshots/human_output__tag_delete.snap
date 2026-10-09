@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: Tag delete with --yes.
+---
+$ dn tag delete env:prod --yes
+Deleted tag env:prod.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
