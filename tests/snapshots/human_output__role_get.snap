@@ -1,0 +1,14 @@
+---
+source: tests/human_output.rs
+description: Role with its firewall rules; a rule allowing another role shows it by name.
+---
+$ dn role get role-WEB
+Web servers (role-WEB)
+Public HTTP
+Hosts: 3
+
+ALLOWED HOSTS   PROTOCOL  PORTS  DESCRIPTION
+All hosts       TCP       443    https from anywhere
+"Admins" hosts  TCP       22     ssh from admins
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

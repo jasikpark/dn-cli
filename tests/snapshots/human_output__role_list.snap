@@ -1,0 +1,10 @@
+---
+source: tests/human_output.rs
+description: Role table.
+---
+$ dn role list
+ID        NAME         RULES  HOSTS  DESCRIPTION
+role-WEB  Web servers  2      3      Public HTTP
+role-ADM  Admins       0      1      
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

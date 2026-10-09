@@ -1,0 +1,19 @@
+---
+source: tests/human_output.rs
+description: "Host detail view, with the role named and an available client update flagged."
+---
+$ dn host get host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
+Build Server
+ID:                host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
+Type:              host
+Network:           network-EXAMPLE
+Role:              Web servers (role-WEB)
+IP addresses:      100.100.0.12, fd00:c0:c0:2966:d3bf:a55d:49a0:6f18
+Tags:              env:prod, site:hou
+Static addresses:  203.0.113.5:4242
+Listen port:       4242
+Client:            dnclient-desktop 0.9.9 (update available)
+Last seen:         2026-10-09T18:27:45Z
+Created:           2026-01-25T18:15:27Z
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

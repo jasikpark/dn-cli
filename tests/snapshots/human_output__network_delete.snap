@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: Network delete with --yes.
+---
+$ dn network delete network-EXAMPLE --yes
+Deleted network network-EXAMPLE.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

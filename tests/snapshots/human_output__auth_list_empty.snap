@@ -1,0 +1,6 @@
+---
+source: tests/human_output.rs
+description: Auth list before any login.
+---
+$ dn auth list
+No profiles. Run `dn auth login` to create one.

@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: Role list with no rows.
+---
+$ dn role list
+No roles found.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

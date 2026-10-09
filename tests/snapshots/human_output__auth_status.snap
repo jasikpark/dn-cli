@@ -1,0 +1,7 @@
+---
+source: tests/human_output.rs
+description: Auth status with the key taken from DEFINED_API_KEY.
+---
+$ dn auth status
+API key: DEFINED_API_KEY (raw value in environment)
+API URL: <API_URL>

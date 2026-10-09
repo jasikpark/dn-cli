@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: "Without --yes and without a terminal to prompt on, delete refuses."
+---
+$ dn host delete host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
+--- stderr
+error: pass --yes to delete without a confirmation prompt when running non-interactively
+--- exit 1

@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: Audit log list with no rows.
+---
+$ dn audit-log list
+No audit log entries found.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

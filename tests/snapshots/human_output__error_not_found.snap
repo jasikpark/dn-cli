@@ -1,0 +1,9 @@
+---
+source: tests/human_output.rs
+description: "A 404 reaches stderr as status, code and message, and exits 1."
+---
+$ dn host get host-MISSING
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
+error: Defined API error (HTTP 404)   ERR_NOT_FOUND: host not found
+--- exit 1

@@ -1,0 +1,9 @@
+---
+source: tests/human_output.rs
+description: "A 403 on a list, naming the missing scope."
+---
+$ dn network list
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
+error: Defined API error (HTTP 403)   ERR_FORBIDDEN: missing scope networks:list
+--- exit 1

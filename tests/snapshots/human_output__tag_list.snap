@@ -1,0 +1,10 @@
+---
+source: tests/human_output.rs
+description: Tag table.
+---
+$ dn tag list
+NAME      RULES  HOSTS  DESCRIPTION  PRIORITY
+env:prod  1      2      Production   10
+site:hou  0      5                   
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

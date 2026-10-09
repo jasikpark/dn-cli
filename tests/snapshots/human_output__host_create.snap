@@ -1,0 +1,17 @@
+---
+source: tests/human_output.rs
+description: "Created host, its enrollment command, and the default-role firewall note."
+---
+$ dn host create web-2 --network network-EXAMPLE
+Created host "web-2" (host-Z3HWQ5ATVK2MRXE7NC4YLBPJDG)
+  IP addresses: 100.100.0.40
+
+To enroll the device, install dnclient and run:
+  dnclient enroll EXAMPLE-ENROLLMENT-CODE
+
+Note: the default role denies all inbound traffic. New hosts will be on
+the network but unable to reach each other until a role with firewall
+rules is created and assigned (see `dn role list`), unless one of their
+tags carries firewall rules (see `dn tag get`).
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

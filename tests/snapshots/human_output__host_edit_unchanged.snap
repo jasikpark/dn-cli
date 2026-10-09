@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: An edit that changes nothing skips the update and says so.
+---
+$ dn host edit host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI --add-tag env:prod
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
+nothing changed — skipping update

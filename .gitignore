@@ -5,3 +5,7 @@
 .env.*
 test-dn.sh
 /mutants.out*
+
+# insta writes these for review; `cargo insta review` accepts or rejects them.
+*.snap.new
+*.pending-snap

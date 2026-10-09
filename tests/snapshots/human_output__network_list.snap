@@ -1,0 +1,10 @@
+---
+source: tests/human_output.rs
+description: Network table.
+---
+$ dn network list
+ID               NAME    CIDRS                            HOSTS  MANAGED LH  LH AS RELAYS  CURVE  CERT  DESCRIPTION
+network-EXAMPLE  office  100.100.0.0/22, fd00:c0:c0::/80  3      yes         yes           25519  v2    Head office
+network-LAB      lab     100.101.0.0/24                   0      no          no            P256   v1    
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

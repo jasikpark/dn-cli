@@ -52,20 +52,18 @@ pub fn hosts_search(client: &Client, args: &HostSearchArgs, json: bool) -> anyho
 /// Render a hosts envelope. Shared by `host list` and `host search` so the
 /// two can't drift on columns.
 fn render_hosts(res: &Value, json: bool, empty_msg: &str) -> anyhow::Result<()> {
-    print_list(
-        res,
-        json,
-        empty_msg,
-        &["ID", "NAME", "IP ADDRESSES"],
-        |rows| {
-            rows.iter()
-                .map(|row| {
-                    let (id, name, ip) = host_fields(row);
-                    vec![id.to_string(), name.to_string(), ip]
-                })
-                .collect()
-        },
-    )
+    print_list(res, json, empty_msg, &HOST_HEADERS, host_rows)
+}
+
+const HOST_HEADERS: [&str; 3] = ["ID", "NAME", "IP ADDRESSES"];
+
+fn host_rows(rows: &[Value]) -> Vec<Vec<String>> {
+    rows.iter()
+        .map(|row| {
+            let (id, name, ip) = host_fields(row);
+            vec![id.to_string(), name.to_string(), ip]
+        })
+        .collect()
 }
 
 /// Parse and validate a `key:value` tag, matching the server's rules:
@@ -254,5 +252,60 @@ mod tests {
     fn parse_tag_errors_strip_terminal_escapes() {
         let err = parse_tag("\u{1b}[31mnocolon").unwrap_err().to_string();
         assert!(!err.contains('\u{1b}'), "{err:?}");
+    }
+
+    #[test]
+    fn host_table() {
+        let res = json!({ "data": [
+            {
+                "id": "host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
+                "name": "Build Server",
+                "ipAddresses": ["10.128.0.12", "fd00:c0:c0:2966:d3bf:a55d:49a0:6f18"],
+                "metadata": {
+                    "lastSeenAt": "2026-10-09T18:27:45Z",
+                    "platform": "dnclient-desktop",
+                    "version": "0.9.9-dev",
+                    "os": "windows",
+                    "updateAvailable": true,
+                },
+            },
+            {
+                "id": "host-RPWX5N2TQZ7HDK3MAYCEVLJ4GB",
+                "name": "alex@example.com-oidc-host-3niCOb0p",
+                "ipAddresses": ["10.128.1.66", "fd00:c0:c0:2966:d3bf:4aef:886d:b175"],
+                "metadata": {
+                    "lastSeenAt": "2026-10-08T22:24:17Z",
+                    "platform": "nebula-apple",
+                    "version": "1.0.0",
+                    "os": "macos",
+                    "updateAvailable": false,
+                },
+            },
+            {
+                "id": "host-M6TLA3VZQ2NXKC7EWJR5PBYHFO",
+                "name": "Pixel Phone",
+                "ipAddresses": ["10.128.1.39"],
+                "metadata": {
+                    "lastSeenAt": "2026-10-09T02:21:22Z",
+                    "platform": "mobile",
+                    "version": "0.12.0",
+                    "os": "android",
+                    "updateAvailable": false,
+                },
+            },
+            {
+                "id": "host-Z3HWQ5ATVK2MRXE7NC4YLBPJDG",
+                "name": "\u{2601}\u{fe0f} cloud relay",
+                "ipAddresses": ["10.128.2.7"],
+                "metadata": { "lastSeenAt": null, "os": null },
+            },
+        ]});
+        let rows = host_rows(res["data"].as_array().unwrap());
+        insta::with_settings!({
+            description => "Human host table: a dual-stack row, a long OIDC host name, a single-IP row, and an emoji name.",
+            omit_expression => true,
+        }, {
+            insta::assert_snapshot!(crate::output::render_table(&HOST_HEADERS, &rows));
+        });
     }
 }
