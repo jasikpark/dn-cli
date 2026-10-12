@@ -59,19 +59,24 @@ going to `https://api.defined.net`, `dn` says so on stderr (never under
 
 [Knope](https://knope.tech) builds `CHANGELOG.md` from two sources:
 change files in `.changeset/` and
-[conventional commit](https://www.conventionalcommits.org/) subjects. The
+[conventional commit](https://www.conventionalcommits.org/) subjects. Squash
+merges keep only the PR title, so the title is the commit Knope reads. The
 `Require changes to be documented` check on each PR passes when it finds either
-one, so a `chore:` PR such as a dependency update needs no change file.
+source.
 
-Every PR title is a conventional commit, since squash merges keep only the
-title. Types other than `feat:` and `fix:` (`docs:`, `chore:`, `test:`) stay
-out of the changelog.
+Pick one source per PR, by what the change needs:
 
-A change users should read about gets a change file; don't rely on a `feat:` or
-`fix:` title for its release note. Squash merges drop the commit body, so a
-change file is the only way to give a release note more than one line, and its
-`default` sets the version bump, breaking changes included: use
-`default: major` rather than a `feat!:` title. Add `.changeset/<short-name>.md`:
+- Nothing users should read about (`chore:`, `ci:`, `docs:`, `test:`, ...): a
+  conventional title and no change file. These types stay out of the changelog.
+- A one-line feature or fix: a `feat:` or `fix:` title and no change file.
+- Anything with more to say, or a breaking change: a change file and a plain
+  title with no conventional type, such as "Show the organization and key in
+  auth status". A `feat:` or `fix:` title alongside a change file writes the
+  same change into the changelog twice.
+
+A change file can give a release note a body, which a squash merge's title
+can't, and its `default` sets the version bump: a breaking change uses
+`default: major`, not a `feat!:` title. Add `.changeset/<short-name>.md`:
 
 ```markdown
 ---
