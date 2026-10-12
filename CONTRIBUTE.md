@@ -58,18 +58,20 @@ going to `https://api.defined.net`, `dn` says so on stderr (never under
 ## Changelog and releases
 
 [Knope](https://knope.tech) builds `CHANGELOG.md` from two sources:
-[conventional commit](https://www.conventionalcommits.org/) subjects and
-change files in `.changeset/`. The `Require changes to be documented` check on
-each PR passes when it finds either one.
+change files in `.changeset/` and
+[conventional commit](https://www.conventionalcommits.org/) subjects. The
+`Require changes to be documented` check on each PR passes when it finds either
+one, so a `chore:` PR such as a dependency update needs no change file.
 
 Every PR title is a conventional commit, since squash merges keep only the
-title. `feat:` and `fix:` become entries under the next version, `feat!:` marks
-a breaking change, and other types (`docs:`, `chore:`, `test:`) stay out of the
-changelog.
+title. Types other than `feat:` and `fix:` (`docs:`, `chore:`, `test:`) stay
+out of the changelog.
 
-A change users should read about also gets a change file: Squash merges drop
-the commit body, so a change file is the only way to give a release note more
-than one line. Add `.changeset/<short-name>.md`:
+A change users should read about gets a change file; don't rely on a `feat:` or
+`fix:` title for its release note. Squash merges drop the commit body, so a
+change file is the only way to give a release note more than one line, and its
+`default` sets the version bump, breaking changes included: use
+`default: major` rather than a `feat!:` title. Add `.changeset/<short-name>.md`:
 
 ```markdown
 ---
