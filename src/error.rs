@@ -25,6 +25,19 @@ impl std::fmt::Display for InvalidArgument {
 
 impl std::error::Error for InvalidArgument {}
 
+/// An error whose `--json` envelope the command already printed inside its own
+/// output, so [`report_error`] only adds the stderr hint.
+#[derive(Debug)]
+pub struct ReportedInOutput(pub anyhow::Error);
+
+impl std::fmt::Display for ReportedInOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for ReportedInOutput {}
+
 /// The API's error envelope for an error that never got an HTTP response, so
 /// `--json` callers parse one shape whatever failed.
 fn local_error_envelope(code: &str, message: &str) -> Value {
@@ -42,7 +55,10 @@ fn local_error_envelope(code: &str, message: &str) -> Value {
 /// shape: typed [`ApiError`]s carry the server's own, and local failures get
 /// `status: null` and a local code (see [`error_envelope`]).
 pub fn report_error(err: &anyhow::Error, json: bool) {
-    if json && let Ok(payload) = serde_json::to_string(&error_envelope(err)) {
+    if json
+        && err.downcast_ref::<ReportedInOutput>().is_none()
+        && let Ok(payload) = serde_json::to_string(&error_envelope(err))
+    {
         println!("{payload}");
     }
 
@@ -50,7 +66,7 @@ pub fn report_error(err: &anyhow::Error, json: bool) {
     eprintln!("error: {}", sanitize_for_display(&format!("{err:#}")));
 }
 
-fn error_envelope(err: &anyhow::Error) -> Value {
+pub fn error_envelope(err: &anyhow::Error) -> Value {
     if let Some(api) = err.downcast_ref::<ApiError>()
         && let Ok(mut value) = serde_json::to_value(api)
     {

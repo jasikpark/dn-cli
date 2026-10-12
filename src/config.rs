@@ -311,7 +311,12 @@ impl Config {
     /// and the base URL for the selected profile. Only commands that talk to
     /// the API call this.
     pub fn load(profile_flag: Option<&str>) -> Result<Self> {
-        let active = Active::load(profile_flag)?;
+        Self::from_active(Active::load(profile_flag)?)
+    }
+
+    /// [`Config::load`] from credentials already loaded, so a caller that
+    /// reports the [`Active`] it read talks to the API with that same one.
+    pub fn from_active(active: Active) -> Result<Self> {
         let source = active.source.ok_or_else(|| {
             anyhow!(
                 "No API key configured. Run `dn auth login` (stores the key in the OS \

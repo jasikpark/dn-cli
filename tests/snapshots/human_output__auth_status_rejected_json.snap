@@ -1,0 +1,27 @@
+---
+source: tests/human_output.rs
+description: "Auth status --json with a key the API rejects: the local report with owner_error, exit 1."
+---
+$ dn --json auth status
+{
+  "source": "env",
+  "profile": null,
+  "api_key_ref": null,
+  "message": null,
+  "auth_path": "<CONFIG_DIR>/auth.json",
+  "api_url": "<API_URL>",
+  "owner": null,
+  "owner_error": {
+    "status": 401,
+    "request_id": null,
+    "errors": [
+      {
+        "code": "ERR_UNAUTHORIZED",
+        "message": "invalid API key"
+      }
+    ]
+  }
+}
+--- stderr
+error: Defined API error (HTTP 401)   ERR_UNAUTHORIZED: invalid API key
+--- exit 1

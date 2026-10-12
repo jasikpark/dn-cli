@@ -43,7 +43,9 @@ impl Env {
     }
 
     /// Run `dn` with `stdin` as its input, the test keyring, no key in the
-    /// environment, and an API URL that refuses connections.
+    /// environment, and no `op` on PATH. A profile logged in without
+    /// `--api-url` talks to the production API, so `auth status` there needs
+    /// `--offline`.
     fn run(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Output {
         let keyring = self.keyring();
         let mut command = Command::new(env!("CARGO_BIN_EXE_dn"));
@@ -54,6 +56,7 @@ impl Env {
             .env_remove("DEFINED_API_KEY")
             .env_remove("DEFINED_API_URL")
             .env_remove("DN_PROFILE")
+            .env("PATH", "")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -117,7 +120,7 @@ fn login_stores_the_key_in_the_keyring_not_on_disk() {
     let auth_text = fs::read_to_string(env.dir.path().join("auth.json")).unwrap();
     assert!(!auth_text.contains("dnkey-secret-1"), "{auth_text}");
 
-    let status = env.ok(&["auth", "status", "--json"], "");
+    let status = env.ok(&["auth", "status", "--offline", "--json"], "");
     assert_eq!(status["source"], "keyring");
     assert_eq!(status["profile"], "default");
     assert_eq!(status["api_key_ref"], Value::Null);
@@ -325,7 +328,7 @@ fn a_hand_edited_profile_name_is_refused_and_never_reset() {
     // DEFINED_API_KEY skips a file it can't read, but not this one, whose
     // default profile may point at another API.
     let output = env.run(
-        &["auth", "status", "--json"],
+        &["auth", "status", "--offline", "--json"],
         "",
         &[("DEFINED_API_KEY", "env-key")],
     );

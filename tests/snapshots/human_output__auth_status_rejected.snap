@@ -1,0 +1,10 @@
+---
+source: tests/human_output.rs
+description: "Auth status with a key the API rejects: the local lines, then the error, exit 1."
+---
+$ dn auth status
+API key: DEFINED_API_KEY (raw value in environment)
+API URL: <API_URL>
+--- stderr
+error: Defined API error (HTTP 401)   ERR_UNAUTHORIZED: invalid API key
+--- exit 1

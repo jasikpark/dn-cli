@@ -153,7 +153,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     match &cli.command {
         Command::Auth { command } => match command {
             AuthCommand::Login(args) => auth_login(args, cli.profile.as_deref(), cli.json)?,
-            AuthCommand::Status => auth_status(cli.profile.as_deref(), cli.json)?,
+            AuthCommand::Status(args) => auth_status(args, cli.profile.as_deref(), cli.json)?,
             AuthCommand::List => auth_list(cli.json)?,
             AuthCommand::Switch(args) => auth_switch(args, cli.json)?,
             AuthCommand::Logout(args) => auth_logout(args, cli.profile.as_deref(), cli.json)?,

@@ -30,10 +30,10 @@ fn auth_status_uses_environment_before_stored_credentials() {
     ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_dn"));
         command
-            .args(["--json", "auth", "status"])
+            .args(["--json", "auth", "status", "--offline"])
             .env("DN_CONFIG_DIR", dir.path())
             .env_remove("DEFINED_API_KEY")
-            // Status must not invoke op, even for an environment reference.
+            // `--offline` must not invoke op, even for an environment reference.
             .env("PATH", "");
         if let Some(key) = key {
             command.env("DEFINED_API_KEY", key);

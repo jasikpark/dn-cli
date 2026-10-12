@@ -26,17 +26,24 @@ reference, a blank `DEFINED_API_KEY`, or a missing profile; `message` says
 which — surface it to the user). `profile` names the profile (account) in use
 and `api_url` the server it talks to; anything other than
 `https://api.defined.net` is a test or mock server, so say so when you report
-results. On `none`, stop and ask the
-user to run `dn auth login` themselves — it needs their API key and an
-interactive terminal; never ask them to paste a key into the conversation, and
+results. `owner` is what the API says the key belongs to: `owner.organization`
+(`name`, `plan`) and `owner.key` (`name`); name the organization when you
+report results or before deleting anything. It doesn't list the key's scopes.
+If the owner lookup fails (the API rejects the key, `op read` fails, the API is
+unreachable), `owner` is `null`, `owner_error` carries the error, and the
+command exits 1; the rest of the object still describes the local setup.
+`owner` is also `null` on `none`, `invalid`, and `--offline`. On `none`, stop
+and ask the user to run `dn auth login` themselves — it needs their API key
+and an interactive terminal; never ask them to paste a key into the conversation, and
 do not pass `--key-stdin` or `--ref` on their behalf. Every call that resolves
 an `op://` reference may pop a 1Password unlock prompt on the user's machine,
 and a locked keyring may prompt to unlock; that is expected. If a call fails
 with "no OS keyring is available", the machine has no keyring (e.g. headless
 Linux): tell the user to use `--ref` or `DEFINED_API_KEY` instead.
-`source: "keyring"` only says where the key should be; `auth status` doesn't
-open the keyring. If a call fails with "has no key in the OS keyring", relay
-that error's `dn auth login --profile …` command to the user; don't run it.
+`dn auth status --offline` reports only the local configuration: it never
+resolves a reference or opens the keyring, and `owner` is `null`. If a call
+fails with "has no key in the OS keyring", relay that error's
+`dn auth login --profile …` command to the user; don't run it.
 
 ### Profiles
 
@@ -64,7 +71,8 @@ output names profiles whose old keyring entry couldn't be deleted; tell them.
 
 When **you** (Claude) call `dn`, always pass `--json` and parse stdout. On a
 non-zero exit, read the JSON error envelope. It has the same keys whatever
-failed; branch on `errors[].code`:
+failed; branch on `errors[].code`. The one exception is `auth status`, which
+exits 1 with its status object and puts the envelope under `owner_error`.
 
 - **API errors** (exit 1): `status` is the HTTP code and `errors[].code` is the
   machine-stable Defined error code (e.g. `ERR_UNAUTHORIZED`). A response

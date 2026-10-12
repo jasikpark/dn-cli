@@ -320,6 +320,12 @@ impl Client {
             .map(|_| ())
     }
 
+    /// Who the key belongs to: the key itself and its organization. Needs no
+    /// scope, and says nothing about which scopes the key has.
+    pub fn whoami(&self) -> Result<Value> {
+        self.get("/v2/whoami")
+    }
+
     /// Fetch one network. `hosts create --network <id>` needs its `cidrs` to
     /// auto-assign an IPv4, since the API only does so when handed the
     /// network's own IPv4 prefix.
