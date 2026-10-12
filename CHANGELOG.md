@@ -1,6 +1,29 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.4.0 (2026-10-12)
+
+### Breaking Changes
+
+#### `dn auth status` names the organization and key
+
+`auth status` now asks the API who the key belongs to and shows the organization (with its plan) and the key's name, so a wrong-account key shows up before you run anything against it. `--json` output gains an `owner` object, and an `owner_error` envelope when the lookup fails. If the lookup fails (a rejected key, a failed `op read`, an unreachable API), `auth status` still reports the local setup, then exits 1. `--offline` restores the previous behavior: no API call and no 1Password prompt. Scripts that only need the local setup, or that run where the API or 1Password is unavailable, should pass it.
+
+### Features
+
+- name the resource when deleting with --yes (#124)
+- show the organization and key in auth status (#128)
+
+#### `delete --yes` names what it deleted
+
+`dn host delete`, `dn role delete`, and `dn network delete` with `--yes` now look the resource up first, so the result reads `Deleted host "Build Server" (host-…)` instead of the bare id. The lookup is best-effort: a key without the read scope still deletes, and the result names the id alone. `--json` output is unchanged and makes no lookup.
+
+### Fixes
+
+#### Dependency updates no longer need a changeset
+
+Renovate PRs carry the `renovate` label, which Knope Bot's changeset check skips; dependency updates ship with the next release without a changelog entry of their own.
+
 ## 0.3.0 (2026-10-07)
 
 ### Breaking Changes
