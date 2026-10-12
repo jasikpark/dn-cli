@@ -196,9 +196,9 @@ pub enum AuthCommand {
     /// in the OS keyring, or pass `--ref` to store a 1Password secret
     /// reference instead.
     Login(AuthLoginArgs),
-    /// Show which profile and API key source a call would use (never prints
-    /// the key)
-    Status,
+    /// Show which profile and API key source a call would use, and the
+    /// organization and key the API says it belongs to (never prints the key)
+    Status(AuthStatusArgs),
     /// List stored profiles
     List,
     /// Make a profile the default for calls that don't name one
@@ -206,6 +206,14 @@ pub enum AuthCommand {
     /// Forget a profile (the one `--profile` names, else the default). If it
     /// was the default, another profile becomes the default.
     Logout(AuthLogoutArgs),
+}
+
+#[derive(Args)]
+pub struct AuthStatusArgs {
+    /// Report only the local configuration, without asking the API who the
+    /// key belongs to. Never resolves a 1Password reference.
+    #[arg(long)]
+    pub offline: bool,
 }
 
 #[derive(Args)]

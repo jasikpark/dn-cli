@@ -1,0 +1,25 @@
+---
+source: tests/human_output.rs
+description: "Auth status --json carries the key and organization, and nothing else whoami returns."
+---
+$ dn --json auth status
+{
+  "source": "env",
+  "profile": null,
+  "api_key_ref": null,
+  "message": null,
+  "auth_path": "<CONFIG_DIR>/auth.json",
+  "api_url": "<API_URL>",
+  "owner": {
+    "key": {
+      "id": "dnkey-EXAMPLE",
+      "name": "CI read-only"
+    },
+    "organization": {
+      "id": "org-EXAMPLE",
+      "name": "Example Org",
+      "plan": "pro"
+    }
+  },
+  "owner_error": null
+}

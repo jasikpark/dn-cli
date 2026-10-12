@@ -71,8 +71,9 @@ printf '%s' "$KEY" | dn auth login --key-stdin
 On a headless Linux machine with no Secret Service (a server, a container), the
 keyring is unavailable; use `--ref` or `DEFINED_API_KEY` there.
 
-`dn auth status` shows which profile and key source are active; `dn auth logout`
-forgets the profile and deletes its keyring entry.
+`dn auth status` shows which profile and key source are active, and the
+organization and key name the API reports for that key (`--offline` skips the
+API call); `dn auth logout` forgets the profile and deletes its keyring entry.
 
 ### Profiles
 

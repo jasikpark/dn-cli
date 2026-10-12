@@ -4,16 +4,16 @@ use anyhow::{Context, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::api::{ApiError, Client};
-use crate::cli::{AuthLoginArgs, AuthLogoutArgs, AuthSwitchArgs};
+use crate::cli::{AuthLoginArgs, AuthLogoutArgs, AuthStatusArgs, AuthSwitchArgs};
 use crate::config::{
     Active, AuthFile, AuthLock, Config, DEFAULT_PROFILE, KEYRING, KeySource, Profile,
     api_key_env_is_set, api_url, auth_path, check_api_url, normalize_api_url, normalize_op_ref,
     op_read, remove_file_if_present, requested_profile, select_profile, stored_api_url,
     validate_op_ref,
 };
-use crate::error::InvalidArgument;
+use crate::error::{InvalidArgument, ReportedInOutput, error_envelope};
 use crate::keystore;
-use crate::output::{print_json, render_table};
+use crate::output::{print_json, render_table, sanitize_for_display};
 
 const API_KEYS_URL: &str = "https://admin.defined.net/settings/api-keys/add";
 
@@ -393,10 +393,18 @@ fn read_login_key(args: &AuthLoginArgs) -> anyhow::Result<LoginKey> {
     Ok(LoginKey::Keyring(key))
 }
 
-/// Read-only introspection: never resolves a secret and never fails on a
-/// misconfigured key — unreadable credentials, a bad reference, or a blank
-/// env var is reported as `source: "invalid"` so callers can branch on it.
-pub fn auth_status(profile_flag: Option<&str>, json: bool) -> anyhow::Result<()> {
+/// The local half never fails on a misconfigured key: unreadable credentials,
+/// a bad reference, or a blank env var is reported as `source: "invalid"` so
+/// callers can branch on it. Unless `--offline`, a configured key is then
+/// resolved and sent to `/v2/whoami`; if that fails (`op read`, the keyring,
+/// an unusable URL, the network, or the API rejecting the key) the local
+/// report is still printed, with the failure in `owner_error` under `--json`,
+/// and the command exits 1.
+pub fn auth_status(
+    args: &AuthStatusArgs,
+    profile_flag: Option<&str>,
+    json: bool,
+) -> anyhow::Result<()> {
     let auth_path = auth_path()?;
     let active = Active::load(profile_flag);
     let profile = active.as_ref().ok().and_then(|a| a.profile.as_ref());
@@ -408,16 +416,39 @@ pub fn auth_status(profile_flag: Option<&str>, json: bool) -> anyhow::Result<()>
         Ok(None) => ("none", None, None),
         Err(e) => ("invalid", None, Some(format!("{e:#}"))),
     };
+    let owner = match &source {
+        Ok(Some(key_source)) if !args.offline => {
+            let active = Active {
+                source: Some((*key_source).clone()),
+                profile_name: profile_name.clone(),
+                profile: profile.cloned(),
+            };
+            Some(
+                Config::from_active(active)
+                    .and_then(|config| Client::new(config).whoami())
+                    .and_then(|w| key_owner(&w)),
+            )
+        }
+        _ => None,
+    }
+    .transpose();
 
     if json {
-        return print_json(&json!({
+        let (owner_value, owner_error) = match &owner {
+            Ok(found) => (found.clone(), None),
+            Err(e) => (None, Some(error_envelope(e))),
+        };
+        print_json(&json!({
             "source": label,
             "profile": profile_name,
             "api_key_ref": reference,
             "message": message,
             "auth_path": auth_path,
             "api_url": api_url,
-        }));
+            "owner": owner_value,
+            "owner_error": owner_error,
+        }))?;
+        return owner.map(|_| ()).map_err(|e| ReportedInOutput(e).into());
     }
 
     if let Some(name) = &profile_name {
@@ -443,7 +474,38 @@ pub fn auth_status(profile_flag: Option<&str>, json: bool) -> anyhow::Result<()>
         Err(e) => println!("API key: invalid — {e:#}"),
     }
     println!("API URL: {api_url}");
+    if let Some(owner) = owner? {
+        // Names are set by whoever can edit the organization or key, so strip
+        // terminal escapes like any other API-supplied text.
+        let field = |v: &Value, key| sanitize_for_display(v[key].as_str().unwrap_or("(unknown)"));
+        let org = &owner["organization"];
+        println!(
+            "Organization: {} ({} plan)",
+            field(org, "name"),
+            field(org, "plan")
+        );
+        println!("Key: {}", field(&owner["key"], "name"));
+    }
     Ok(())
+}
+
+/// The parts of a `/v2/whoami` response that `auth status` reports. Picked
+/// field by field so nothing else the API adds to the organization (such as
+/// internal flags) leaks into `--json` output. A body without the key and
+/// organization IDs is an error: agents read a non-null `owner` as a
+/// confirmed account.
+fn key_owner(whoami: &Value) -> anyhow::Result<Value> {
+    let data = &whoami["data"];
+    let actor = &data["actor"];
+    let org = &data["organization"];
+    let has_id = |v: &Value| v["id"].as_str().is_some_and(|id| !id.is_empty());
+    if !has_id(actor) || !has_id(org) {
+        bail!("unexpected /v2/whoami response: missing the key or organization ID");
+    }
+    Ok(json!({
+        "key": { "id": actor["id"], "name": actor["name"] },
+        "organization": { "id": org["id"], "name": org["name"], "plan": org["plan"] },
+    }))
 }
 
 pub fn auth_list(json: bool) -> anyhow::Result<()> {
@@ -573,4 +635,40 @@ pub fn auth_logout(
         print!("{}", render_profiles(&auth));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn key_owner_keeps_only_the_reported_fields() {
+        let whoami = json!({"data": {
+            "actorType": "apiKey",
+            "actor": {"id": "apikey-1", "name": "ci", "organizationID": "org-1"},
+            "organization": {"id": "org-1", "name": "Example", "plan": "free",
+                "featureFlags": {"internal": true}},
+        }});
+        assert_eq!(
+            key_owner(&whoami).unwrap(),
+            json!({
+                "key": {"id": "apikey-1", "name": "ci"},
+                "organization": {"id": "org-1", "name": "Example", "plan": "free"},
+            })
+        );
+    }
+
+    #[test]
+    fn key_owner_rejects_a_body_without_ids() {
+        for body in [
+            json!({}),
+            json!({"data": {"actor": {"id": "apikey-1"}, "organization": {}}}),
+            json!({"data": {"actor": {}, "organization": {"id": "org-1"}}}),
+            json!({"data": {"actor": {"id": ""}, "organization": {"id": "org-1"}}}),
+        ] {
+            assert!(key_owner(&body).is_err(), "{body}");
+        }
+    }
 }

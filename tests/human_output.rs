@@ -62,7 +62,8 @@ fn serve(routes: &'static [Route]) -> String {
 /// Run `dn args` against `url` from an empty config dir, plus any files in
 /// `config`, and render what a person would see: stdout, then stderr and the
 /// exit code when there are any. The mock's random port reads as `<API_URL>`,
-/// and the test binary's path in next-page hints as `dn`.
+/// the temporary config dir as `<CONFIG_DIR>`, and the test binary's path in
+/// next-page hints as `dn`.
 fn transcript(url: &str, config: &[(&str, &str)], args: &[&str]) -> String {
     let dir = tempfile::tempdir().unwrap();
     for (name, contents) in config {
@@ -73,6 +74,8 @@ fn transcript(url: &str, config: &[(&str, &str)], args: &[&str]) -> String {
         .env("DN_CONFIG_DIR", dir.path())
         .env("DEFINED_API_URL", url)
         .env("DEFINED_API_KEY", "fake-test-key")
+        .env_remove("DN_PROFILE")
+        .env("PATH", "")
         .output()
         .unwrap();
     let mut shown = format!("$ dn {}\n", args.join(" "));
@@ -86,6 +89,7 @@ fn transcript(url: &str, config: &[(&str, &str)], args: &[&str]) -> String {
     }
     shown
         .replace(url, "<API_URL>")
+        .replace(dir.path().to_str().unwrap(), "<CONFIG_DIR>")
         .replace(env!("CARGO_BIN_EXE_dn"), "dn")
 }
 
@@ -239,6 +243,25 @@ const EMPTY_ROUTES: &[Route] = &[
     ("GET", "/v1/audit-logs", OK, EMPTY_PAGE),
 ];
 
+/// A whoami body carrying a field `auth status` must not pass through.
+const WHOAMI_ROUTES: &[Route] = &[(
+    "GET",
+    "/v2/whoami",
+    OK,
+    r#"{"data":{"actorType":"apiKey",
+    "actor":{"id":"dnkey-EXAMPLE","organizationID":"org-EXAMPLE","createdByUserID":"",
+             "name":"CI read-only","createdAt":"2026-01-02T03:04:05Z"},
+    "organization":{"id":"org-EXAMPLE","name":"Example Org","plan":"pro",
+                    "createdAt":"2022-01-02T03:04:05Z","featureFlags":{"SOME_FLAG":true}}}}"#,
+)];
+
+const UNAUTHORIZED_ROUTES: &[Route] = &[(
+    "GET",
+    "/v2/whoami",
+    "401 Unauthorized",
+    r#"{"errors":[{"code":"ERR_UNAUTHORIZED","message":"invalid API key"}]}"#,
+)];
+
 const ERROR_ROUTES: &[Route] = &[
     (
         "GET",
@@ -321,8 +344,16 @@ human_output! {
     error_forbidden: "A 403 on a list, naming the missing scope.",
         ERROR_ROUTES, &[], &["network", "list"];
 
-    auth_status: "Auth status with the key taken from DEFINED_API_KEY.",
-        &[], &[], &["auth", "status"];
+    auth_status: "Auth status names the key and its organization, as the API reports them.",
+        WHOAMI_ROUTES, &[], &["auth", "status"];
+    auth_status_json: "Auth status --json carries the key and organization, and nothing else whoami returns.",
+        WHOAMI_ROUTES, &[], &["--json", "auth", "status"];
+    auth_status_rejected: "Auth status with a key the API rejects: the local lines, then the error, exit 1.",
+        UNAUTHORIZED_ROUTES, &[], &["auth", "status"];
+    auth_status_rejected_json: "Auth status --json with a key the API rejects: the local report with owner_error, exit 1.",
+        UNAUTHORIZED_ROUTES, &[], &["--json", "auth", "status"];
+    auth_status_offline: "Auth status --offline reports the key source without calling the API.",
+        &[], &[], &["auth", "status", "--offline"];
     auth_list_empty: "Auth list before any login.",
         &[], &[], &["auth", "list"];
     auth_list: "Auth list with two profiles, the default marked *.",

@@ -1,0 +1,7 @@
+---
+source: tests/human_output.rs
+description: Auth status --offline reports the key source without calling the API.
+---
+$ dn auth status --offline
+API key: DEFINED_API_KEY (raw value in environment)
+API URL: <API_URL>

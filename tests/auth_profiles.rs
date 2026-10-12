@@ -13,8 +13,9 @@ use serde_json::{Value, json};
 
 const LEGACY: &str = r#"{"api_key_ref":"op://Personal/dn/credential"}"#;
 
-/// Run `dn` against `dir` as its config directory, with no key in the
-/// environment and an API URL that refuses connections.
+/// Run `dn` against `dir` as its config directory, with no key or API URL in
+/// the environment and no `op` on PATH. A profile without a stored URL talks
+/// to the production API, so `auth status` here needs `--offline`.
 fn dn(dir: &Path, args: &[&str]) -> Output {
     dn_with(dir, args, &[])
 }
@@ -27,6 +28,9 @@ fn dn_with(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         .env_remove("DEFINED_API_KEY")
         .env_remove("DEFINED_API_URL")
         .env_remove("DN_PROFILE")
+        // No `op` on PATH: the stored references below are shaped like real
+        // ones, and resolving one would prompt 1Password and send the key out.
+        .env("PATH", "")
         .stdin(Stdio::null());
     for (key, value) in env {
         command.env(key, value);
@@ -60,7 +64,7 @@ fn any_call_migrates_the_old_layout_once() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("auth.json"), LEGACY).unwrap();
 
-    let first = dn(dir.path(), &["auth", "status", "--json"]);
+    let first = dn(dir.path(), &["auth", "status", "--offline", "--json"]);
     assert!(first.status.success(), "{first:?}");
     assert_eq!(auth_json(dir.path()), migrated());
     assert!(stderr(&first).contains("converted"), "{first:?}");
@@ -69,7 +73,7 @@ fn any_call_migrates_the_old_layout_once() {
     assert_eq!(status["source"], "file");
     assert_eq!(status["api_key_ref"], "op://Personal/dn/credential");
 
-    let second = dn(dir.path(), &["auth", "status", "--json"]);
+    let second = dn(dir.path(), &["auth", "status", "--offline", "--json"]);
     assert!(second.status.success(), "{second:?}");
     assert!(second.stderr.is_empty(), "{second:?}");
     assert_eq!(stdout_json(&second), status);
@@ -95,7 +99,7 @@ fn run_in_parallel(dir: &Path, n: usize) {
     let children: Vec<_> = (0..n)
         .map(|_| {
             Command::new(env!("CARGO_BIN_EXE_dn"))
-                .args(["auth", "status", "--json"])
+                .args(["auth", "status", "--offline", "--json"])
                 .env("DN_CONFIG_DIR", dir)
                 .env_remove("DEFINED_API_KEY")
                 .env_remove("DEFINED_API_URL")
@@ -164,7 +168,7 @@ fn a_read_only_directory_warns_and_still_runs() {
         return;
     }
 
-    let output = dn(dir.path(), &["auth", "status", "--json"]);
+    let output = dn(dir.path(), &["auth", "status", "--offline", "--json"]);
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
 
     assert!(output.status.success(), "{output:?}");
@@ -181,7 +185,7 @@ fn a_corrupt_file_is_not_migrated() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("auth.json"), "not valid JSON").unwrap();
 
-    let output = dn(dir.path(), &["auth", "status", "--json"]);
+    let output = dn(dir.path(), &["auth", "status", "--offline", "--json"]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(stdout_json(&output)["source"], "invalid");
     assert!(!stderr(&output).contains("migrat"), "{output:?}");
@@ -272,7 +276,7 @@ fn profiles_can_be_added_listed_switched_and_removed() {
     );
 
     let status = |args: &[&str], env: &[(&str, &str)]| {
-        let mut all = vec!["auth", "status", "--json"];
+        let mut all = vec!["auth", "status", "--offline", "--json"];
         all.extend_from_slice(args);
         stdout_json(&dn_with(d, &all, env))
     };
@@ -371,7 +375,7 @@ fn config_api_url_moves_into_the_default_profile() {
     )
     .unwrap();
 
-    let output = dn(d, &["auth", "status", "--json"]);
+    let output = dn(d, &["auth", "status", "--offline", "--json"]);
     assert!(output.status.success(), "{output:?}");
     assert!(stderr(&output).contains("moved api_url"), "{output:?}");
     assert_eq!(stdout_json(&output)["api_url"], "https://staging.example");
@@ -397,7 +401,7 @@ fn config_api_url_alone_becomes_a_keyless_default_profile() {
 
     let output = dn_with(
         d,
-        &["auth", "status", "--json"],
+        &["auth", "status", "--offline", "--json"],
         &[("DEFINED_API_KEY", "k")],
     );
     assert!(output.status.success(), "{output:?}");
@@ -437,7 +441,7 @@ fn config_api_url_never_overrides_a_profile_url() {
     )
     .unwrap();
 
-    let status = stdout_json(&dn(d, &["auth", "status", "--json"]));
+    let status = stdout_json(&dn(d, &["auth", "status", "--offline", "--json"]));
     assert_eq!(status["api_url"], "https://profile.example");
     assert!(!d.join("config.json").exists());
 }
@@ -733,7 +737,7 @@ fn a_missing_or_dangling_default_is_repaired_on_read() {
         r#"{"version":2,"default_profile":"gone","profiles":{"b":{"key":"op://v/b/f"},"a":{"key":"op://v/a/f"}}}"#,
     )
     .unwrap();
-    let status = stdout_json(&dn(d, &["auth", "status", "--json"]));
+    let status = stdout_json(&dn(d, &["auth", "status", "--offline", "--json"]));
     assert_eq!(status["profile"], "a");
     assert_eq!(status["api_key_ref"], "op://v/a/f");
     assert_eq!(
@@ -765,7 +769,7 @@ fn config_api_url_goes_to_the_actual_default_and_differences_are_noted() {
         r#"{"api_url":"https://stg.example"}"#,
     )
     .unwrap();
-    let output = dn(d, &["auth", "status", "--json"]);
+    let output = dn(d, &["auth", "status", "--offline", "--json"]);
     assert!(output.status.success(), "{output:?}");
     let auth = auth_json(d);
     assert_eq!(
@@ -780,7 +784,7 @@ fn config_api_url_goes_to_the_actual_default_and_differences_are_noted() {
         r#"{"api_url":"https://other.example"}"#,
     )
     .unwrap();
-    let output = dn(d, &["auth", "status", "--json"]);
+    let output = dn(d, &["auth", "status", "--offline", "--json"]);
     assert!(
         stderr(&output).contains("dropped api_url https://other.example"),
         "{output:?}"
@@ -841,7 +845,7 @@ fn a_config_json_that_cant_be_rewritten_is_reported_once_per_call() {
         return;
     }
 
-    let first = dn(d, &["auth", "status", "--json"]);
+    let first = dn(d, &["auth", "status", "--offline", "--json"]);
     assert!(first.status.success(), "{first:?}");
     let err = stderr(&first);
     assert!(err.contains("moved api_url"), "{err}");
@@ -856,7 +860,7 @@ fn a_config_json_that_cant_be_rewritten_is_reported_once_per_call() {
         .unwrap()
         .modified()
         .unwrap();
-    let second = dn(d, &["auth", "status", "--json"]);
+    let second = dn(d, &["auth", "status", "--offline", "--json"]);
     let err = stderr(&second);
     assert!(!err.contains("moved api_url"), "{err}");
     assert!(err.contains("remove it by hand"), "{err}");
@@ -868,4 +872,57 @@ fn a_config_json_that_cant_be_rewritten_is_reported_once_per_call() {
         before
     );
     fs::set_permissions(&managed, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Run `auth status --json` without `--offline` against a listener that
+/// never answers, returning the output and whether `dn` connected to it.
+/// The child has exited by the time this checks, so any connection it made
+/// is already queued.
+fn status_online(dir: &Path) -> (Output, bool) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let output = dn_with(
+        dir,
+        &["auth", "status", "--json"],
+        &[("DEFINED_API_URL", &url)],
+    );
+    (output, listener.accept().is_ok())
+}
+
+#[test]
+fn status_without_a_key_makes_no_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let (output, connected) = status_online(dir.path());
+    assert!(output.status.success(), "{output:?}");
+    let status = stdout_json(&output);
+    assert_eq!(status["source"], "none");
+    assert!(status["owner"].is_null(), "{status}");
+    assert!(status["owner_error"].is_null(), "{status}");
+    assert!(!connected, "auth status called the API");
+}
+
+#[test]
+fn status_with_an_invalid_source_makes_no_request() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("auth.json"), "not valid JSON").unwrap();
+    let (output, connected) = status_online(dir.path());
+    let status = stdout_json(&output);
+    assert_eq!(status["source"], "invalid");
+    assert!(status["owner"].is_null(), "{status}");
+    assert!(!connected, "auth status called the API");
+}
+
+#[test]
+fn status_reports_a_failed_op_read_after_the_local_setup() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("auth.json"), LEGACY).unwrap();
+    let (output, connected) = status_online(dir.path());
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let status = stdout_json(&output);
+    assert_eq!(status["source"], "file");
+    assert_eq!(status["api_key_ref"], "op://Personal/dn/credential");
+    assert!(status["owner"].is_null(), "{status}");
+    assert_eq!(status["owner_error"]["errors"][0]["code"], "ERR_LOCAL");
+    assert!(!connected, "auth status called the API without a key");
 }
