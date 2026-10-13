@@ -232,6 +232,59 @@ fn login_verifies_the_key_before_storing_it() {
 }
 
 #[test]
+fn login_accepts_a_key_without_host_list_permission() {
+    let env = Env::new();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        let mut line = String::new();
+        let mut authorization = String::new();
+        while reader.read_line(&mut line).unwrap() > 2 {
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("authorization: ") {
+                authorization = line[line.len() - value.len()..].trim().to_string();
+            }
+            line.clear();
+        }
+        let (status, body) = if request_line.trim() == "GET /v2/whoami HTTP/1.1"
+            && authorization == "Bearer scoped-key"
+        {
+            (
+                "200 OK",
+                r#"{"data":{"actorType":"apiKey","actor":{"id":"dnkey-test"},"organization":{"id":"org-test"}},"metadata":{}}"#,
+            )
+        } else {
+            (
+                "403 Forbidden",
+                r#"{"errors":[{"code":"ERR_FORBIDDEN","message":"missing hosts:list"}]}"#,
+            )
+        };
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        request_line
+    });
+
+    let output = env.run(
+        &["auth", "login", "--key-stdin", "--api-url", &url, "--json"],
+        "scoped-key",
+        &[],
+    );
+    let request_line = server.join().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(request_line.trim(), "GET /v2/whoami HTTP/1.1");
+    assert_eq!(env.keyring_entries(), json!({ "default": "scoped-key" }));
+    assert_eq!(env.auth_json()["profiles"]["default"]["key"], "keyring");
+}
+
+#[test]
 fn logging_out_removes_the_keyring_entry() {
     let env = Env::new();
     env.login("a", "key-a", &[]);

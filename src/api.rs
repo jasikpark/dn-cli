@@ -312,12 +312,10 @@ impl Client {
         Ok(json!({ "data": data, "metadata": metadata }))
     }
 
-    /// Prove a key works with the least privilege the CLI relies on: a
-    /// one-item `GET /v2/hosts` needs only `hosts:list`, so a key scoped
-    /// exactly as the README suggests still passes.
+    /// Prove a key works without requiring any resource permissions.
+    /// Individual commands report missing scopes when they are used.
     pub fn verify_key(&self) -> Result<()> {
-        self.get_with_query("/v2/hosts", &[("pageSize", "1")])
-            .map(|_| ())
+        self.whoami().map(|_| ())
     }
 
     /// Who the key belongs to: the key itself and its organization. Needs no
