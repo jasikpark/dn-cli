@@ -13,14 +13,14 @@ use crate::config::{
 };
 use crate::error::{InvalidArgument, ReportedInOutput, error_envelope};
 use crate::keystore;
-use crate::output::{print_json, render_table, sanitize_for_display};
+use crate::output::{OutputMode, print_json, render_table, sanitize_for_display};
 
 const API_KEYS_URL: &str = "https://admin.defined.net/settings/api-keys/add";
 
 pub fn auth_login(
     args: &AuthLoginArgs,
     profile_flag: Option<&str>,
-    json: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     // Verify against the URL the profile will be saved with, before taking
     // the lock: `op read` may wait on a 1Password prompt, and every other
@@ -95,8 +95,8 @@ pub fn auth_login(
     }
     let env_override = warn_env_override();
 
-    if json {
-        return print_json(&profiles_json(
+    match output {
+        OutputMode::Json => print_json(&profiles_json(
             &auth,
             json!({
                 "ok": true,
@@ -105,21 +105,23 @@ pub fn auth_login(
                 "env_override": env_override,
                 "keyring_left": keyring_left,
             }),
-        ));
+        )),
+        OutputMode::Human => {
+            match &key {
+                LoginKey::Keyring(_) => println!(
+                    "Saved profile \"{name}\" to {}, with its key in the OS keyring.",
+                    path.display()
+                ),
+                LoginKey::Reference(_) => println!(
+                    "Saved profile \"{name}\" to {}. `dn` will resolve its key with `op read` on every call.",
+                    path.display()
+                ),
+            }
+            print_default_change(previous_default.as_deref(), &auth);
+            print!("{}", render_profiles(&auth));
+            Ok(())
+        }
     }
-    match &key {
-        LoginKey::Keyring(_) => println!(
-            "Saved profile \"{name}\" to {}, with its key in the OS keyring.",
-            path.display()
-        ),
-        LoginKey::Reference(_) => println!(
-            "Saved profile \"{name}\" to {}. `dn` will resolve its key with `op read` on every call.",
-            path.display()
-        ),
-    }
-    print_default_change(previous_default.as_deref(), &auth);
-    print!("{}", render_profiles(&auth));
-    Ok(())
 }
 
 /// Record a login in auth.json under the lock: re-read it and apply only this
@@ -403,7 +405,7 @@ fn read_login_key(args: &AuthLoginArgs) -> anyhow::Result<LoginKey> {
 pub fn auth_status(
     args: &AuthStatusArgs,
     profile_flag: Option<&str>,
-    json: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let auth_path = auth_path()?;
     let active = Active::load(profile_flag);
@@ -433,7 +435,7 @@ pub fn auth_status(
     }
     .transpose();
 
-    if json {
+    if output == OutputMode::Json {
         let (owner_value, owner_error) = match &owner {
             Ok(found) => (found.clone(), None),
             Err(e) => (None, Some(error_envelope(e))),
@@ -508,16 +510,18 @@ fn key_owner(whoami: &Value) -> anyhow::Result<Value> {
     }))
 }
 
-pub fn auth_list(json: bool) -> anyhow::Result<()> {
+pub fn auth_list(output: OutputMode) -> anyhow::Result<()> {
     let auth = AuthFile::load()?;
-    if json {
-        return print_json(&profiles_json(&auth, Value::Null));
+    match output {
+        OutputMode::Json => print_json(&profiles_json(&auth, Value::Null)),
+        OutputMode::Human => {
+            print!("{}", render_profiles(&auth));
+            Ok(())
+        }
     }
-    print!("{}", render_profiles(&auth));
-    Ok(())
 }
 
-pub fn auth_switch(args: &AuthSwitchArgs, json: bool) -> anyhow::Result<()> {
+pub fn auth_switch(args: &AuthSwitchArgs, output: OutputMode) -> anyhow::Result<()> {
     let _lock = AuthLock::acquire()?;
     let mut auth = AuthFile::load()?;
     if !auth.profiles.contains_key(&args.name) {
@@ -530,25 +534,27 @@ pub fn auth_switch(args: &AuthSwitchArgs, json: bool) -> anyhow::Result<()> {
     let previous_default = auth.default_profile.clone();
     auth.default_profile = Some(args.name.clone());
     let path = auth.save()?;
-    if json {
-        return print_json(&profiles_json(
+    match output {
+        OutputMode::Json => print_json(&profiles_json(
             &auth,
             json!({ "ok": true, "auth_path": path }),
-        ));
+        )),
+        OutputMode::Human => {
+            if previous_default.as_deref() == Some(args.name.as_str()) {
+                println!("\"{}\" is already the default profile.", args.name);
+            } else {
+                print_default_change(previous_default.as_deref(), &auth);
+            }
+            print!("{}", render_profiles(&auth));
+            Ok(())
+        }
     }
-    if previous_default.as_deref() == Some(args.name.as_str()) {
-        println!("\"{}\" is already the default profile.", args.name);
-    } else {
-        print_default_change(previous_default.as_deref(), &auth);
-    }
-    print!("{}", render_profiles(&auth));
-    Ok(())
 }
 
 pub fn auth_logout(
     args: &AuthLogoutArgs,
     profile_flag: Option<&str>,
-    json: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let path = auth_path()?;
     let lock = AuthLock::acquire()?;
@@ -609,8 +615,8 @@ pub fn auth_logout(
     warn_relogged_profiles(&forget);
     let env_override = warn_env_override();
 
-    if json {
-        return print_json(&profiles_json(
+    match output {
+        OutputMode::Json => print_json(&profiles_json(
             &auth,
             json!({
                 "ok": true,
@@ -620,21 +626,23 @@ pub fn auth_logout(
                 "env_override": env_override,
                 "keyring_left": keyring_left,
             }),
-        ));
-    }
-    match (&profile, removed) {
-        (Some(name), _) => println!("Removed profile \"{name}\"."),
-        (None, true) => println!("Removed {}.", path.display()),
-        (None, false) => {
-            println!("No stored credentials to remove.");
-            return Ok(());
+        )),
+        OutputMode::Human => {
+            match (&profile, removed) {
+                (Some(name), _) => println!("Removed profile \"{name}\"."),
+                (None, true) => println!("Removed {}.", path.display()),
+                (None, false) => {
+                    println!("No stored credentials to remove.");
+                    return Ok(());
+                }
+            }
+            print_default_change(previous_default.as_deref(), &auth);
+            if !auth.profiles.is_empty() {
+                print!("{}", render_profiles(&auth));
+            }
+            Ok(())
         }
     }
-    print_default_change(previous_default.as_deref(), &auth);
-    if !auth.profiles.is_empty() {
-        print!("{}", render_profiles(&auth));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

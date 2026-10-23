@@ -8,14 +8,14 @@ use crate::cli::{PageArgs, RoleDeleteArgs, RoleGetArgs, TagDeleteArgs, TagGetArg
 use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
 use crate::ids::validate_id;
 use crate::output::{
-    count_field, data_object, print_json, print_list, render_table, sanitize_for_display, str_field,
+    OutputMode, count_field, data_object, print_list, render_table, sanitize_for_display, str_field,
 };
 
-pub fn roles_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Result<()> {
+pub fn roles_list(client: &Client, page: &PageArgs, output: OutputMode) -> anyhow::Result<()> {
     let headers = ["ID", "NAME", "RULES", "HOSTS", "DESCRIPTION"];
     print_list(
         &client.list_roles(page)?,
-        json,
+        output,
         "No roles found.",
         &headers,
         |rows| {
@@ -34,11 +34,11 @@ pub fn roles_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Resul
     )
 }
 
-pub fn tags_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Result<()> {
+pub fn tags_list(client: &Client, page: &PageArgs, output: OutputMode) -> anyhow::Result<()> {
     let headers = ["NAME", "RULES", "HOSTS", "DESCRIPTION", "PRIORITY"];
     print_list(
         &client.list_tags(page)?,
-        json,
+        output,
         "No tags found.",
         &headers,
         |rows| {
@@ -61,18 +61,18 @@ pub fn tags_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Result
     )
 }
 
-pub fn roles_get(client: &Client, args: &RoleGetArgs, json: bool) -> anyhow::Result<()> {
+pub fn roles_get(client: &Client, args: &RoleGetArgs, output: OutputMode) -> anyhow::Result<()> {
     let id = args.role_id.trim();
     validate_id("role", id)?;
-    print_rule_holder(client, &client.get_role(id)?, json, "role", render_role)
+    print_rule_holder(client, &client.get_role(id)?, output, "role", render_role)
 }
 
-pub fn tags_get(client: &Client, args: &TagGetArgs, json: bool) -> anyhow::Result<()> {
+pub fn tags_get(client: &Client, args: &TagGetArgs, output: OutputMode) -> anyhow::Result<()> {
     let name = args.tag.trim();
     print_rule_holder(
         client,
         &client.get_tag(name)?,
-        json,
+        output,
         "tag",
         |data, names| render_tag(data, name, names),
     )
@@ -80,7 +80,11 @@ pub fn tags_get(client: &Client, args: &TagGetArgs, json: bool) -> anyhow::Resul
 
 /// Delete one role. The confirmation names it and says how many hosts it is
 /// assigned to.
-pub fn roles_delete(client: &Client, args: &RoleDeleteArgs, json: bool) -> anyhow::Result<()> {
+pub fn roles_delete(
+    client: &Client,
+    args: &RoleDeleteArgs,
+    output: OutputMode,
+) -> anyhow::Result<()> {
     let id = args.role_id.trim();
     validate_id("role", id)?;
     let target = DeleteTarget {
@@ -93,7 +97,7 @@ pub fn roles_delete(client: &Client, args: &RoleDeleteArgs, json: bool) -> anyho
     confirm_and_delete(
         &target,
         args.yes,
-        json,
+        output,
         || {
             let data = &client.get_role(id)?["data"];
             Ok(Described {
@@ -107,7 +111,11 @@ pub fn roles_delete(client: &Client, args: &RoleDeleteArgs, json: bool) -> anyho
 
 /// Delete one tag. Tags are named by `key:value`, so the confirmation adds
 /// only how many hosts carry it.
-pub fn tags_delete(client: &Client, args: &TagDeleteArgs, json: bool) -> anyhow::Result<()> {
+pub fn tags_delete(
+    client: &Client,
+    args: &TagDeleteArgs,
+    output: OutputMode,
+) -> anyhow::Result<()> {
     let name = args.tag.trim();
     let target = DeleteTarget {
         kind: "tag",
@@ -119,7 +127,7 @@ pub fn tags_delete(client: &Client, args: &TagDeleteArgs, json: bool) -> anyhow:
     confirm_and_delete(
         &target,
         args.yes,
-        json,
+        output,
         || {
             Ok(Described {
                 name: String::new(),
@@ -135,16 +143,15 @@ pub fn tags_delete(client: &Client, args: &TagDeleteArgs, json: bool) -> anyhow:
 fn print_rule_holder(
     client: &Client,
     res: &Value,
-    json: bool,
+    output: OutputMode,
     holder: &str,
     render: impl FnOnce(&Value, &HashMap<String, String>) -> anyhow::Result<String>,
 ) -> anyhow::Result<()> {
-    if json {
-        return print_json(res);
-    }
-    let data = data_object(res, holder)?;
-    print!("{}", render(data, &rule_role_names(client, data))?);
-    Ok(())
+    output.emit(res, |res| {
+        let data = data_object(res, holder)?;
+        print!("{}", render(data, &rule_role_names(client, data))?);
+        Ok(())
+    })
 }
 
 /// Role names for the roles `data.firewallRules` allow, resolved the way

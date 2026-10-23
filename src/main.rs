@@ -38,16 +38,20 @@ use crate::config::{
 };
 use crate::error::{InvalidArgument, json_requested, report_error, report_usage_error};
 use crate::ids::validate_id;
+use crate::output::OutputMode;
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
-        Err(err) => report_usage_error(err, json_requested(std::env::args_os())),
+        Err(err) => report_usage_error(
+            err,
+            OutputMode::from_flag(json_requested(std::env::args_os())),
+        ),
     };
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            report_error(&err, cli.json);
+            report_error(&err, cli.output_mode());
             ExitCode::FAILURE
         }
     }
@@ -65,6 +69,7 @@ fn report_migration(migration: Migration) {
 }
 
 fn preflight(cli: &Cli) -> anyhow::Result<()> {
+    let output = cli.output_mode();
     if let Some(profile) = &cli.profile {
         validate_profile_name(profile)?;
     }
@@ -78,7 +83,7 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             HostCommand::Search(args) => validate_search_preflight(args)?,
             HostCommand::Delete(args) => {
                 validate_id("host", &args.host_id)?;
-                preflight_delete(args.yes, cli.json)?;
+                preflight_delete(args.yes, output)?;
             }
             HostCommand::Get(args) => validate_id("host", &args.host_id)?,
             HostCommand::List(_) => {}
@@ -90,7 +95,7 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             command: RoleCommand::Delete(args),
         } => {
             validate_id("role", args.role_id.trim())?;
-            preflight_delete(args.yes, cli.json)?;
+            preflight_delete(args.yes, output)?;
         }
         Command::Network {
             command: NetworkCommand::Get(args),
@@ -99,7 +104,7 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             command: NetworkCommand::Delete(args),
         } => {
             validate_id("network", args.network_id.trim())?;
-            preflight_delete(args.yes, cli.json)?;
+            preflight_delete(args.yes, output)?;
         }
         Command::Tag {
             command: TagCommand::Get(args),
@@ -110,7 +115,7 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             command: TagCommand::Delete(args),
         } => {
             parse_tag(args.tag.trim())?;
-            preflight_delete(args.yes, cli.json)?;
+            preflight_delete(args.yes, output)?;
         }
         Command::Auth {
             command: AuthCommand::Switch(args),
@@ -121,14 +126,18 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             if let Some(url) = &args.api_url {
                 validate_api_url(url)?;
             }
-            match &args.reference {
-                Some(reference) => validate_op_ref(&normalize_op_ref(reference))?,
-                None if args.key_stdin && cli.json && std::io::stdin().is_terminal() => {
-                    bail!(KEY_STDIN_NEEDS_PIPE)
+            let stdin_is_tty = std::io::stdin().is_terminal();
+            match (&args.reference, output, stdin_is_tty) {
+                (Some(reference), _, _) => validate_op_ref(&normalize_op_ref(reference))?,
+                // `--key-stdin` under `--json` is an agent run: a terminal on
+                // stdin means nothing was piped in.
+                (None, OutputMode::Json, true) if args.key_stdin => bail!(KEY_STDIN_NEEDS_PIPE),
+                (None, _, _) if args.key_stdin => {}
+                // Nobody to prompt for the key.
+                (None, OutputMode::Json, _) | (None, OutputMode::Human, false) => {
+                    bail!(LOGIN_NEEDS_KEY)
                 }
-                None if args.key_stdin => {}
-                None if cli.json || !std::io::stdin().is_terminal() => bail!(LOGIN_NEEDS_KEY),
-                None => {}
+                (None, OutputMode::Human, true) => {}
             }
         }
         _ => {}
@@ -138,8 +147,9 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
 
 /// Refuse a delete that has nobody to confirm it and no `--yes`, before
 /// credentials are resolved.
-fn preflight_delete(yes: bool, json: bool) -> anyhow::Result<()> {
-    if delete_confirmation(yes, json, std::io::stdin().is_terminal()) == DeleteConfirmation::Refuse
+fn preflight_delete(yes: bool, output: OutputMode) -> anyhow::Result<()> {
+    if delete_confirmation(yes, output, std::io::stdin().is_terminal())
+        == DeleteConfirmation::Refuse
     {
         bail!(DELETE_NEEDS_YES);
     }
@@ -147,45 +157,46 @@ fn preflight_delete(yes: bool, json: bool) -> anyhow::Result<()> {
 }
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
+    let output = cli.output_mode();
     report_migration(migrate_to_profiles());
     preflight(cli).map_err(InvalidArgument)?;
 
     match &cli.command {
         Command::Auth { command } => match command {
-            AuthCommand::Login(args) => auth_login(args, cli.profile.as_deref(), cli.json)?,
-            AuthCommand::Status(args) => auth_status(args, cli.profile.as_deref(), cli.json)?,
-            AuthCommand::List => auth_list(cli.json)?,
-            AuthCommand::Switch(args) => auth_switch(args, cli.json)?,
-            AuthCommand::Logout(args) => auth_logout(args, cli.profile.as_deref(), cli.json)?,
+            AuthCommand::Login(args) => auth_login(args, cli.profile.as_deref(), output)?,
+            AuthCommand::Status(args) => auth_status(args, cli.profile.as_deref(), output)?,
+            AuthCommand::List => auth_list(output)?,
+            AuthCommand::Switch(args) => auth_switch(args, output)?,
+            AuthCommand::Logout(args) => auth_logout(args, cli.profile.as_deref(), output)?,
         },
         Command::Host { command } => {
             let client = api_client(cli)?;
             match command {
-                HostCommand::List(page) => hosts_list(&client, page, cli.json)?,
-                HostCommand::Get(args) => hosts_get(&client, args, cli.json)?,
-                HostCommand::Search(args) => hosts_search(&client, args, cli.json)?,
-                HostCommand::Create(args) => hosts_create(&client, args, cli.json)?,
-                HostCommand::Edit(args) => hosts_edit(&client, args, cli.json)?,
-                HostCommand::Delete(args) => hosts_delete(&client, args, cli.json)?,
+                HostCommand::List(page) => hosts_list(&client, page, output)?,
+                HostCommand::Get(args) => hosts_get(&client, args, output)?,
+                HostCommand::Search(args) => hosts_search(&client, args, output)?,
+                HostCommand::Create(args) => hosts_create(&client, args, output)?,
+                HostCommand::Edit(args) => hosts_edit(&client, args, output)?,
+                HostCommand::Delete(args) => hosts_delete(&client, args, output)?,
             }
         }
         Command::Network { command } => match command {
-            NetworkCommand::List(page) => networks_list(&api_client(cli)?, page, cli.json)?,
-            NetworkCommand::Get(args) => networks_get(&api_client(cli)?, args, cli.json)?,
-            NetworkCommand::Delete(args) => networks_delete(&api_client(cli)?, args, cli.json)?,
+            NetworkCommand::List(page) => networks_list(&api_client(cli)?, page, output)?,
+            NetworkCommand::Get(args) => networks_get(&api_client(cli)?, args, output)?,
+            NetworkCommand::Delete(args) => networks_delete(&api_client(cli)?, args, output)?,
         },
         Command::Role { command } => match command {
-            RoleCommand::List(page) => roles_list(&api_client(cli)?, page, cli.json)?,
-            RoleCommand::Get(args) => roles_get(&api_client(cli)?, args, cli.json)?,
-            RoleCommand::Delete(args) => roles_delete(&api_client(cli)?, args, cli.json)?,
+            RoleCommand::List(page) => roles_list(&api_client(cli)?, page, output)?,
+            RoleCommand::Get(args) => roles_get(&api_client(cli)?, args, output)?,
+            RoleCommand::Delete(args) => roles_delete(&api_client(cli)?, args, output)?,
         },
         Command::Tag { command } => match command {
-            TagCommand::List(page) => tags_list(&api_client(cli)?, page, cli.json)?,
-            TagCommand::Get(args) => tags_get(&api_client(cli)?, args, cli.json)?,
-            TagCommand::Delete(args) => tags_delete(&api_client(cli)?, args, cli.json)?,
+            TagCommand::List(page) => tags_list(&api_client(cli)?, page, output)?,
+            TagCommand::Get(args) => tags_get(&api_client(cli)?, args, output)?,
+            TagCommand::Delete(args) => tags_delete(&api_client(cli)?, args, output)?,
         },
         Command::AuditLog { command } => match command {
-            AuditLogCommand::List(args) => audit_log_list(&api_client(cli)?, args, cli.json)?,
+            AuditLogCommand::List(args) => audit_log_list(&api_client(cli)?, args, output)?,
         },
     }
 
@@ -197,7 +208,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
 /// mistaken for the real thing.
 fn api_client(cli: &Cli) -> anyhow::Result<Client> {
     let config = Config::load(cli.profile.as_deref())?;
-    if !cli.json
+    if cli.output_mode() == OutputMode::Human
         && let Some(note) = config.non_default_url_note()
     {
         eprintln!("{note}");

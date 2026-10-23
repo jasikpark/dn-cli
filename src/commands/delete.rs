@@ -6,7 +6,7 @@ use std::io::{BufRead, IsTerminal, Write};
 use anyhow::bail;
 use serde_json::{Value, json};
 
-use crate::output::{print_json, sanitize_for_display};
+use crate::output::{OutputMode, print_json, sanitize_for_display};
 
 pub const DELETE_NEEDS_YES: &str =
     "pass --yes to delete without a confirmation prompt when running non-interactively";
@@ -31,15 +31,18 @@ pub enum DeleteConfirmation {
 /// with no terminal behind it would hang a `--json` caller or a script, so it
 /// is refused rather than skipped. `--json` output never shows a name, so it
 /// skips the lookup too.
-pub fn delete_confirmation(yes: bool, json: bool, stdin_is_tty: bool) -> DeleteConfirmation {
-    if yes && json {
-        DeleteConfirmation::Skip
-    } else if yes {
-        DeleteConfirmation::Announce
-    } else if json || !stdin_is_tty {
-        DeleteConfirmation::Refuse
-    } else {
-        DeleteConfirmation::Prompt
+pub fn delete_confirmation(
+    yes: bool,
+    output: OutputMode,
+    stdin_is_tty: bool,
+) -> DeleteConfirmation {
+    match (yes, output, stdin_is_tty) {
+        (true, OutputMode::Json, _) => DeleteConfirmation::Skip,
+        (true, OutputMode::Human, _) => DeleteConfirmation::Announce,
+        (false, OutputMode::Json, _) | (false, OutputMode::Human, false) => {
+            DeleteConfirmation::Refuse
+        }
+        (false, OutputMode::Human, true) => DeleteConfirmation::Prompt,
     }
 }
 
@@ -77,11 +80,11 @@ pub struct DeleteTarget<'a> {
 pub fn confirm_and_delete(
     target: &DeleteTarget,
     yes: bool,
-    json: bool,
+    output: OutputMode,
     lookup: impl FnOnce() -> anyhow::Result<Described>,
     delete: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    let confirmation = delete_confirmation(yes, json, std::io::stdin().is_terminal());
+    let confirmation = delete_confirmation(yes, output, std::io::stdin().is_terminal());
     let name = run_delete(
         target,
         confirmation,
@@ -91,14 +94,16 @@ pub fn confirm_and_delete(
         delete,
     )?;
 
-    if json {
-        return print_json(&delete_json_payload(target.json_key, target.id));
+    match output {
+        OutputMode::Json => print_json(&delete_json_payload(target.json_key, target.id)),
+        OutputMode::Human => {
+            println!(
+                "Deleted {}.",
+                label(target.kind, &sanitize_for_display(target.id), &name)
+            );
+            Ok(())
+        }
     }
-    println!(
-        "Deleted {}.",
-        label(target.kind, &sanitize_for_display(target.id), &name)
-    );
-    Ok(())
 }
 
 /// The confirm-then-delete steps with the terminal passed in, so tests can
@@ -207,12 +212,12 @@ mod tests {
     fn delete_confirmation_never_prompts_when_yes_is_passed() {
         for tty in [false, true] {
             assert_eq!(
-                delete_confirmation(true, true, tty),
+                delete_confirmation(true, OutputMode::Json, tty),
                 DeleteConfirmation::Skip,
                 "--yes --json, tty={tty}"
             );
             assert_eq!(
-                delete_confirmation(true, false, tty),
+                delete_confirmation(true, OutputMode::Human, tty),
                 DeleteConfirmation::Announce,
                 "--yes, tty={tty}"
             );
@@ -223,12 +228,12 @@ mod tests {
     fn delete_confirmation_refuses_without_yes_when_nothing_can_answer() {
         // --json is an agent run: a prompt there would hang the caller.
         assert_eq!(
-            delete_confirmation(false, true, true),
+            delete_confirmation(false, OutputMode::Json, true),
             DeleteConfirmation::Refuse
         );
         // Piped stdin, human output: still nobody to ask.
         assert_eq!(
-            delete_confirmation(false, false, false),
+            delete_confirmation(false, OutputMode::Human, false),
             DeleteConfirmation::Refuse
         );
     }
@@ -236,7 +241,7 @@ mod tests {
     #[test]
     fn delete_confirmation_prompts_an_interactive_human() {
         assert_eq!(
-            delete_confirmation(false, false, true),
+            delete_confirmation(false, OutputMode::Human, true),
             DeleteConfirmation::Prompt
         );
     }

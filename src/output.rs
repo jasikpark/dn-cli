@@ -3,6 +3,38 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::api::next_cursor;
 
+/// Which face a command shows: the human tables and prose, or the `--json`
+/// envelope a script parses. Every command takes one so the choice is visible
+/// at the call site instead of riding along as a bare `bool`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputMode {
+    Human,
+    Json,
+}
+
+impl OutputMode {
+    /// The mode the `--json` flag selects.
+    pub fn from_flag(json: bool) -> Self {
+        if json { Self::Json } else { Self::Human }
+    }
+
+    /// Show one API response both ways: the pretty JSON itself under
+    /// `--json`, otherwise whatever `human` prints for it. `human` runs only
+    /// in human mode, so it may do extra lookups (a role's name) that `--json`
+    /// callers never pay for. When the `--json` payload isn't the value the
+    /// human view is built from, `match` on the mode instead.
+    pub fn emit(
+        self,
+        value: &Value,
+        human: impl FnOnce(&Value) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Json => print_json(value),
+            Self::Human => human(value),
+        }
+    }
+}
+
 pub fn print_json(value: &Value) -> anyhow::Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
@@ -12,31 +44,30 @@ pub fn print_json(value: &Value) -> anyhow::Result<()> {
 /// otherwise `empty` when `data` has no rows, else the table `rows` builds.
 pub fn print_list(
     res: &Value,
-    json: bool,
+    output: OutputMode,
     empty: &str,
     headers: &[&str],
     rows: impl FnOnce(&[Value]) -> Vec<Vec<String>>,
 ) -> anyhow::Result<()> {
-    if json {
-        return print_json(res);
-    }
-    let data = res
-        .get("data")
-        .and_then(Value::as_array)
-        .map_or(&[][..], Vec::as_slice);
-    let args: Vec<String> = std::env::args_os()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
-    let hints = page_hints(res.get("metadata").unwrap_or(&Value::Null), &args);
-    if !data.is_empty() {
-        print!("{}", render_table(headers, &rows(data)));
-    } else if hints.is_empty() {
-        println!("{empty}");
-    }
-    for line in hints {
-        eprintln!("{line}");
-    }
-    Ok(())
+    output.emit(res, |res| {
+        let data = res
+            .get("data")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        let args: Vec<String> = std::env::args_os()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let hints = page_hints(res.get("metadata").unwrap_or(&Value::Null), &args);
+        if !data.is_empty() {
+            print!("{}", render_table(headers, &rows(data)));
+        } else if hints.is_empty() {
+            println!("{empty}");
+        }
+        for line in hints {
+            eprintln!("{line}");
+        }
+        Ok(())
+    })
 }
 
 /// The command that fetches each neighbouring page, one line each, for
@@ -213,9 +244,39 @@ fn push_row(out: &mut String, cells: &[&str], widths: &[usize]) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn emit_runs_the_human_view_only_in_human_mode() {
+        let value = json!({"data": []});
+        for (mode, expect_human) in [(OutputMode::Human, true), (OutputMode::Json, false)] {
+            let ran = Cell::new(false);
+            let result = mode.emit(&value, |seen| {
+                assert_eq!(seen, &value);
+                ran.set(true);
+                Ok(())
+            });
+            assert!(result.is_ok(), "{mode:?}");
+            assert_eq!(ran.get(), expect_human, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn emit_surfaces_the_human_views_error() {
+        let err = OutputMode::Human
+            .emit(&Value::Null, |_| Err(anyhow::anyhow!("render failed")))
+            .unwrap_err();
+        assert_eq!(err.to_string(), "render failed");
+        assert!(
+            OutputMode::Json
+                .emit(&Value::Null, |_| unreachable!())
+                .is_ok()
+        );
+    }
 
     #[test]
     fn page_hints_name_each_neighbouring_page() {

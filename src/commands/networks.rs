@@ -5,11 +5,11 @@ use crate::cli::{NetworkDeleteArgs, NetworkGetArgs, PageArgs};
 use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
 use crate::ids::validate_id;
 use crate::output::{
-    count_field, data_object, joined_field, print_json, print_list, render_details,
+    OutputMode, count_field, data_object, joined_field, print_list, render_details,
     sanitize_for_display, str_field,
 };
 
-pub fn networks_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Result<()> {
+pub fn networks_list(client: &Client, page: &PageArgs, output: OutputMode) -> anyhow::Result<()> {
     let headers = [
         "ID",
         "NAME",
@@ -23,22 +23,25 @@ pub fn networks_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Re
     ];
     print_list(
         &client.list_networks(page)?,
-        json,
+        output,
         "No networks found.",
         &headers,
         |rows| rows.iter().map(|r| network_row(r).to_vec()).collect(),
     )
 }
 
-pub fn networks_get(client: &Client, args: &NetworkGetArgs, json: bool) -> anyhow::Result<()> {
+pub fn networks_get(
+    client: &Client,
+    args: &NetworkGetArgs,
+    output: OutputMode,
+) -> anyhow::Result<()> {
     let id = args.network_id.trim();
     validate_id("network", id)?;
     let res = client.get_network(id)?;
-    if json {
-        return print_json(&res);
-    }
-    print!("{}", render_network(data_object(&res, "network")?));
-    Ok(())
+    output.emit(&res, |res| {
+        print!("{}", render_network(data_object(res, "network")?));
+        Ok(())
+    })
 }
 
 /// The human view of a v2 network: its name, then the `network list` columns
@@ -79,7 +82,7 @@ fn render_network(data: &Value) -> String {
 pub fn networks_delete(
     client: &Client,
     args: &NetworkDeleteArgs,
-    json: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let id = args.network_id.trim();
     validate_id("network", id)?;
@@ -93,7 +96,7 @@ pub fn networks_delete(
     confirm_and_delete(
         &target,
         args.yes,
-        json,
+        output,
         || {
             let data = &client.get_network(id)?["data"];
             Ok(Described {
