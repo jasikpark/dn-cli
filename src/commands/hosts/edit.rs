@@ -5,7 +5,7 @@ use super::{host_fields, parse_tag};
 use crate::api::Client;
 use crate::cli::HostEditArgs;
 use crate::ids::validate_id;
-use crate::output::{print_json, sanitize_for_display, str_field};
+use crate::output::{OutputMode, print_json, sanitize_for_display, str_field};
 
 /// Catch user errors (empty flags, bad tag format) before credentials are
 /// resolved, matching `validate_create_preflight`'s contract.
@@ -79,7 +79,7 @@ fn build_edit_body(data: &Value, args: &HostEditArgs) -> anyhow::Result<(Value, 
 
 /// Edit a host via read-modify-write: GET the current host, apply deltas,
 /// PUT the full object back (the v3 PUT is whole-object, not partial).
-pub fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::Result<()> {
+pub fn hosts_edit(client: &Client, args: &HostEditArgs, output: OutputMode) -> anyhow::Result<()> {
     let id = args.host_id.as_str();
     let res = client.get_host(id)?;
     let data = res
@@ -87,7 +87,7 @@ pub fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::R
         .ok_or_else(|| anyhow!("host response missing 'data'"))?;
 
     let (body, missing_tags) = build_edit_body(data, args)?;
-    if !json {
+    if !output.is_json() {
         for tag in &missing_tags {
             eprintln!(
                 "warning: tag \"{}\" was not present on the host",
@@ -97,7 +97,7 @@ pub fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::R
     }
 
     let updated = if body == *data {
-        if !json {
+        if !output.is_json() {
             eprintln!("nothing changed — skipping update");
             return Ok(());
         }
@@ -105,7 +105,7 @@ pub fn hosts_edit(client: &Client, args: &HostEditArgs, json: bool) -> anyhow::R
     } else {
         client.update_host(id, &body)?
     };
-    if json {
+    if output.is_json() {
         return print_json(&updated);
     }
 

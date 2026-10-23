@@ -4,9 +4,13 @@ use serde_json::{Value, json};
 use crate::api::Client;
 use crate::cli::HostCreateArgs;
 use crate::error::InvalidArgument;
-use crate::output::{joined_field, print_json, sanitize_for_display, str_field};
+use crate::output::{OutputMode, joined_field, print_json, sanitize_for_display, str_field};
 
-pub fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyhow::Result<()> {
+pub fn hosts_create(
+    client: &Client,
+    args: &HostCreateArgs,
+    output: OutputMode,
+) -> anyhow::Result<()> {
     // Auto-assigning an IPv4 means sending the network's own IPv4 prefix, so
     // the network is fetched only while IPv4 is still undecided.
     let auto_ipv4 = wants_auto_ipv4(args);
@@ -36,7 +40,7 @@ pub fn hosts_create(client: &Client, args: &HostCreateArgs, json: bool) -> anyho
 
     let body = build_host_create_body(args, &network_id, ipv4_cidr.as_deref());
     let res = client.create_host_with_enrollment(&body)?;
-    if json {
+    if output.is_json() {
         return print_json(&res);
     }
     print!("{}", render_host_create_human(&res));

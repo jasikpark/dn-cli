@@ -13,11 +13,11 @@ use serde_json::Value;
 
 use crate::api::Client;
 use crate::cli::{HostSearchArgs, PageArgs};
-use crate::output::{joined_field, print_list, sanitize_for_display, str_field};
+use crate::output::{OutputMode, joined_field, print_list, sanitize_for_display, str_field};
 
-pub fn hosts_list(client: &Client, page: &PageArgs, json: bool) -> anyhow::Result<()> {
+pub fn hosts_list(client: &Client, page: &PageArgs, output: OutputMode) -> anyhow::Result<()> {
     let res = client.list_hosts(page)?;
-    render_hosts(&res, json, "No hosts found.")
+    render_hosts(&res, output, "No hosts found.")
 }
 
 /// The `filter.search` term for `dn host search`, joined from the argv words
@@ -39,20 +39,24 @@ pub fn validate_search_preflight(args: &HostSearchArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn hosts_search(client: &Client, args: &HostSearchArgs, json: bool) -> anyhow::Result<()> {
+pub fn hosts_search(
+    client: &Client,
+    args: &HostSearchArgs,
+    output: OutputMode,
+) -> anyhow::Result<()> {
     let query = search_query(args);
     let res = client.search_hosts(&query, &args.page)?;
     render_hosts(
         &res,
-        json,
+        output,
         &format!("No hosts match \"{}\".", sanitize_for_display(&query)),
     )
 }
 
 /// Render a hosts envelope. Shared by `host list` and `host search` so the
 /// two can't drift on columns.
-fn render_hosts(res: &Value, json: bool, empty_msg: &str) -> anyhow::Result<()> {
-    print_list(res, json, empty_msg, &HOST_HEADERS, host_rows)
+fn render_hosts(res: &Value, output: OutputMode, empty_msg: &str) -> anyhow::Result<()> {
+    print_list(res, output, empty_msg, &HOST_HEADERS, host_rows)
 }
 
 const HOST_HEADERS: [&str; 3] = ["ID", "NAME", "IP ADDRESSES"];
@@ -192,13 +196,13 @@ mod tests {
         let res = json!({"data": [{"id": "host-1"}], "metadata": {"hasNextPage": false}});
         // Just assert it doesn't error on the JSON path; the payload is the
         // client's, rendered verbatim.
-        assert!(render_hosts(&res, true, "unused").is_ok());
+        assert!(render_hosts(&res, OutputMode::Json, "unused").is_ok());
     }
 
     #[test]
     fn render_hosts_human_empty_uses_the_supplied_message() {
         let res = json!({"data": [], "metadata": {}});
-        assert!(render_hosts(&res, false, "No hosts match \"x\".").is_ok());
+        assert!(render_hosts(&res, OutputMode::Human, "No hosts match \"x\".").is_ok());
     }
 
     #[test]

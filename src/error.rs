@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use crate::api::ApiError;
-use crate::output::sanitize_for_display;
+use crate::output::{OutputMode, sanitize_for_display};
 
 /// Error codes for failures raised before (or without) an API response. They
 /// share the API's `ERR_*` namespace so agents branch on one field, and
@@ -54,8 +54,8 @@ fn local_error_envelope(code: &str, message: &str) -> Value {
 /// hint to stderr. Every envelope has the API's `{status, request_id, errors}`
 /// shape: typed [`ApiError`]s carry the server's own, and local failures get
 /// `status: null` and a local code (see [`error_envelope`]).
-pub fn report_error(err: &anyhow::Error, json: bool) {
-    if json
+pub fn report_error(err: &anyhow::Error, output: OutputMode) {
+    if output.is_json()
         && err.downcast_ref::<ReportedInOutput>().is_none()
         && let Ok(payload) = serde_json::to_string(&error_envelope(err))
     {
@@ -113,8 +113,8 @@ pub fn json_requested<I: IntoIterator<Item = std::ffi::OsString>>(args: I) -> bo
 /// under `--json`, so a caller parsing stdout reads the failure instead of
 /// empty input. Clap's own message still goes to stderr, and the exit code
 /// stays 2 so usage errors remain distinct from runtime failures (1).
-pub fn report_usage_error(err: clap::Error, json: bool) -> ! {
-    if json && err.use_stderr() {
+pub fn report_usage_error(err: clap::Error, output: OutputMode) -> ! {
+    if output.is_json() && err.use_stderr() {
         println!("{}", local_error_envelope(ERR_USAGE, &usage_message(&err)));
     }
     err.exit()

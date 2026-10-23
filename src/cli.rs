@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
 use crate::api::MAX_PAGE_SIZE;
+use crate::output::OutputMode;
 
 #[derive(Parser)]
 #[command(name = "dn", version, about = "CLI for the Defined Networking API")]
@@ -14,6 +15,13 @@ pub struct Cli {
     pub profile: Option<String>,
     #[command(subcommand)]
     pub command: Command,
+}
+
+impl Cli {
+    /// The output mode `--json` selected.
+    pub fn output(&self) -> OutputMode {
+        OutputMode::from_flag(self.json)
+    }
 }
 
 #[derive(Subcommand)]

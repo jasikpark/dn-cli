@@ -2,9 +2,13 @@ use serde_json::Value;
 
 use crate::api::Client;
 use crate::cli::AuditLogListArgs;
-use crate::output::{print_list, str_field};
+use crate::output::{OutputMode, print_list, str_field};
 
-pub fn audit_log_list(client: &Client, args: &AuditLogListArgs, json: bool) -> anyhow::Result<()> {
+pub fn audit_log_list(
+    client: &Client,
+    args: &AuditLogListArgs,
+    output: OutputMode,
+) -> anyhow::Result<()> {
     let mut params = Vec::new();
     if let Some(id) = &args.target {
         params.push(("filter.targetID", id.as_str()));
@@ -16,7 +20,7 @@ pub fn audit_log_list(client: &Client, args: &AuditLogListArgs, json: bool) -> a
     let headers = ["TIME", "EVENT", "TARGET TYPE", "TARGET", "ACTOR"];
     print_list(
         &res,
-        json,
+        output,
         "No audit log entries found.",
         &headers,
         |rows| rows.iter().map(|r| audit_log_row(r).to_vec()).collect(),

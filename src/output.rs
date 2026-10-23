@@ -3,6 +3,26 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::api::next_cursor;
 
+/// Which face a command shows: the human tables and prose, or the `--json`
+/// envelope a script parses. Every command takes one so the choice is visible
+/// at the call site instead of riding along as a bare `bool`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputMode {
+    Human,
+    Json,
+}
+
+impl OutputMode {
+    /// The mode the `--json` flag selects.
+    pub fn from_flag(json: bool) -> Self {
+        if json { Self::Json } else { Self::Human }
+    }
+
+    pub fn is_json(self) -> bool {
+        self == Self::Json
+    }
+}
+
 pub fn print_json(value: &Value) -> anyhow::Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
@@ -12,12 +32,12 @@ pub fn print_json(value: &Value) -> anyhow::Result<()> {
 /// otherwise `empty` when `data` has no rows, else the table `rows` builds.
 pub fn print_list(
     res: &Value,
-    json: bool,
+    output: OutputMode,
     empty: &str,
     headers: &[&str],
     rows: impl FnOnce(&[Value]) -> Vec<Vec<String>>,
 ) -> anyhow::Result<()> {
-    if json {
+    if output.is_json() {
         return print_json(res);
     }
     let data = res

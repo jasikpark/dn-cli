@@ -3,11 +3,15 @@ use crate::api::Client;
 use crate::cli::HostDeleteArgs;
 use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete};
 use crate::ids::validate_id;
-use crate::output::sanitize_for_display;
+use crate::output::{OutputMode, sanitize_for_display};
 
 /// Delete one host. The confirmation names it by name and IPs, so a mistyped
 /// id is visible before the device loses its access.
-pub fn hosts_delete(client: &Client, args: &HostDeleteArgs, json: bool) -> anyhow::Result<()> {
+pub fn hosts_delete(
+    client: &Client,
+    args: &HostDeleteArgs,
+    output: OutputMode,
+) -> anyhow::Result<()> {
     validate_id("host", &args.host_id)?;
     let id = args.host_id.as_str();
     let target = DeleteTarget {
@@ -20,7 +24,7 @@ pub fn hosts_delete(client: &Client, args: &HostDeleteArgs, json: bool) -> anyho
     confirm_and_delete(
         &target,
         args.yes,
-        json,
+        output,
         || {
             let res = client.get_host(id)?;
             let (_, name, ips) = host_fields(&res["data"]);

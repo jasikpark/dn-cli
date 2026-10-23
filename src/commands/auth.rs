@@ -13,14 +13,14 @@ use crate::config::{
 };
 use crate::error::{InvalidArgument, ReportedInOutput, error_envelope};
 use crate::keystore;
-use crate::output::{print_json, render_table, sanitize_for_display};
+use crate::output::{OutputMode, print_json, render_table, sanitize_for_display};
 
 const API_KEYS_URL: &str = "https://admin.defined.net/settings/api-keys/add";
 
 pub fn auth_login(
     args: &AuthLoginArgs,
     profile_flag: Option<&str>,
-    json: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     // Verify against the URL the profile will be saved with, before taking
     // the lock: `op read` may wait on a 1Password prompt, and every other
@@ -95,7 +95,7 @@ pub fn auth_login(
     }
     let env_override = warn_env_override();
 
-    if json {
+    if output.is_json() {
         return print_json(&profiles_json(
             &auth,
             json!({
@@ -403,7 +403,7 @@ fn read_login_key(args: &AuthLoginArgs) -> anyhow::Result<LoginKey> {
 pub fn auth_status(
     args: &AuthStatusArgs,
     profile_flag: Option<&str>,
-    json: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let auth_path = auth_path()?;
     let active = Active::load(profile_flag);
@@ -433,7 +433,7 @@ pub fn auth_status(
     }
     .transpose();
 
-    if json {
+    if output.is_json() {
         let (owner_value, owner_error) = match &owner {
             Ok(found) => (found.clone(), None),
             Err(e) => (None, Some(error_envelope(e))),
@@ -508,16 +508,16 @@ fn key_owner(whoami: &Value) -> anyhow::Result<Value> {
     }))
 }
 
-pub fn auth_list(json: bool) -> anyhow::Result<()> {
+pub fn auth_list(output: OutputMode) -> anyhow::Result<()> {
     let auth = AuthFile::load()?;
-    if json {
+    if output.is_json() {
         return print_json(&profiles_json(&auth, Value::Null));
     }
     print!("{}", render_profiles(&auth));
     Ok(())
 }
 
-pub fn auth_switch(args: &AuthSwitchArgs, json: bool) -> anyhow::Result<()> {
+pub fn auth_switch(args: &AuthSwitchArgs, output: OutputMode) -> anyhow::Result<()> {
     let _lock = AuthLock::acquire()?;
     let mut auth = AuthFile::load()?;
     if !auth.profiles.contains_key(&args.name) {
@@ -530,7 +530,7 @@ pub fn auth_switch(args: &AuthSwitchArgs, json: bool) -> anyhow::Result<()> {
     let previous_default = auth.default_profile.clone();
     auth.default_profile = Some(args.name.clone());
     let path = auth.save()?;
-    if json {
+    if output.is_json() {
         return print_json(&profiles_json(
             &auth,
             json!({ "ok": true, "auth_path": path }),
@@ -548,7 +548,7 @@ pub fn auth_switch(args: &AuthSwitchArgs, json: bool) -> anyhow::Result<()> {
 pub fn auth_logout(
     args: &AuthLogoutArgs,
     profile_flag: Option<&str>,
-    json: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let path = auth_path()?;
     let lock = AuthLock::acquire()?;
@@ -609,7 +609,7 @@ pub fn auth_logout(
     warn_relogged_profiles(&forget);
     let env_override = warn_env_override();
 
-    if json {
+    if output.is_json() {
         return print_json(&profiles_json(
             &auth,
             json!({
