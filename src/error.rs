@@ -55,7 +55,7 @@ fn local_error_envelope(code: &str, message: &str) -> Value {
 /// shape: typed [`ApiError`]s carry the server's own, and local failures get
 /// `status: null` and a local code (see [`error_envelope`]).
 pub fn report_error(err: &anyhow::Error, output: OutputMode) {
-    if output.is_json()
+    if let OutputMode::Json = output
         && err.downcast_ref::<ReportedInOutput>().is_none()
         && let Ok(payload) = serde_json::to_string(&error_envelope(err))
     {
@@ -114,7 +114,9 @@ pub fn json_requested<I: IntoIterator<Item = std::ffi::OsString>>(args: I) -> bo
 /// empty input. Clap's own message still goes to stderr, and the exit code
 /// stays 2 so usage errors remain distinct from runtime failures (1).
 pub fn report_usage_error(err: clap::Error, output: OutputMode) -> ! {
-    if output.is_json() && err.use_stderr() {
+    if let OutputMode::Json = output
+        && err.use_stderr()
+    {
         println!("{}", local_error_envelope(ERR_USAGE, &usage_message(&err)));
     }
     err.exit()

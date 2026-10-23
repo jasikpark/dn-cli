@@ -4,8 +4,7 @@ use crate::api::Client;
 use crate::cli::HostGetArgs;
 use crate::ids::validate_id;
 use crate::output::{
-    OutputMode, data_object, joined_field, print_json, render_details, sanitize_for_display,
-    str_field,
+    OutputMode, data_object, joined_field, render_details, sanitize_for_display, str_field,
 };
 
 /// Show one host. `--json` prints the response as-is; the human view resolves
@@ -13,18 +12,17 @@ use crate::output::{
 pub fn hosts_get(client: &Client, args: &HostGetArgs, output: OutputMode) -> anyhow::Result<()> {
     validate_id("host", &args.host_id)?;
     let res = client.get_host(&args.host_id)?;
-    if output.is_json() {
-        return print_json(&res);
-    }
-    let data = data_object(&res, "host")?;
-    let role = data["roleID"].as_str().filter(|id| !id.is_empty());
-    // A malformed id from the server is shown as-is rather than spliced
-    // into a lookup path.
-    let role_name = role
-        .filter(|id| validate_id("role", id).is_ok())
-        .and_then(|id| role_name(client, id));
-    print!("{}", render_host(data, role_name.as_deref()));
-    Ok(())
+    output.emit(&res, |res| {
+        let data = data_object(res, "host")?;
+        let role = data["roleID"].as_str().filter(|id| !id.is_empty());
+        // A malformed id from the server is shown as-is rather than spliced
+        // into a lookup path.
+        let role_name = role
+            .filter(|id| validate_id("role", id).is_ok())
+            .and_then(|id| role_name(client, id));
+        print!("{}", render_host(data, role_name.as_deref()));
+        Ok(())
+    })
 }
 
 /// The name of role `id`, or `None` with a stderr note when the lookup fails

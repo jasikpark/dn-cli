@@ -5,7 +5,7 @@ use super::{host_fields, parse_tag};
 use crate::api::Client;
 use crate::cli::HostEditArgs;
 use crate::ids::validate_id;
-use crate::output::{OutputMode, print_json, sanitize_for_display, str_field};
+use crate::output::{OutputMode, sanitize_for_display, str_field};
 
 /// Catch user errors (empty flags, bad tag format) before credentials are
 /// resolved, matching `validate_create_preflight`'s contract.
@@ -87,7 +87,7 @@ pub fn hosts_edit(client: &Client, args: &HostEditArgs, output: OutputMode) -> a
         .ok_or_else(|| anyhow!("host response missing 'data'"))?;
 
     let (body, missing_tags) = build_edit_body(data, args)?;
-    if !output.is_json() {
+    if let OutputMode::Human = output {
         for tag in &missing_tags {
             eprintln!(
                 "warning: tag \"{}\" was not present on the host",
@@ -96,44 +96,43 @@ pub fn hosts_edit(client: &Client, args: &HostEditArgs, output: OutputMode) -> a
         }
     }
 
-    let updated = if body == *data {
-        if !output.is_json() {
+    // A no-op edit still echoes the host under `--json`, so a script sees the
+    // same shape either way; a human just hears nothing happened.
+    let updated = match (body == *data, output) {
+        (true, OutputMode::Human) => {
             eprintln!("nothing changed — skipping update");
             return Ok(());
         }
-        res
-    } else {
-        client.update_host(id, &body)?
+        (true, OutputMode::Json) => res,
+        (false, _) => client.update_host(id, &body)?,
     };
-    if output.is_json() {
-        return print_json(&updated);
-    }
-
-    let data = &updated["data"];
-    let (_, name, ips) = host_fields(data);
-    let name = sanitize_for_display(name);
-    let ips = sanitize_for_display(&ips);
-    if name.is_empty() {
-        print!("Updated host {id}");
-    } else {
-        print!("Updated host \"{name}\" ({id})");
-    }
-    if !ips.is_empty() {
-        print!(" [{ips}]");
-    }
-    println!();
-    match str_field(data, "roleID") {
-        "" => println!("  Role: (none)"),
-        role => println!("  Role: {}", sanitize_for_display(role)),
-    }
-    let final_tags = extract_tags(data);
-    if final_tags.is_empty() {
-        println!("  Tags: (none)");
-    }
-    for tag in &final_tags {
-        println!("  {}", sanitize_for_display(tag));
-    }
-    Ok(())
+    output.emit(&updated, |updated| {
+        let data = &updated["data"];
+        let (_, name, ips) = host_fields(data);
+        let name = sanitize_for_display(name);
+        let ips = sanitize_for_display(&ips);
+        if name.is_empty() {
+            print!("Updated host {id}");
+        } else {
+            print!("Updated host \"{name}\" ({id})");
+        }
+        if !ips.is_empty() {
+            print!(" [{ips}]");
+        }
+        println!();
+        match str_field(data, "roleID") {
+            "" => println!("  Role: (none)"),
+            role => println!("  Role: {}", sanitize_for_display(role)),
+        }
+        let final_tags = extract_tags(data);
+        if final_tags.is_empty() {
+            println!("  Tags: (none)");
+        }
+        for tag in &final_tags {
+            println!("  {}", sanitize_for_display(tag));
+        }
+        Ok(())
+    })
 }
 
 /// Pull the tags out of a host object as a list of `key:value` strings.

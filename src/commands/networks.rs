@@ -5,7 +5,7 @@ use crate::cli::{NetworkDeleteArgs, NetworkGetArgs, PageArgs};
 use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
 use crate::ids::validate_id;
 use crate::output::{
-    OutputMode, count_field, data_object, joined_field, print_json, print_list, render_details,
+    OutputMode, count_field, data_object, joined_field, print_list, render_details,
     sanitize_for_display, str_field,
 };
 
@@ -38,11 +38,10 @@ pub fn networks_get(
     let id = args.network_id.trim();
     validate_id("network", id)?;
     let res = client.get_network(id)?;
-    if output.is_json() {
-        return print_json(&res);
-    }
-    print!("{}", render_network(data_object(&res, "network")?));
-    Ok(())
+    output.emit(&res, |res| {
+        print!("{}", render_network(data_object(res, "network")?));
+        Ok(())
+    })
 }
 
 /// The human view of a v2 network: its name, then the `network list` columns

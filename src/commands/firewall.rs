@@ -8,8 +8,7 @@ use crate::cli::{PageArgs, RoleDeleteArgs, RoleGetArgs, TagDeleteArgs, TagGetArg
 use crate::commands::delete::{DeleteTarget, Described, confirm_and_delete, host_count_detail};
 use crate::ids::validate_id;
 use crate::output::{
-    OutputMode, count_field, data_object, print_json, print_list, render_table,
-    sanitize_for_display, str_field,
+    OutputMode, count_field, data_object, print_list, render_table, sanitize_for_display, str_field,
 };
 
 pub fn roles_list(client: &Client, page: &PageArgs, output: OutputMode) -> anyhow::Result<()> {
@@ -148,12 +147,11 @@ fn print_rule_holder(
     holder: &str,
     render: impl FnOnce(&Value, &HashMap<String, String>) -> anyhow::Result<String>,
 ) -> anyhow::Result<()> {
-    if output.is_json() {
-        return print_json(res);
-    }
-    let data = data_object(res, holder)?;
-    print!("{}", render(data, &rule_role_names(client, data))?);
-    Ok(())
+    output.emit(res, |res| {
+        let data = data_object(res, holder)?;
+        print!("{}", render(data, &rule_role_names(client, data))?);
+        Ok(())
+    })
 }
 
 /// Role names for the roles `data.firewallRules` allow, resolved the way

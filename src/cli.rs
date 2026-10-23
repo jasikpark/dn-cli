@@ -19,7 +19,7 @@ pub struct Cli {
 
 impl Cli {
     /// The output mode `--json` selected.
-    pub fn output(&self) -> OutputMode {
+    pub fn output_mode(&self) -> OutputMode {
         OutputMode::from_flag(self.json)
     }
 }

@@ -36,14 +36,13 @@ pub fn delete_confirmation(
     output: OutputMode,
     stdin_is_tty: bool,
 ) -> DeleteConfirmation {
-    if yes && output.is_json() {
-        DeleteConfirmation::Skip
-    } else if yes {
-        DeleteConfirmation::Announce
-    } else if output.is_json() || !stdin_is_tty {
-        DeleteConfirmation::Refuse
-    } else {
-        DeleteConfirmation::Prompt
+    match (yes, output, stdin_is_tty) {
+        (true, OutputMode::Json, _) => DeleteConfirmation::Skip,
+        (true, OutputMode::Human, _) => DeleteConfirmation::Announce,
+        (false, OutputMode::Json, _) | (false, OutputMode::Human, false) => {
+            DeleteConfirmation::Refuse
+        }
+        (false, OutputMode::Human, true) => DeleteConfirmation::Prompt,
     }
 }
 
@@ -95,14 +94,16 @@ pub fn confirm_and_delete(
         delete,
     )?;
 
-    if output.is_json() {
-        return print_json(&delete_json_payload(target.json_key, target.id));
+    match output {
+        OutputMode::Json => print_json(&delete_json_payload(target.json_key, target.id)),
+        OutputMode::Human => {
+            println!(
+                "Deleted {}.",
+                label(target.kind, &sanitize_for_display(target.id), &name)
+            );
+            Ok(())
+        }
     }
-    println!(
-        "Deleted {}.",
-        label(target.kind, &sanitize_for_display(target.id), &name)
-    );
-    Ok(())
 }
 
 /// The confirm-then-delete steps with the terminal passed in, so tests can

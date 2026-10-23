@@ -95,8 +95,8 @@ pub fn auth_login(
     }
     let env_override = warn_env_override();
 
-    if output.is_json() {
-        return print_json(&profiles_json(
+    match output {
+        OutputMode::Json => print_json(&profiles_json(
             &auth,
             json!({
                 "ok": true,
@@ -105,21 +105,23 @@ pub fn auth_login(
                 "env_override": env_override,
                 "keyring_left": keyring_left,
             }),
-        ));
+        )),
+        OutputMode::Human => {
+            match &key {
+                LoginKey::Keyring(_) => println!(
+                    "Saved profile \"{name}\" to {}, with its key in the OS keyring.",
+                    path.display()
+                ),
+                LoginKey::Reference(_) => println!(
+                    "Saved profile \"{name}\" to {}. `dn` will resolve its key with `op read` on every call.",
+                    path.display()
+                ),
+            }
+            print_default_change(previous_default.as_deref(), &auth);
+            print!("{}", render_profiles(&auth));
+            Ok(())
+        }
     }
-    match &key {
-        LoginKey::Keyring(_) => println!(
-            "Saved profile \"{name}\" to {}, with its key in the OS keyring.",
-            path.display()
-        ),
-        LoginKey::Reference(_) => println!(
-            "Saved profile \"{name}\" to {}. `dn` will resolve its key with `op read` on every call.",
-            path.display()
-        ),
-    }
-    print_default_change(previous_default.as_deref(), &auth);
-    print!("{}", render_profiles(&auth));
-    Ok(())
 }
 
 /// Record a login in auth.json under the lock: re-read it and apply only this
@@ -433,7 +435,7 @@ pub fn auth_status(
     }
     .transpose();
 
-    if output.is_json() {
+    if let OutputMode::Json = output {
         let (owner_value, owner_error) = match &owner {
             Ok(found) => (found.clone(), None),
             Err(e) => (None, Some(error_envelope(e))),
@@ -510,11 +512,13 @@ fn key_owner(whoami: &Value) -> anyhow::Result<Value> {
 
 pub fn auth_list(output: OutputMode) -> anyhow::Result<()> {
     let auth = AuthFile::load()?;
-    if output.is_json() {
-        return print_json(&profiles_json(&auth, Value::Null));
+    match output {
+        OutputMode::Json => print_json(&profiles_json(&auth, Value::Null)),
+        OutputMode::Human => {
+            print!("{}", render_profiles(&auth));
+            Ok(())
+        }
     }
-    print!("{}", render_profiles(&auth));
-    Ok(())
 }
 
 pub fn auth_switch(args: &AuthSwitchArgs, output: OutputMode) -> anyhow::Result<()> {
@@ -530,19 +534,21 @@ pub fn auth_switch(args: &AuthSwitchArgs, output: OutputMode) -> anyhow::Result<
     let previous_default = auth.default_profile.clone();
     auth.default_profile = Some(args.name.clone());
     let path = auth.save()?;
-    if output.is_json() {
-        return print_json(&profiles_json(
+    match output {
+        OutputMode::Json => print_json(&profiles_json(
             &auth,
             json!({ "ok": true, "auth_path": path }),
-        ));
+        )),
+        OutputMode::Human => {
+            if previous_default.as_deref() == Some(args.name.as_str()) {
+                println!("\"{}\" is already the default profile.", args.name);
+            } else {
+                print_default_change(previous_default.as_deref(), &auth);
+            }
+            print!("{}", render_profiles(&auth));
+            Ok(())
+        }
     }
-    if previous_default.as_deref() == Some(args.name.as_str()) {
-        println!("\"{}\" is already the default profile.", args.name);
-    } else {
-        print_default_change(previous_default.as_deref(), &auth);
-    }
-    print!("{}", render_profiles(&auth));
-    Ok(())
 }
 
 pub fn auth_logout(
@@ -609,8 +615,8 @@ pub fn auth_logout(
     warn_relogged_profiles(&forget);
     let env_override = warn_env_override();
 
-    if output.is_json() {
-        return print_json(&profiles_json(
+    match output {
+        OutputMode::Json => print_json(&profiles_json(
             &auth,
             json!({
                 "ok": true,
@@ -620,21 +626,23 @@ pub fn auth_logout(
                 "env_override": env_override,
                 "keyring_left": keyring_left,
             }),
-        ));
-    }
-    match (&profile, removed) {
-        (Some(name), _) => println!("Removed profile \"{name}\"."),
-        (None, true) => println!("Removed {}.", path.display()),
-        (None, false) => {
-            println!("No stored credentials to remove.");
-            return Ok(());
+        )),
+        OutputMode::Human => {
+            match (&profile, removed) {
+                (Some(name), _) => println!("Removed profile \"{name}\"."),
+                (None, true) => println!("Removed {}.", path.display()),
+                (None, false) => {
+                    println!("No stored credentials to remove.");
+                    return Ok(());
+                }
+            }
+            print_default_change(previous_default.as_deref(), &auth);
+            if !auth.profiles.is_empty() {
+                print!("{}", render_profiles(&auth));
+            }
+            Ok(())
         }
     }
-    print_default_change(previous_default.as_deref(), &auth);
-    if !auth.profiles.is_empty() {
-        print!("{}", render_profiles(&auth));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
