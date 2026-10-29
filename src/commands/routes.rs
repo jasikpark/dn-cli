@@ -76,6 +76,19 @@ fn routable_cidrs(data: &Value) -> Vec<String> {
 /// a rule this code can't read is an error, not a wider rule.
 fn render_route(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Result<String> {
     let rules = checked_firewall_rules(data)?;
+    // The shared check covers the rule's source and ports; a route rule
+    // also has a destination, which a blank cell would misreport as "all".
+    for (i, rule) in rules.iter().enumerate() {
+        if rule
+            .get("localCIDR")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            anyhow::bail!(
+                "unexpected response: firewall rule {i}: localCIDR missing or not a string"
+            );
+        }
+    }
 
     let id = sanitize_for_display(str_field(data, "id"));
     let mut out = match sanitize_for_display(str_field(data, "name")) {
@@ -161,19 +174,28 @@ mod tests {
 
     #[test]
     fn render_route_lists_ranges_then_rules_by_local_cidr() {
-        let data = json!({"id": "route-A", "name": "Office LAN", "description": "to the printers",
-        "routerHostID": "host-R", "createdAt": "2024-03-15T13:59:09Z",
+        let data = json!({"id": "route-WWEWSRIBWD77UALE2F3BIOXCFM", "name": "Office LAN", "description": "to the printers",
+        "routerHostID": "host-ESTNM4GWPFZRIZVV3WT63CHS4E", "createdAt": "2024-03-15T13:59:09Z",
         "routableCIDRs": {"192.168.14.0/26": {"install": true}},
         "firewallRules": [
             {"localCIDR": "192.168.14.56/32", "protocol": "TCP", "portRange": {"from": 22, "to": 22},
-             "allowedRoleID": "role-G", "allowedTags": null, "description": "ssh to the printer"},
+             "allowedRoleID": "role-TBY4VAJYZPCHTUL7AEEJSBZA6I", "allowedTags": null, "description": "ssh to the printer"},
             {"localCIDR": "192.168.14.0/26", "protocol": "ICMP", "portRange": null,
              "allowedRoleID": null, "allowedTags": null, "description": "ping"}
         ]});
-        let names = HashMap::from([("role-G".to_string(), "Admins".to_string())]);
+        let names = HashMap::from([(
+            "role-TBY4VAJYZPCHTUL7AEEJSBZA6I".to_string(),
+            "Admins".to_string(),
+        )]);
         let shown = render_route(&data, &names).unwrap();
-        assert!(shown.starts_with("Office LAN (route-A)\n"), "{shown}");
-        assert!(shown.contains("Router host:     host-R\n"), "{shown}");
+        assert!(
+            shown.starts_with("Office LAN (route-WWEWSRIBWD77UALE2F3BIOXCFM)\n"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("Router host:     host-ESTNM4GWPFZRIZVV3WT63CHS4E\n"),
+            "{shown}"
+        );
         assert!(
             shown.contains("Routable CIDRs:  192.168.14.0/26\n"),
             "{shown}"
@@ -185,17 +207,39 @@ mod tests {
 
     #[test]
     fn render_route_without_a_router_or_rules_says_so() {
-        let data = json!({"id": "route-A", "name": "", "description": "", "routerHostID": null,
+        let data = json!({"id": "route-WWEWSRIBWD77UALE2F3BIOXCFM", "name": "", "description": "", "routerHostID": null,
             "routableCIDRs": {}, "firewallRules": []});
         let shown = render_route(&data, &HashMap::new()).unwrap();
-        assert!(shown.starts_with("route-A\n"), "{shown}");
+        assert!(
+            shown.starts_with("route-WWEWSRIBWD77UALE2F3BIOXCFM\n"),
+            "{shown}"
+        );
         assert!(shown.contains("Router host:  none\n"), "{shown}");
         assert!(shown.contains("No firewall rules"), "{shown}");
     }
 
     #[test]
     fn render_route_refuses_a_rule_it_cannot_read() {
-        let data = json!({"id": "route-A", "firewallRules": [{"protocol": "FOO"}]});
-        assert!(render_route(&data, &HashMap::new()).is_err());
+        let rule = |local: serde_json::Value| {
+            let mut r = json!({"protocol": "TCP", "portRange": null, "allowedRoleID": null,
+                               "allowedTags": null, "description": ""});
+            if !local.is_null() {
+                r["localCIDR"] = local;
+            }
+            json!({"id": "route-WWEWSRIBWD77UALE2F3BIOXCFM", "firewallRules": [r]})
+        };
+        assert!(render_route(&rule(json!("10.0.0.0/8")), &HashMap::new()).is_ok());
+        for bad in [
+            json!({"id": "route-WWEWSRIBWD77UALE2F3BIOXCFM", "firewallRules": [{"protocol": "FOO"}]}),
+            rule(json!(null)),
+            rule(json!("")),
+            rule(json!(7)),
+        ] {
+            let err = render_route(&bad, &HashMap::new()).unwrap_err().to_string();
+            assert!(
+                err.contains("unexpected response: firewall rule 0"),
+                "{err}"
+            );
+        }
     }
 }

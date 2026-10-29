@@ -221,7 +221,7 @@ const NETWORK_ROUTES: &[Route] = &[
     ("DELETE", "/v1/networks/network-EXAMPLE", OK, DELETED),
 ];
 
-const ROUTE: &str = r#"{"data":{"id":"route-EXAMPLE","name":"Office LAN",
+const ROUTE: &str = r#"{"data":{"id":"route-YD7TPBTG7LCK3B7WUHZV3MP4VA","name":"Office LAN",
     "description":"to the printers","routerHostID":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
     "routableCIDRs":{"192.168.14.0/26":{"install":true},"10.9.0.0/16":{"install":false}},
     "createdAt":"2024-03-15T13:59:09Z","modifiedAt":"2024-03-15T13:59:09Z",
@@ -233,17 +233,22 @@ const ROUTE: &str = r#"{"data":{"id":"route-EXAMPLE","name":"Office LAN",
     "metadata":{}}"#;
 
 const ROUTES: &str = r#"{"data":[
-    {"id":"route-EXAMPLE","name":"Office LAN","description":"to the printers",
+    {"id":"route-YD7TPBTG7LCK3B7WUHZV3MP4VA","name":"Office LAN","description":"to the printers",
      "routerHostID":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
      "routableCIDRs":{"192.168.14.0/26":{"install":true},"10.9.0.0/16":{"install":false}},
      "firewallRulesCount":2},
-    {"id":"route-LAB","name":"Lab","description":"","routerHostID":null,
+    {"id":"route-SUFN7H7Z4OLWAQ5KUU522Q3BPA","name":"Lab","description":"","routerHostID":null,
      "routableCIDRs":{},"firewallRulesCount":0}
   ],"metadata":{"hasNextPage":false}}"#;
 
 const ROUTE_LIST_ROUTES: &[Route] = &[
     ("GET", "/v1/routes", OK, ROUTES),
-    ("GET", "/v1/routes/route-EXAMPLE", OK, ROUTE),
+    (
+        "GET",
+        "/v1/routes/route-YD7TPBTG7LCK3B7WUHZV3MP4VA",
+        OK,
+        ROUTE,
+    ),
     ("GET", "/v1/roles", OK, ROLES),
 ];
 
@@ -356,7 +361,7 @@ human_output! {
     route_list: "Route table, marking a range hosts don't install.",
         ROUTE_LIST_ROUTES, &[], &["route", "list"];
     route_get: "Route detail view with rules by local CIDR and the allowed role named.",
-        ROUTE_LIST_ROUTES, &[], &["route", "get", "route-EXAMPLE"];
+        ROUTE_LIST_ROUTES, &[], &["route", "get", "route-YD7TPBTG7LCK3B7WUHZV3MP4VA"];
     role_list: "Role table.",
         ROLE_ROUTES, &[], &["role", "list"];
     role_get: "Role with its firewall rules; a rule allowing another role shows it by name.",
