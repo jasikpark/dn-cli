@@ -2,7 +2,7 @@
 source: tests/human_output.rs
 description: Role delete with --yes names the deleted role.
 ---
-$ dn role delete role-WEB --yes
-Deleted role "Web servers" (role-WEB).
+$ dn role delete role-MCXBVCRC56AF3ZNM57X7BO5JKE --yes
+Deleted role "Web servers" (role-MCXBVCRC56AF3ZNM57X7BO5JKE).
 --- stderr
 note: using <API_URL> (from DEFINED_API_URL)

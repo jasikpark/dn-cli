@@ -2,7 +2,7 @@
 source: tests/human_output.rs
 description: Network delete with --yes names the deleted network.
 ---
-$ dn network delete network-EXAMPLE --yes
-Deleted network "office" (network-EXAMPLE).
+$ dn network delete network-Z2B7RBHWBP3VSDAPEWFWKMOMZU --yes
+Deleted network "office" (network-Z2B7RBHWBP3VSDAPEWFWKMOMZU).
 --- stderr
 note: using <API_URL> (from DEFINED_API_URL)

@@ -2,7 +2,7 @@
 source: tests/human_output.rs
 description: A role edit that changes nothing skips the update and says so.
 ---
-$ dn role edit role-WEB --add-rule tcp/443,desc=https from anywhere
+$ dn role edit role-MCXBVCRC56AF3ZNM57X7BO5JKE --add-rule tcp/443,desc=https from anywhere
 --- stderr
 note: using <API_URL> (from DEFINED_API_URL)
 nothing changed — skipping update

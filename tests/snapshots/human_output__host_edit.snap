@@ -4,7 +4,7 @@ description: "Edited host with its final tags, warning about a removed tag it ne
 ---
 $ dn host edit host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI --add-tag team:infra --remove-tag gone:1
 Updated host "Build Server" (host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI) [100.100.0.12, fd00:c0:c0:2966:d3bf:a55d:49a0:6f18]
-  Role: role-WEB
+  Role: role-MCXBVCRC56AF3ZNM57X7BO5JKE
   env:prod
   site:hou
   team:infra

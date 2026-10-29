@@ -91,14 +91,23 @@ fn network_delete_with_yes_deletes_on_v1_without_a_lookup() {
     let (url, seen) = serve();
     let out = dn(
         &url,
-        &["--json", "network", "delete", "network-XYZ", "--yes"],
+        &[
+            "--json",
+            "network",
+            "delete",
+            "network-7NZPRPRZTN6QKF4UYKP4K5XCZE",
+            "--yes",
+        ],
     );
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         stdout_json(&out),
-        serde_json::json!({"id": "network-XYZ", "deleted": true})
+        serde_json::json!({"id": "network-7NZPRPRZTN6QKF4UYKP4K5XCZE", "deleted": true})
     );
-    assert_eq!(*seen.lock().unwrap(), ["DELETE /v1/networks/network-XYZ"]);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        ["DELETE /v1/networks/network-7NZPRPRZTN6QKF4UYKP4K5XCZE"]
+    );
 }
 
 #[test]
@@ -141,12 +150,27 @@ fn tag_delete_sanitizes_the_typed_name_it_prints() {
 #[test]
 fn deletes_without_yes_are_refused_before_any_request() {
     for args in [
-        &["host", "delete", "host-1"][..],
-        &["--json", "host", "delete", "host-1"],
-        &["role", "delete", "role-1"],
-        &["--json", "role", "delete", "role-1"],
-        &["network", "delete", "network-1"],
-        &["--json", "network", "delete", "network-1"],
+        &["host", "delete", "host-FBNRAHQYQLWXWMCY7L4XP46ZXI"][..],
+        &[
+            "--json",
+            "host",
+            "delete",
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
+        ],
+        &["role", "delete", "role-4A2TRFEEBUMSGYTBSZRNVWJUQE"],
+        &[
+            "--json",
+            "role",
+            "delete",
+            "role-4A2TRFEEBUMSGYTBSZRNVWJUQE",
+        ],
+        &["network", "delete", "network-PP4ZXJCLB4VVUNOUYC67UW3UAE"],
+        &[
+            "--json",
+            "network",
+            "delete",
+            "network-PP4ZXJCLB4VVUNOUYC67UW3UAE",
+        ],
         &["tag", "delete", "env:prod"],
         &["--json", "tag", "delete", "env:prod"],
     ] {

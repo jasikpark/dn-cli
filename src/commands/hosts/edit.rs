@@ -169,7 +169,7 @@ mod tests {
 
     fn edit_args(role: Option<&str>, name: Option<&str>) -> HostEditArgs {
         HostEditArgs {
-            host_id: "host-1".to_string(),
+            host_id: "host-FBNRAHQYQLWXWMCY7L4XP46ZXI".to_string(),
             name: name.map(str::to_string),
             role: role.map(str::to_string),
             clear_role: false,
@@ -182,7 +182,7 @@ mod tests {
     fn build_edit_body_clear_role_sends_null() {
         let mut args = edit_args(None, None);
         args.clear_role = true;
-        let data = json!({"id": "host-1", "roleID": "role-old", "tags": ["a:1"]});
+        let data = json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "roleID": "role-RRND74PECYCTWYG7T3SH3OTEWI", "tags": ["a:1"]});
         let (body, _) = build_edit_body(&data, &args).unwrap();
         assert!(body["roleID"].is_null());
         assert!(body.as_object().unwrap().contains_key("roleID"));
@@ -193,7 +193,7 @@ mod tests {
     fn build_edit_body_clear_role_on_unassigned_host_is_a_noop() {
         let mut args = edit_args(None, None);
         args.clear_role = true;
-        let data = json!({"id": "host-1", "roleID": null, "tags": []});
+        let data = json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "roleID": null, "tags": []});
         let (body, _) = build_edit_body(&data, &args).unwrap();
         assert_eq!(body, data);
     }
@@ -222,21 +222,28 @@ mod tests {
                 "expected {bad:?} to be rejected"
             );
         }
-        assert!(validate_edit_preflight(&edit_args(Some(" role-abc "), None)).is_ok());
+        assert!(
+            validate_edit_preflight(&edit_args(Some(" role-Y5LAD6TPG7QXASCOCUCBF632NI "), None))
+                .is_ok()
+        );
     }
 
     #[test]
     fn build_edit_body_sets_role_and_keeps_other_fields() {
         let data = json!({
-            "id": "host-1",
+            "id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
             "name": "web",
-            "roleID": "role-old",
+            "roleID": "role-RRND74PECYCTWYG7T3SH3OTEWI",
             "tags": ["env:prod"],
             "listenPort": 0
         });
-        let (body, missing) = build_edit_body(&data, &edit_args(Some(" role-new "), None)).unwrap();
+        let (body, missing) = build_edit_body(
+            &data,
+            &edit_args(Some(" role-WWTCOOZAVVH5ZGMVVOZOBNF6IU "), None),
+        )
+        .unwrap();
         assert!(missing.is_empty());
-        assert_eq!(body["roleID"], "role-new");
+        assert_eq!(body["roleID"], "role-WWTCOOZAVVH5ZGMVVOZOBNF6IU");
         assert_eq!(body["name"], "web");
         assert_eq!(body["tags"], json!(["env:prod"]));
         assert_eq!(body["listenPort"], 0);
@@ -244,16 +251,20 @@ mod tests {
 
     #[test]
     fn build_edit_body_without_role_flag_leaves_role_untouched() {
-        let data = json!({"id": "host-1", "roleID": "role-old", "tags": []});
+        let data = json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "roleID": "role-RRND74PECYCTWYG7T3SH3OTEWI", "tags": []});
         let (body, _) = build_edit_body(&data, &edit_args(None, Some("renamed"))).unwrap();
-        assert_eq!(body["roleID"], "role-old");
+        assert_eq!(body["roleID"], "role-RRND74PECYCTWYG7T3SH3OTEWI");
         assert_eq!(body["name"], "renamed");
     }
 
     #[test]
     fn build_edit_body_same_role_is_a_noop() {
-        let data = json!({"id": "host-1", "roleID": "role-a", "tags": ["a:1"]});
-        let (body, _) = build_edit_body(&data, &edit_args(Some("role-a"), None)).unwrap();
+        let data = json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "roleID": "role-H55C26ACPLURXFO4C3MWND4HHA", "tags": ["a:1"]});
+        let (body, _) = build_edit_body(
+            &data,
+            &edit_args(Some("role-H55C26ACPLURXFO4C3MWND4HHA"), None),
+        )
+        .unwrap();
         assert_eq!(body, data);
     }
 
@@ -262,7 +273,7 @@ mod tests {
         let mut args = edit_args(None, None);
         args.remove_tag = vec!["gone:1".to_string(), "a:1".to_string()];
         args.add_tag = vec!["a:2".to_string()];
-        let data = json!({"id": "host-1", "tags": ["a:1"]});
+        let data = json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "tags": ["a:1"]});
         let (body, missing) = build_edit_body(&data, &args).unwrap();
         assert_eq!(missing, vec!["gone:1"]);
         assert_eq!(body["tags"], json!(["a:2"]));
@@ -270,8 +281,15 @@ mod tests {
 
     #[test]
     fn commas_in_tag_values_are_preserved() {
-        let cli = Cli::try_parse_from(["dn", "host", "edit", "host-1", "--add-tag", "list:a,b,c"])
-            .unwrap();
+        let cli = Cli::try_parse_from([
+            "dn",
+            "host",
+            "edit",
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
+            "--add-tag",
+            "list:a,b,c",
+        ])
+        .unwrap();
         let Command::Host {
             command: HostCommand::Edit(args),
         } = cli.command

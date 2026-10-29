@@ -92,7 +92,10 @@ fn argument_errors_are_invalid_argument_before_credentials() {
     for (args, expected) in [
         (&["role", "get", "bad/id", "--json"][..], "role id"),
         (&["tag", "get", "no-colon", "--json"], "key:value"),
-        (&["host", "edit", "host-1", "--json"], "nothing to edit"),
+        (
+            &["host", "edit", "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "--json"],
+            "nothing to edit",
+        ),
         (
             &["host", "create", "lh", "--lighthouse", "--json"],
             "--static-address",
@@ -101,7 +104,15 @@ fn argument_errors_are_invalid_argument_before_credentials() {
             &["host", "delete", "a/b", "--yes", "--json"],
             "invalid character '/'",
         ),
-        (&["host", "delete", "host-1", "--json"], "pass --yes"),
+        (
+            &[
+                "host",
+                "delete",
+                "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
+                "--json",
+            ],
+            "pass --yes",
+        ),
         (&["host", "get", "a/b", "--json"], "invalid character '/'"),
         (
             &["network", "get", "network-1?x", "--json"],
@@ -133,7 +144,7 @@ fn other_local_failures_are_err_local() {
 fn an_ambiguous_network_is_invalid_argument() {
     let output = dn_against(
         "200 OK",
-        r#"{"data":[{"id":"network-a"},{"id":"network-b"}],"metadata":{}}"#,
+        r#"{"data":[{"id":"network-7XQBUQCW2BK35R7IJAQ26OAGYY"},{"id":"network-P25DX3AV2AYQ3MAXIOM76AHXNQ"}],"metadata":{}}"#,
         &["host", "create", "web", "--json"],
     );
     assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -169,13 +180,20 @@ fn api_errors_keep_the_context_dn_added() {
     let payload = api_error(&dn_against(
         "403 Forbidden",
         r#"{"errors":[{"code":"ERR_FORBIDDEN","message":"missing networks:read"}]}"#,
-        &["host", "create", "web", "--network", "network-a", "--json"],
+        &[
+            "host",
+            "create",
+            "web",
+            "--network",
+            "network-7XQBUQCW2BK35R7IJAQ26OAGYY",
+            "--json",
+        ],
     ));
     assert_eq!(payload["status"], 403);
     assert_eq!(payload["errors"][0]["code"], "ERR_FORBIDDEN");
     let message = payload["errors"][0]["message"].as_str().unwrap();
     assert!(
-        message.starts_with("could not read network network-a"),
+        message.starts_with("could not read network network-7XQBUQCW2BK35R7IJAQ26OAGYY"),
         "{message}"
     );
     assert!(message.contains("--no-ipv4"), "{message}");

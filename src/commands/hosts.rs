@@ -190,26 +190,37 @@ mod tests {
     #[test]
     fn host_fields_extracts_present_columns() {
         // Dual-stack: v2 returns an ipAddresses array (IPv4 + IPv6).
-        let row = json!({"id": "host-1", "name": "web", "ipAddresses": ["10.0.0.1", "fd00::1"]});
+        let row = json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "name": "web", "ipAddresses": ["10.0.0.1", "fd00::1"]});
         assert_eq!(
             host_fields(&row),
-            ("host-1", "web", "10.0.0.1, fd00::1".to_string())
+            (
+                "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
+                "web",
+                "10.0.0.1, fd00::1".to_string()
+            )
         );
     }
 
     #[test]
     fn host_fields_defaults_missing_or_wrong_type() {
         // Missing name, and ipAddresses that isn't an array of strings.
-        let row = json!({"id": "host-2", "ipAddresses": 42});
-        assert_eq!(host_fields(&row), ("host-2", "", String::new()));
+        let row = json!({"id": "host-GCCZWU56GO7XSZN2X575Z7T5JI", "ipAddresses": 42});
+        assert_eq!(
+            host_fields(&row),
+            ("host-GCCZWU56GO7XSZN2X575Z7T5JI", "", String::new())
+        );
     }
 
     #[test]
     fn host_fields_skips_non_string_ip_entries() {
-        let row = json!({"id": "host-3", "name": "db", "ipAddresses": ["10.0.0.2", 7, "fd00::2"]});
+        let row = json!({"id": "host-7PIHWVV3JUVWM7OTQLR5WJZAA4", "name": "db", "ipAddresses": ["10.0.0.2", 7, "fd00::2"]});
         assert_eq!(
             host_fields(&row),
-            ("host-3", "db", "10.0.0.2, fd00::2".to_string())
+            (
+                "host-7PIHWVV3JUVWM7OTQLR5WJZAA4",
+                "db",
+                "10.0.0.2, fd00::2".to_string()
+            )
         );
     }
 
@@ -252,8 +263,8 @@ mod tests {
     #[test]
     fn every_filter_flag_maps_to_its_query_parameter() {
         let args = list_args(&[
-            "--role=role-A",
-            "--network=network-B",
+            "--role=role-6TZVMAEXCQB4WXWTY5XY6HG7DI",
+            "--network=network-CBLAIQENR5J7VAXT4HJ5ZALNXA",
             "--tag=env:prod",
             "--tag=region:us",
             "--lighthouse",
@@ -267,8 +278,8 @@ mod tests {
         assert_eq!(
             host_filters(&args.filters),
             [
-                ("filter.roleID", "role-A"),
-                ("filter.networkID", "network-B"),
+                ("filter.roleID", "role-6TZVMAEXCQB4WXWTY5XY6HG7DI"),
+                ("filter.networkID", "network-CBLAIQENR5J7VAXT4HJ5ZALNXA"),
                 ("filter.tag", "env:prod"),
                 ("filter.tag", "region:us"),
                 ("filter.isLighthouse", "true"),
@@ -365,7 +376,7 @@ mod tests {
 
     #[test]
     fn render_hosts_json_passes_the_envelope_through() {
-        let res = json!({"data": [{"id": "host-1"}], "metadata": {"hasNextPage": false}});
+        let res = json!({"data": [{"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI"}], "metadata": {"hasNextPage": false}});
         // Just assert it doesn't error on the JSON path; the payload is the
         // client's, rendered verbatim.
         assert!(render_hosts(&res, OutputMode::Json, "unused").is_ok());

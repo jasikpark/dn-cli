@@ -59,10 +59,10 @@ fn dn(url: &str, args: &[&str]) -> Output {
 const PAGE_1: &str = r#"{"data":[
     {"id":"log-3","timestamp":"2026-01-03T00:00:00.5Z",
      "actor":{"type":"user","id":"user-1","email":"a@example.com"},
-     "target":{"type":"host","id":"host-1"},"event":{"type":"UPDATED"}},
+     "target":{"type":"host","id":"host-FBNRAHQYQLWXWMCY7L4XP46ZXI"},"event":{"type":"UPDATED"}},
     {"id":"log-2","timestamp":"2026-01-02T00:00:00Z",
      "actor":{"type":"apiKey","id":"dnkey-1","name":"ci"},
-     "target":{"type":"role","id":"role-1"},"event":{"type":"CREATED"}}
+     "target":{"type":"role","id":"role-4A2TRFEEBUMSGYTBSZRNVWJUQE"},"event":{"type":"CREATED"}}
   ],"metadata":{"hasNextPage":true,"hasPrevPage":false,"nextCursor":"p2"}}"#;
 
 const PAGE_2: &str = r#"{"data":[
@@ -93,14 +93,14 @@ fn audit_log_list_asks_for_one_newest_first_page() {
                 "2026-01-03T00:00:00Z",
                 "UPDATED",
                 "host",
-                "host-1",
+                "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
                 "a@example.com"
             ],
             vec![
                 "2026-01-02T00:00:00Z",
                 "CREATED",
                 "role",
-                "role-1",
+                "role-4A2TRFEEBUMSGYTBSZRNVWJUQE",
                 "API",
                 "key",
                 "ci"
@@ -155,7 +155,7 @@ fn audit_log_list_passes_target_filters() {
             "audit-log",
             "list",
             "--target",
-            "host-1",
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
             "--target-type",
             "host",
         ],
@@ -164,7 +164,7 @@ fn audit_log_list_passes_target_filters() {
     assert_eq!(
         *seen.lock().unwrap(),
         [
-            "/v1/audit-logs?filter.targetID=host-1&filter.targetType=host&sortDirection=desc&pageSize=500"
+            "/v1/audit-logs?filter.targetID=host-FBNRAHQYQLWXWMCY7L4XP46ZXI&filter.targetType=host&sortDirection=desc&pageSize=500"
         ]
     );
 }

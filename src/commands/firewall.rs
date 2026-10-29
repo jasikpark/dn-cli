@@ -507,8 +507,16 @@ mod tests {
 
     #[test]
     fn firewall_rule_row_names_role_and_falls_back_to_id() {
-        let names = HashMap::from([("role-ABC".to_string(), "Servers".to_string())]);
-        let r = rule(Some("role-ABC"), &["env:prod"], "UDP", Some((5000, 5010)));
+        let names = HashMap::from([(
+            "role-B2RPGZ2TEPSZO5EGJJAX5LNN7M".to_string(),
+            "Servers".to_string(),
+        )]);
+        let r = rule(
+            Some("role-B2RPGZ2TEPSZO5EGJJAX5LNN7M"),
+            &["env:prod"],
+            "UDP",
+            Some((5000, 5010)),
+        );
         assert_eq!(
             firewall_rule_row(&r, &names),
             [
@@ -520,7 +528,7 @@ mod tests {
         );
         assert_eq!(
             firewall_rule_row(&r, &HashMap::new())[0],
-            "\"role-ABC\" hosts tagged \"env:prod\""
+            "\"role-B2RPGZ2TEPSZO5EGJJAX5LNN7M\" hosts tagged \"env:prod\""
         );
     }
 
@@ -530,7 +538,7 @@ mod tests {
         let mut rules = vec![
             rule(None, &["os:linux"], "UDP", Some((21116, 21116))),
             rule(None, &["os:linux"], "TCP", Some((222, 222))),
-            rule(Some("role-B"), &[], "ANY", None),
+            rule(Some("role-XFRJV7HNTRK3Z4GYR35WEG47UA"), &[], "ANY", None),
             rule(None, &["os:linux"], "TCP", Some((21114, 21119))),
             rule(None, &[], "ICMP", None),
             rule(None, &["os:linux"], "UDP", Some((60000, 61000))),
@@ -549,7 +557,7 @@ mod tests {
                 "All hosts | Any | any | ",
                 "All hosts tagged \"os:linux\" + \"team:ops\" | Any | any | ",
                 "All hosts tagged \"team:ops\" | Any | any | ",
-                "\"role-B\" hosts | Any | any | ",
+                "\"role-XFRJV7HNTRK3Z4GYR35WEG47UA\" hosts | Any | any | ",
                 "All hosts | ICMP | any | ",
                 "All hosts tagged \"os:linux\" | TCP | 21114-21119 | ",
                 "All hosts tagged \"os:linux\" | TCP | 222 | ",
@@ -562,11 +570,14 @@ mod tests {
     #[test]
     fn render_role_warns_on_allow_everything_rule() {
         let data = json!({
-            "id": "role-A", "name": "Servers", "description": "", "hostCount": 2,
+            "id": "role-6TZVMAEXCQB4WXWTY5XY6HG7DI", "name": "Servers", "description": "", "hostCount": 2,
             "firewallRules": [rule(None, &[], "ANY", None), rule(None, &[], "TCP", Some((22, 22)))],
         });
         let out = render_role(&data, &HashMap::new()).unwrap();
-        assert!(out.starts_with("Servers (role-A)\nHosts: 2\n"), "{out}");
+        assert!(
+            out.starts_with("Servers (role-6TZVMAEXCQB4WXWTY5XY6HG7DI)\nHosts: 2\n"),
+            "{out}"
+        );
         assert!(out.contains("Warning: a rule allows all hosts"), "{out}");
         assert!(out.contains("every host with this role"), "{out}");
         assert!(
@@ -578,7 +589,7 @@ mod tests {
     #[test]
     fn render_role_no_warning_when_allow_all_is_tagged() {
         let data = json!({
-            "id": "role-A", "name": "Servers",
+            "id": "role-6TZVMAEXCQB4WXWTY5XY6HG7DI", "name": "Servers",
             "firewallRules": [rule(None, &["team:ops"], "ANY", None)],
         });
         let out = render_role(&data, &HashMap::new()).unwrap();
@@ -587,16 +598,17 @@ mod tests {
 
     #[test]
     fn render_role_reports_deny_all_only_for_explicit_empty_rules() {
-        let empty = json!({"id": "role-A", "name": "", "firewallRules": []});
+        let empty =
+            json!({"id": "role-6TZVMAEXCQB4WXWTY5XY6HG7DI", "name": "", "firewallRules": []});
         let out = render_role(&empty, &HashMap::new()).unwrap();
         assert_eq!(
             out,
-            "role-A\n\nNo firewall rules: this role allows no inbound traffic. \
+            "role-6TZVMAEXCQB4WXWTY5XY6HG7DI\n\nNo firewall rules: this role allows no inbound traffic. \
              Rules on a host's tags can still allow some.\n"
         );
         for bad in [
-            json!({"id": "role-A"}),
-            json!({"id": "role-A", "firewallRules": null}),
+            json!({"id": "role-6TZVMAEXCQB4WXWTY5XY6HG7DI"}),
+            json!({"id": "role-6TZVMAEXCQB4WXWTY5XY6HG7DI", "firewallRules": null}),
         ] {
             assert!(render_role(&bad, &HashMap::new()).is_err(), "{bad}");
         }
@@ -620,7 +632,7 @@ mod tests {
             json!({"protocol": "TCP", "allowedRoleID": null, "portRange": {"from": 1, "to": 70000}}),
         ];
         for bad in bad_rules {
-            let data = json!({"id": "role-A", "name": "A", "firewallRules": [bad]});
+            let data = json!({"id": "role-6TZVMAEXCQB4WXWTY5XY6HG7DI", "name": "A", "firewallRules": [bad]});
             let err = render_role(&data, &HashMap::new()).unwrap_err().to_string();
             assert!(err.contains("firewall rule 0"), "{bad}: {err}");
         }
@@ -629,12 +641,21 @@ mod tests {
     #[test]
     fn firewall_rule_row_quotes_role_name_so_it_cannot_pass_for_all_hosts() {
         let names = HashMap::from([
-            ("role-A".to_string(), "All".to_string()),
-            ("role-B".to_string(), " ".to_string()),
+            (
+                "role-6TZVMAEXCQB4WXWTY5XY6HG7DI".to_string(),
+                "All".to_string(),
+            ),
+            (
+                "role-XFRJV7HNTRK3Z4GYR35WEG47UA".to_string(),
+                " ".to_string(),
+            ),
         ]);
         let row = |id| firewall_rule_row(&rule(Some(id), &[], "TCP", None), &names)[0].clone();
-        assert_eq!(row("role-A"), "\"All\" hosts");
-        assert_eq!(row("role-B"), "\"role-B\" hosts");
+        assert_eq!(row("role-6TZVMAEXCQB4WXWTY5XY6HG7DI"), "\"All\" hosts");
+        assert_eq!(
+            row("role-XFRJV7HNTRK3Z4GYR35WEG47UA"),
+            "\"role-XFRJV7HNTRK3Z4GYR35WEG47UA\" hosts"
+        );
     }
 
     #[test]
@@ -659,7 +680,7 @@ mod tests {
     #[test]
     fn render_role_warns_on_a_lone_allow_everything_rule() {
         let data = json!({
-            "id": "role-A", "name": "A", "firewallRules": [rule(None, &[], "ANY", None)],
+            "id": "role-6TZVMAEXCQB4WXWTY5XY6HG7DI", "name": "A", "firewallRules": [rule(None, &[], "ANY", None)],
         });
         let out = render_role(&data, &HashMap::new()).unwrap();
         assert!(
@@ -672,11 +693,11 @@ mod tests {
     #[test]
     fn render_role_skips_blank_description() {
         let data = json!({
-            "id": "role-A", "name": "A", "description": "\u{7}\u{1b}", "firewallRules": []
+            "id": "role-6TZVMAEXCQB4WXWTY5XY6HG7DI", "name": "A", "description": "\u{7}\u{1b}", "firewallRules": []
         });
         let out = render_role(&data, &HashMap::new()).unwrap();
         assert!(
-            out.starts_with("A (role-A)\n\nNo firewall rules"),
+            out.starts_with("A (role-6TZVMAEXCQB4WXWTY5XY6HG7DI)\n\nNo firewall rules"),
             "{out:?}"
         );
     }
@@ -684,13 +705,16 @@ mod tests {
     #[test]
     fn role_names_by_id_skips_incomplete_rows() {
         let res = json!({"data": [
-            {"id": "role-A", "name": "Servers"},
-            {"id": "role-B"},
+            {"id": "role-6TZVMAEXCQB4WXWTY5XY6HG7DI", "name": "Servers"},
+            {"id": "role-XFRJV7HNTRK3Z4GYR35WEG47UA"},
             {"name": "orphan"},
         ]});
         assert_eq!(
             role_names_by_id(&res),
-            HashMap::from([("role-A".to_string(), "Servers".to_string())])
+            HashMap::from([(
+                "role-6TZVMAEXCQB4WXWTY5XY6HG7DI".to_string(),
+                "Servers".to_string()
+            )])
         );
     }
 
@@ -702,11 +726,14 @@ mod tests {
             "hostCount": 3,
             "priority": 6,
             "firewallRules": [
-                rule(Some("role-ADM"), &[], "TCP", Some((22, 22))),
+                rule(Some("role-4422IV4X6SJS6PO5PWQUEOLXAE"), &[], "TCP", Some((22, 22))),
                 rule(None, &[], "ICMP", None),
             ],
         });
-        let names = HashMap::from([("role-ADM".to_string(), "Admins".to_string())]);
+        let names = HashMap::from([(
+            "role-4422IV4X6SJS6PO5PWQUEOLXAE".to_string(),
+            "Admins".to_string(),
+        )]);
         let out = render_tag(&tag, "env:prod", &names).unwrap();
         assert!(
             out.starts_with("env:prod\nProduction hosts\nHosts: 3\nPriority: 6\n\n"),

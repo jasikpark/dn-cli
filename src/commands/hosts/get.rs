@@ -123,9 +123,9 @@ mod tests {
     #[test]
     fn render_host_shows_a_lighthouse_with_its_role_name() {
         let data = json!({
-            "id": "host-EXAMPLE",
-            "networkID": "network-EXAMPLE",
-            "roleID": "role-EXAMPLE",
+            "id": "host-2NEVKKDUYRV67A5XIGFW44FH2I",
+            "networkID": "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
+            "roleID": "role-KCDMEJATVFNPKRG6GKL4DDCEY4",
             "name": "lh-1",
             "ipAddresses": ["100.100.0.1", "fd00::1"],
             "staticAddresses": ["203.0.113.5:4242"],
@@ -146,10 +146,10 @@ mod tests {
         assert_eq!(
             render_host(&data, Some("Lighthouses")),
             "lh-1\n\
-             ID:                host-EXAMPLE\n\
+             ID:                host-2NEVKKDUYRV67A5XIGFW44FH2I\n\
              Type:              lighthouse\n\
-             Network:           network-EXAMPLE\n\
-             Role:              Lighthouses (role-EXAMPLE)\n\
+             Network:           network-Z2B7RBHWBP3VSDAPEWFWKMOMZU\n\
+             Role:              Lighthouses (role-KCDMEJATVFNPKRG6GKL4DDCEY4)\n\
              IP addresses:      100.100.0.1, fd00::1\n\
              Tags:              env:prod, site:hou\n\
              Static addresses:  203.0.113.5:4242\n\
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn render_host_marks_no_role_never_seen_and_blocked() {
         let data = json!({
-            "id": "host-EXAMPLE",
+            "id": "host-2NEVKKDUYRV67A5XIGFW44FH2I",
             "name": "",
             "roleID": null,
             "isBlocked": true,
@@ -171,7 +171,10 @@ mod tests {
             "metadata": {"lastSeenAt": null, "platform": null, "version": null}
         });
         let out = render_host(&data, None);
-        assert!(out.starts_with("host-EXAMPLE\n"), "{out}");
+        assert!(
+            out.starts_with("host-2NEVKKDUYRV67A5XIGFW44FH2I\n"),
+            "{out}"
+        );
         assert!(out.contains("Role:              none\n"), "{out}");
         assert!(out.contains("Blocked:           yes\n"), "{out}");
         assert!(out.contains("Config overrides:  1\n"), "{out}");
@@ -181,7 +184,7 @@ mod tests {
 
     #[test]
     fn render_host_shows_an_update_without_platform_or_version() {
-        let data = json!({"id": "host-1", "name": "web", "metadata": {"updateAvailable": true}});
+        let data = json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "name": "web", "metadata": {"updateAvailable": true}});
         assert!(render_host(&data, None).contains("Client:  update available\n"));
     }
 
@@ -194,10 +197,13 @@ mod tests {
 
     #[test]
     fn render_host_falls_back_to_the_role_id() {
-        let data = json!({"id": "host-1", "name": "  web  ", "roleID": "role-1"});
+        let data = json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "name": "  web  ", "roleID": "role-4A2TRFEEBUMSGYTBSZRNVWJUQE"});
         let out = render_host(&data, None);
         assert!(out.starts_with("web\n"), "{out:?}");
-        assert!(out.contains("Role:  role-1\n"), "{out}");
+        assert!(
+            out.contains("Role:  role-4A2TRFEEBUMSGYTBSZRNVWJUQE\n"),
+            "{out}"
+        );
         // No metadata object at all says nothing about when it was seen.
         assert!(!out.contains("Last seen"), "{out}");
     }

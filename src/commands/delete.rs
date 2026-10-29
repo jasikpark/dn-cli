@@ -166,7 +166,7 @@ fn confirmation_accepted(input: &str) -> bool {
     matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-/// `host "web" (host-1)`, or just `tag env:prod` when there is no separate
+/// `host "web" (host-FBNRAHQYQLWXWMCY7L4XP46ZXI)`, or just `tag env:prod` when there is no separate
 /// name.
 fn label(kind: &str, id: &str, name: &str) -> String {
     if name.is_empty() {
@@ -250,7 +250,7 @@ mod tests {
 
     const ROLE: DeleteTarget = DeleteTarget {
         kind: "role",
-        id: "role-1",
+        id: "role-4A2TRFEEBUMSGYTBSZRNVWJUQE",
         json_key: "id",
         read_scope: "roles:read",
         named: true,
@@ -291,7 +291,10 @@ mod tests {
     fn run_delete_prompts_then_deletes_on_yes() {
         let (res, prompt, deleted) = run(&ROLE, DeleteConfirmation::Prompt, "y\n", web_role);
         assert_eq!(res.unwrap(), "web");
-        assert_eq!(prompt, "Delete role \"web\" (role-1; 3 hosts)? [y/N] ");
+        assert_eq!(
+            prompt,
+            "Delete role \"web\" (role-4A2TRFEEBUMSGYTBSZRNVWJUQE; 3 hosts)? [y/N] "
+        );
         assert!(deleted);
     }
 
@@ -311,7 +314,10 @@ mod tests {
             anyhow::bail!("HTTP 403")
         });
         let err = format!("{:#}", res.unwrap_err());
-        assert!(err.contains("could not read role role-1"), "{err}");
+        assert!(
+            err.contains("could not read role role-4A2TRFEEBUMSGYTBSZRNVWJUQE"),
+            "{err}"
+        );
         assert!(err.contains("roles:read"), "{err}");
         assert!(err.contains("HTTP 403"), "{err}");
         assert!(prompt.is_empty());
@@ -404,16 +410,21 @@ mod tests {
     #[test]
     fn delete_prompt_names_the_host_and_its_ips() {
         assert_eq!(
-            delete_prompt("host", "host-1", "web", "10.0.0.1, fd00::1"),
-            "Delete host \"web\" (host-1; 10.0.0.1, fd00::1)? [y/N] "
+            delete_prompt(
+                "host",
+                "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
+                "web",
+                "10.0.0.1, fd00::1"
+            ),
+            "Delete host \"web\" (host-FBNRAHQYQLWXWMCY7L4XP46ZXI; 10.0.0.1, fd00::1)? [y/N] "
         );
     }
 
     #[test]
     fn delete_prompt_keeps_the_detail_without_a_name() {
         assert_eq!(
-            delete_prompt("host", "host-2", "", "10.0.0.2"),
-            "Delete host host-2 (10.0.0.2)? [y/N] "
+            delete_prompt("host", "host-GCCZWU56GO7XSZN2X575Z7T5JI", "", "10.0.0.2"),
+            "Delete host host-GCCZWU56GO7XSZN2X575Z7T5JI (10.0.0.2)? [y/N] "
         );
         assert_eq!(
             delete_prompt("tag", "env:prod", "", "3 hosts"),
@@ -432,16 +443,16 @@ mod tests {
     #[test]
     fn delete_prompt_omits_the_detail_clause_when_empty() {
         assert_eq!(
-            delete_prompt("role", "role-3", "db", ""),
-            "Delete role \"db\" (role-3)? [y/N] "
+            delete_prompt("role", "role-BPL2337L7V5KKZGBMVDA3SYOQU", "db", ""),
+            "Delete role \"db\" (role-BPL2337L7V5KKZGBMVDA3SYOQU)? [y/N] "
         );
     }
 
     #[test]
     fn delete_json_payload_echoes_the_id_and_outcome() {
         assert_eq!(
-            delete_json_payload("id", "host-1"),
-            json!({"id": "host-1", "deleted": true})
+            delete_json_payload("id", "host-FBNRAHQYQLWXWMCY7L4XP46ZXI"),
+            json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "deleted": true})
         );
         assert_eq!(
             delete_json_payload("name", "env:prod"),

@@ -2,7 +2,7 @@
 source: tests/human_output.rs
 description: "Host delete with --yes on an id that doesn't exist: the DELETE's own 404 is the error."
 ---
-$ dn host delete host-MISSING --yes
+$ dn host delete host-4LSTMYZG3ENRNEE46RF6TANA2M --yes
 --- stderr
 note: using <API_URL> (from DEFINED_API_URL)
 error: Defined API error (HTTP 404)   ERR_NOT_FOUND: host not found

@@ -73,15 +73,15 @@ fn requests(seen: &Arc<Mutex<Vec<Request>>>) -> Vec<Request> {
     seen.lock().unwrap().clone()
 }
 
-const ROLE: &str = r#"{"data":{"id":"role-WEB","name":"Web servers","description":"Public HTTP",
+const ROLE: &str = r#"{"data":{"id":"role-MCXBVCRC56AF3ZNM57X7BO5JKE","name":"Web servers","description":"Public HTTP",
   "hostCount":3,"firewallRulesCount":2,"firewallRules":[
     {"protocol":"TCP","portRange":{"from":443,"to":443},"allowedRoleID":null,
      "allowedTags":null,"description":"https from anywhere"},
-    {"protocol":"TCP","portRange":{"from":22,"to":22},"allowedRoleID":"role-ADM",
+    {"protocol":"TCP","portRange":{"from":22,"to":22},"allowedRoleID":"role-4422IV4X6SJS6PO5PWQUEOLXAE",
      "allowedTags":null,"description":"ssh from admins"}]},"metadata":{}}"#;
 
 const TAG: &str = r#"{"data":{"name":"env:prod","description":"Production","hostCount":2,
-  "priority":10,"firewallRulesCount":1,"routeSubscriptions":["route-A"],
+  "priority":10,"firewallRulesCount":1,"routeSubscriptions":["route-FD7K6Y2GVRIMUGFSBSAKPCR5SM"],
   "configOverrides":[{"key":"tun.mtu","value":1300}],
   "firewallRules":[{"protocol":"UDP","portRange":{"from":53,"to":53},
     "allowedRoleID":null,"allowedTags":["site:hou"],"description":"dns"}]},"metadata":{}}"#;
@@ -117,7 +117,7 @@ fn role_create_posts_name_description_and_parsed_rules() {
             "--rule",
             "tcp/443,desc=https from anywhere",
             "--rule",
-            "tcp/22,from=role-ADM,tag=team:ops,tag=env:prod,desc=ssh, admins only",
+            "tcp/22,from=role-4422IV4X6SJS6PO5PWQUEOLXAE,tag=team:ops,tag=env:prod,desc=ssh, admins only",
             "--rule",
             "icmp",
         ],
@@ -128,7 +128,7 @@ fn role_create_posts_name_description_and_parsed_rules() {
         "description": "Public HTTP",
         "firewallRules": [
             rule("TCP", Some((443, 443)), None, None, "https from anywhere"),
-            rule("TCP", Some((22, 22)), Some("role-ADM"), Some(&["team:ops", "env:prod"]), "ssh, admins only"),
+            rule("TCP", Some((22, 22)), Some("role-4422IV4X6SJS6PO5PWQUEOLXAE"), Some(&["team:ops", "env:prod"]), "ssh, admins only"),
             rule("ICMP", None, None, None, ""),
         ],
     });
@@ -147,9 +147,9 @@ fn role_edit_reads_the_role_then_puts_the_whole_thing_back() {
             "--json",
             "role",
             "edit",
-            "role-WEB",
+            "role-MCXBVCRC56AF3ZNM57X7BO5JKE",
             "--remove-rule",
-            "tcp/22,from=role-ADM",
+            "tcp/22,from=role-4422IV4X6SJS6PO5PWQUEOLXAE",
             "--add-rule",
             "udp/53,desc=dns",
             "--add-rule",
@@ -160,11 +160,11 @@ fn role_edit_reads_the_role_then_puts_the_whole_thing_back() {
     let seen = requests(&seen);
     assert_eq!(
         (seen[0].0.as_str(), seen[0].1.as_str()),
-        ("GET", "/v1/roles/role-WEB")
+        ("GET", "/v1/roles/role-MCXBVCRC56AF3ZNM57X7BO5JKE")
     );
     assert_eq!(
         (seen[1].0.as_str(), seen[1].1.as_str()),
-        ("PUT", "/v1/roles/role-WEB")
+        ("PUT", "/v1/roles/role-MCXBVCRC56AF3ZNM57X7BO5JKE")
     );
     assert_eq!(
         seen[1].2,
@@ -184,7 +184,13 @@ fn role_edit_that_changes_nothing_only_reads() {
     let (url, seen) = serve(ROLE);
     let out = dn(
         &url,
-        &["role", "edit", "role-WEB", "--description", "Public HTTP"],
+        &[
+            "role",
+            "edit",
+            "role-MCXBVCRC56AF3ZNM57X7BO5JKE",
+            "--description",
+            "Public HTTP",
+        ],
     );
     assert!(out.status.success(), "{out:?}");
     assert_eq!(requests(&seen).len(), 1);
@@ -200,7 +206,7 @@ fn role_edit_clear_rules_sends_an_empty_list() {
             "--json",
             "role",
             "edit",
-            "role-WEB",
+            "role-MCXBVCRC56AF3ZNM57X7BO5JKE",
             "--clear-rules",
             "--description",
             "",
@@ -224,7 +230,7 @@ fn tag_create_posts_only_what_was_given() {
             "create",
             "env:prod",
             "--route",
-            "route-A",
+            "route-FD7K6Y2GVRIMUGFSBSAKPCR5SM",
             "--after",
             "env:staging",
         ],
@@ -235,7 +241,7 @@ fn tag_create_posts_only_what_was_given() {
         [(
             "POST".to_string(),
             "/v1/tags".to_string(),
-            json!({"name": "env:prod", "routeSubscriptions": ["route-A"], "after": "env:staging"}),
+            json!({"name": "env:prod", "routeSubscriptions": ["route-FD7K6Y2GVRIMUGFSBSAKPCR5SM"], "after": "env:staging"}),
         )]
     );
 }
@@ -255,9 +261,9 @@ fn tag_edit_patches_only_the_fields_that_change() {
             "--add-rule",
             "tcp/443",
             "--add-route",
-            "route-A", // already subscribed: no change
+            "route-FD7K6Y2GVRIMUGFSBSAKPCR5SM", // already subscribed: no change
             "--add-route",
-            "route-B",
+            "route-OAXQS67B6ETWR5CLYWVYVCEB7U",
             "--before",
             "env:dev",
         ],
@@ -279,7 +285,7 @@ fn tag_edit_patches_only_the_fields_that_change() {
                 rule("UDP", Some((53, 53)), None, Some(&["site:hou"]), "dns"),
                 rule("TCP", Some((443, 443)), None, None, ""),
             ],
-            "routeSubscriptions": ["route-A", "route-B"],
+            "routeSubscriptions": ["route-FD7K6Y2GVRIMUGFSBSAKPCR5SM", "route-OAXQS67B6ETWR5CLYWVYVCEB7U"],
             "before": "env:dev",
         })
     );
@@ -292,19 +298,25 @@ fn tag_edit_that_changes_nothing_only_reads() {
     let (url, seen) = serve(TAG);
     let out = dn(
         &url,
-        &["tag", "edit", "env:prod", "--remove-route", "route-Z"],
+        &[
+            "tag",
+            "edit",
+            "env:prod",
+            "--remove-route",
+            "route-262MQKEOKIDPAUL465JTDZ32QI",
+        ],
     );
     assert!(out.status.success(), "{out:?}");
     assert_eq!(requests(&seen).len(), 1);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("not subscribed to route \"route-Z\""),
+        stderr.contains("not subscribed to route \"route-262MQKEOKIDPAUL465JTDZ32QI\""),
         "{stderr}"
     );
     assert!(stderr.contains("nothing changed"), "{stderr}");
 }
 
-const ROLE_ZERO_PORTS: &str = r#"{"data":{"id":"role-OPEN","name":"Open","description":"",
+const ROLE_ZERO_PORTS: &str = r#"{"data":{"id":"role-2SX43GQTOUUA7M7LUS3RZRG5TM","name":"Open","description":"",
   "hostCount":0,"firewallRulesCount":1,"firewallRules":[
     {"protocol":"ANY","portRange":{"from":0,"to":0},"allowedRoleID":null,
      "allowedTags":["b:1","a:1"],"description":"open"}]},"metadata":{}}"#;
@@ -317,7 +329,7 @@ fn re_adding_a_rule_the_api_encoded_differently_writes_nothing() {
         &[
             "role",
             "edit",
-            "role-OPEN",
+            "role-2SX43GQTOUUA7M7LUS3RZRG5TM",
             "--add-rule",
             "any,tag=a:1,tag=b:1,desc=open",
         ],
@@ -336,7 +348,7 @@ fn changing_only_a_description_keeps_the_stored_rule_encoding() {
             "--json",
             "role",
             "edit",
-            "role-OPEN",
+            "role-2SX43GQTOUUA7M7LUS3RZRG5TM",
             "--add-rule",
             "any,tag=a:1,tag=b:1,desc=wide open",
         ],
@@ -351,13 +363,13 @@ fn changing_only_a_description_keeps_the_stored_rule_encoding() {
     );
 }
 
-const ROLE_ODD_TAGS: &str = r#"{"data":{"id":"role-ODD","name":"Odd","description":"",
+const ROLE_ODD_TAGS: &str = r#"{"data":{"id":"role-57Z5BFA76EDHIYMSBZGZPT4S2A","name":"Odd","description":"",
   "hostCount":0,"firewallRulesCount":1,"firewallRules":[
     {"protocol":"TCP","portRange":{"from":22,"to":22},"allowedRoleID":null,
      "allowedTags":"env:prod","description":"ssh"}]},"metadata":{}}"#;
 
 const TAG_ODD_ROUTES: &str = r#"{"data":{"name":"env:prod","description":"Production","hostCount":2,
-  "priority":10,"routeSubscriptions":["route-A",7],"firewallRules":[]},"metadata":{}}"#;
+  "priority":10,"routeSubscriptions":["route-FD7K6Y2GVRIMUGFSBSAKPCR5SM",7],"firewallRules":[]},"metadata":{}}"#;
 
 #[test]
 fn an_edit_refuses_to_write_over_a_response_it_cannot_read() {
@@ -366,7 +378,13 @@ fn an_edit_refuses_to_write_over_a_response_it_cannot_read() {
     let (url, seen) = serve(ROLE_ODD_TAGS);
     let out = dn(
         &url,
-        &["role", "edit", "role-ODD", "--remove-rule", "tcp/22"],
+        &[
+            "role",
+            "edit",
+            "role-57Z5BFA76EDHIYMSBZGZPT4S2A",
+            "--remove-rule",
+            "tcp/22",
+        ],
     );
     assert!(!out.status.success(), "{out:?}");
     assert_eq!(requests(&seen).len(), 1, "read only, no PUT");
@@ -374,7 +392,16 @@ fn an_edit_refuses_to_write_over_a_response_it_cannot_read() {
 
     // Likewise a route list with an entry that isn't a string.
     let (url, seen) = serve(TAG_ODD_ROUTES);
-    let out = dn(&url, &["tag", "edit", "env:prod", "--add-route", "route-B"]);
+    let out = dn(
+        &url,
+        &[
+            "tag",
+            "edit",
+            "env:prod",
+            "--add-route",
+            "route-OAXQS67B6ETWR5CLYWVYVCEB7U",
+        ],
+    );
     assert!(!out.status.success(), "{out:?}");
     assert_eq!(requests(&seen).len(), 1, "read only, no PATCH");
     assert!(String::from_utf8_lossy(&out.stderr).contains("routeSubscriptions"));
@@ -385,11 +412,17 @@ fn a_bad_rule_spec_fails_before_any_request() {
     let (url, seen) = serve(ROLE);
     for args in [
         vec!["role", "create", "x", "--rule", "sctp/22"],
-        vec!["role", "edit", "role-WEB", "--add-rule", "tcp/0"],
+        vec![
+            "role",
+            "edit",
+            "role-MCXBVCRC56AF3ZNM57X7BO5JKE",
+            "--add-rule",
+            "tcp/0",
+        ],
         vec!["tag", "create", "env:prod", "--rule", "tcp,port=22"],
         vec!["tag", "edit", "env:prod", "--remove-rule", "icmp/8"],
         vec!["tag", "edit", "env:prod", "--before", "nocolon"],
-        vec!["role", "edit", "role-WEB"],
+        vec!["role", "edit", "role-MCXBVCRC56AF3ZNM57X7BO5JKE"],
     ] {
         let out = dn(&url, &args);
         assert!(!out.status.success(), "{args:?}: {out:?}");
