@@ -6,8 +6,8 @@ $ dn host get host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
 Build Server
 ID:                host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
 Type:              host
-Network:           network-EXAMPLE
-Role:              Web servers (role-WEB)
+Network:           network-Z2B7RBHWBP3VSDAPEWFWKMOMZU
+Role:              Web servers (role-MCXBVCRC56AF3ZNM57X7BO5JKE)
 IP addresses:      100.100.0.12, fd00:c0:c0:2966:d3bf:a55d:49a0:6f18
 Tags:              env:prod, site:hou
 Static addresses:  203.0.113.5:4242

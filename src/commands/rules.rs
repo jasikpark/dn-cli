@@ -23,7 +23,7 @@ tag whose value contains a comma can't be written in a spec.
 Examples:
   tcp/22
   tcp/443,desc=https from anywhere
-  udp/53,from=role-ABC,tag=env:prod,tag=site:hou,desc=dns";
+  udp/53,from=role-B2RPGZ2TEPSZO5EGJJAX5LNN7M,tag=env:prod,tag=site:hou,desc=dns";
 
 /// Parse one rule spec into the API's `FirewallRule` object, with every
 /// field present: `allowedRoleID` and `allowedTags` are `null` when the rule
@@ -213,11 +213,11 @@ mod tests {
     fn a_full_spec_fills_every_field() {
         assert_eq!(
             parse_rule_spec(
-                " udp/53 , from=role-ABC, tag=env:prod, tag=site:hou , desc=dns, primary "
+                " udp/53 , from=role-B2RPGZ2TEPSZO5EGJJAX5LNN7M, tag=env:prod, tag=site:hou , desc=dns, primary "
             )
             .unwrap(),
             json!({"protocol": "UDP", "portRange": {"from": 53, "to": 53},
-                   "allowedRoleID": "role-ABC", "allowedTags": ["env:prod", "site:hou"],
+                   "allowedRoleID": "role-B2RPGZ2TEPSZO5EGJJAX5LNN7M", "allowedTags": ["env:prod", "site:hou"],
                    "description": "dns, primary"})
         );
     }
@@ -253,7 +253,10 @@ mod tests {
             ),
             ("tcp,tag=nocolon", "tag=: "),
             ("tcp,port=22", "unknown rule field \"port\""),
-            ("tcp,from=role-A,from=role-B", "from= given twice"),
+            (
+                "tcp,from=role-6TZVMAEXCQB4WXWTY5XY6HG7DI,from=role-XFRJV7HNTRK3Z4GYR35WEG47UA",
+                "from= given twice",
+            ),
             ("tcp,junk", "expected from=, tag= or desc="),
         ] {
             let err = parse_rule_spec(spec).unwrap_err().to_string();
@@ -279,7 +282,8 @@ mod tests {
         ));
         assert!(!rules_match(
             &a,
-            &parse_rule_spec("tcp/22,from=role-A,tag=a:1,tag=b:1").unwrap()
+            &parse_rule_spec("tcp/22,from=role-6TZVMAEXCQB4WXWTY5XY6HG7DI,tag=a:1,tag=b:1")
+                .unwrap()
         ));
     }
 
@@ -293,7 +297,7 @@ mod tests {
         assert!(rules_match(&stored, &spec));
         assert!(!rules_match(
             &stored,
-            &parse_rule_spec("any,from=role-A").unwrap()
+            &parse_rule_spec("any,from=role-6TZVMAEXCQB4WXWTY5XY6HG7DI").unwrap()
         ));
 
         // ICMP ignores ports entirely, however the API spelled them.

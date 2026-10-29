@@ -73,7 +73,13 @@ fn environment_auth_does_not_depend_on_stored_credentials() {
     ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_dn"));
         command
-            .args(["host", "delete", "host-test", "--yes", "--json"])
+            .args([
+                "host",
+                "delete",
+                "host-EFCCYQC53PSUZJSKFACPO7D6RA",
+                "--yes",
+                "--json",
+            ])
             .env("DN_CONFIG_DIR", dir.path())
             .env("DEFINED_API_URL", "http://127.0.0.1:1")
             .env_remove("DEFINED_API_KEY");

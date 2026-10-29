@@ -2,9 +2,9 @@
 source: tests/human_output.rs
 description: "Created role, shown like role get."
 ---
-$ dn role create Web servers --rule tcp/443,desc=https from anywhere --rule tcp/22,from=role-ADM,desc=ssh from admins
+$ dn role create Web servers --rule tcp/443,desc=https from anywhere --rule tcp/22,from=role-4422IV4X6SJS6PO5PWQUEOLXAE,desc=ssh from admins
 Created role
-Web servers (role-WEB)
+Web servers (role-MCXBVCRC56AF3ZNM57X7BO5JKE)
 Public HTTP
 Hosts: 3
 

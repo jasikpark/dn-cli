@@ -101,7 +101,7 @@ mod tests {
             "organizationID": "org-EXAMPLE",
             "timestamp": "2023-02-15T13:59:09.828868Z",
             "actor": {"id": "dnkey-EXAMPLE", "name": "example api key", "type": "apiKey"},
-            "target": {"id": "role-EXAMPLE", "type": "role"},
+            "target": {"id": "role-KCDMEJATVFNPKRG6GKL4DDCEY4", "type": "role"},
             "event": {"type": "CREATED", "before": null, "after": {"name": "My New Role"}},
         });
         assert_eq!(
@@ -110,7 +110,7 @@ mod tests {
                 "2023-02-15T13:59:09Z",
                 "CREATED",
                 "role",
-                "role-EXAMPLE",
+                "role-KCDMEJATVFNPKRG6GKL4DDCEY4",
                 "API key example api key",
             ]
         );
@@ -158,8 +158,8 @@ mod tests {
                 "API key dnkey-1",
             ),
             (
-                json!({"type": "host", "id": "host-1", "name": "  "}),
-                "host host-1",
+                json!({"type": "host", "id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "name": "  "}),
+                "host host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
             ),
             (json!({"type": "host"}), "host"),
             (json!({"type": "support"}), "Defined Networking support"),

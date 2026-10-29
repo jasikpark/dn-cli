@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn network_row_renders_dual_stack_network() {
         let row = json!({
-            "id": "network-EXAMPLE",
+            "id": "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
             "name": "office",
             "description": "main site",
             "cidrs": ["fd00:c0:c0::/80", "100.100.0.0/22"],
@@ -162,7 +162,7 @@ mod tests {
         assert_eq!(
             network_row(&row),
             [
-                "network-EXAMPLE",
+                "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
                 "office",
                 "fd00:c0:c0::/80, 100.100.0.0/22",
                 "14",
@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn render_network_shows_every_field() {
         let data = json!({
-            "id": "network-EXAMPLE",
+            "id": "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
             "signingCAID": "ca-EXAMPLE",
             "name": "office",
             "description": "main site",
@@ -194,7 +194,7 @@ mod tests {
             render_network(&data),
             "office\n\
              Description:            main site\n\
-             ID:                     network-EXAMPLE\n\
+             ID:                     network-Z2B7RBHWBP3VSDAPEWFWKMOMZU\n\
              CIDRs:                  100.100.0.0/22, fd00:c0:c0::/80\n\
              Hosts:                  12\n\
              Managed lighthouses:    yes\n\
@@ -214,8 +214,12 @@ mod tests {
 
     #[test]
     fn render_network_titles_a_nameless_network_by_id() {
-        let out = render_network(&json!({"id": "network-EXAMPLE", "hostCount": 0}));
-        assert_eq!(out, "network-EXAMPLE\nID:     network-EXAMPLE\nHosts:  0\n");
+        let out =
+            render_network(&json!({"id": "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU", "hostCount": 0}));
+        assert_eq!(
+            out,
+            "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU\nID:     network-Z2B7RBHWBP3VSDAPEWFWKMOMZU\nHosts:  0\n"
+        );
     }
 
     #[test]
@@ -230,7 +234,7 @@ mod tests {
     #[test]
     fn network_row_defaults_missing_or_wrong_type() {
         let row = json!({
-            "id": "network-EXAMPLE",
+            "id": "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
             "cidrs": 42,
             "hostCount": "many",
             "certVersion": "2",
@@ -238,7 +242,17 @@ mod tests {
         });
         assert_eq!(
             network_row(&row),
-            ["network-EXAMPLE", "", "", "", "", "", "", "", ""]
+            [
+                "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                ""
+            ]
         );
     }
 }

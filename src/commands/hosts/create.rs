@@ -228,11 +228,11 @@ mod tests {
     #[test]
     fn pick_network_returns_sole_network_when_one() {
         let networks = json!({
-            "data": [{"id": "network-only", "cidrs": ["100.100.0.0/22"]}],
+            "data": [{"id": "network-XF5DSYISJITVQFYWPNB47CIX4U", "cidrs": ["100.100.0.0/22"]}],
             "metadata": {"hasNextPage": false},
         });
         let network = pick_network(&networks).unwrap();
-        assert_eq!(network["id"], json!("network-only"));
+        assert_eq!(network["id"], json!("network-XF5DSYISJITVQFYWPNB47CIX4U"));
         assert_eq!(network["cidrs"], json!(["100.100.0.0/22"]));
     }
 
@@ -295,10 +295,10 @@ mod tests {
     #[test]
     fn build_body_minimal_omits_all_optionals() {
         let a = args("server", None, false, false, vec![], None);
-        let body = build_host_create_body(&a, "network-1", None);
+        let body = build_host_create_body(&a, "network-PP4ZXJCLB4VVUNOUYC67UW3UAE", None);
         assert_eq!(
             body,
-            json!({"name": "server", "networkID": "network-1"}),
+            json!({"name": "server", "networkID": "network-PP4ZXJCLB4VVUNOUYC67UW3UAE"}),
             "optional fields must be absent (not null) when unset"
         );
     }
@@ -307,7 +307,7 @@ mod tests {
     fn build_body_lighthouse_payload() {
         let mut a = args("lh", None, true, false, vec!["1.2.3.4:4242"], Some(4242));
         a.ipv4 = Some("100.100.0.5".into());
-        let body = build_host_create_body(&a, "network-1", None);
+        let body = build_host_create_body(&a, "network-PP4ZXJCLB4VVUNOUYC67UW3UAE", None);
         assert_eq!(body["isLighthouse"], json!(true));
         assert_eq!(body["staticAddresses"], json!(["1.2.3.4:4242"]));
         assert_eq!(body["listenPort"], json!(4242));
@@ -393,7 +393,7 @@ mod tests {
         let res = json!({
             "data": {
                 "host": {
-                    "id": "host-1",
+                    "id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
                     "name": "mc-server",
                     "ipAddresses": ["100.100.0.5"],
                     "isLighthouse": false,
@@ -414,7 +414,7 @@ mod tests {
     fn render_human_labels_lighthouse_when_set() {
         let res = json!({
             "data": {
-                "host": {"id": "host-lh", "name": "lh-1", "isLighthouse": true},
+                "host": {"id": "host-3UPKO6W7ZRAB3P6JK5RLK5NY5I", "name": "lh-1", "isLighthouse": true},
                 "enrollmentCode": {"code": "OTP"},
             }
         });

@@ -2,10 +2,10 @@
 source: tests/human_output.rs
 description: Network detail view.
 ---
-$ dn network get network-EXAMPLE
+$ dn network get network-Z2B7RBHWBP3VSDAPEWFWKMOMZU
 office
 Description:            Head office
-ID:                     network-EXAMPLE
+ID:                     network-Z2B7RBHWBP3VSDAPEWFWKMOMZU
 CIDRs:                  100.100.0.0/22, fd00:c0:c0::/80
 Hosts:                  3
 Managed lighthouses:    no

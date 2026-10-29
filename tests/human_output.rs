@@ -120,7 +120,7 @@ const HOSTS: &str = r#"{"data":[
   ],"metadata":{"hasNextPage":true,"nextCursor":"page-2"}}"#;
 
 const HOST: &str = r#"{"data":{"id":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
-    "networkID":"network-EXAMPLE","roleID":"role-WEB","name":"Build Server",
+    "networkID":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","roleID":"role-MCXBVCRC56AF3ZNM57X7BO5JKE","name":"Build Server",
     "ipAddresses":["100.100.0.12","fd00:c0:c0:2966:d3bf:a55d:49a0:6f18"],
     "staticAddresses":["203.0.113.5:4242"],"listenPort":4242,"isLighthouse":false,
     "isRelay":false,"isBlocked":false,"createdAt":"2026-01-25T18:15:27Z",
@@ -129,7 +129,7 @@ const HOST: &str = r#"{"data":{"id":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
     "updateAvailable":true,"version":"0.9.9","os":"windows"}},"metadata":{}}"#;
 
 const HOST_EDITED: &str = r#"{"data":{"id":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
-    "networkID":"network-EXAMPLE","roleID":"role-WEB","name":"Build Server",
+    "networkID":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","roleID":"role-MCXBVCRC56AF3ZNM57X7BO5JKE","name":"Build Server",
     "ipAddresses":["100.100.0.12","fd00:c0:c0:2966:d3bf:a55d:49a0:6f18"],
     "tags":["env:prod","site:hou","team:infra"]},"metadata":{}}"#;
 
@@ -138,18 +138,18 @@ const HOST_CREATED: &str = r#"{"data":{"host":{"id":"host-Z3HWQ5ATVK2MRXE7NC4YLB
     "enrollmentCode":{"code":"EXAMPLE-ENROLLMENT-CODE","lifetimeSeconds":86400}},
     "metadata":{}}"#;
 
-const ROLE: &str = r#"{"data":{"id":"role-WEB","name":"Web servers",
+const ROLE: &str = r#"{"data":{"id":"role-MCXBVCRC56AF3ZNM57X7BO5JKE","name":"Web servers",
     "description":"Public HTTP","hostCount":3,"firewallRulesCount":2,
     "firewallRules":[
       {"protocol":"TCP","portRange":{"from":443,"to":443},"allowedRoleID":null,
        "allowedTags":null,"description":"https from anywhere"},
-      {"protocol":"TCP","portRange":{"from":22,"to":22},"allowedRoleID":"role-ADM",
+      {"protocol":"TCP","portRange":{"from":22,"to":22},"allowedRoleID":"role-4422IV4X6SJS6PO5PWQUEOLXAE",
        "allowedTags":null,"description":"ssh from admins"}]},"metadata":{}}"#;
 
 const ROLES: &str = r#"{"data":[
-    {"id":"role-WEB","name":"Web servers","description":"Public HTTP",
+    {"id":"role-MCXBVCRC56AF3ZNM57X7BO5JKE","name":"Web servers","description":"Public HTTP",
      "hostCount":3,"firewallRulesCount":2},
-    {"id":"role-ADM","name":"Admins","description":"",
+    {"id":"role-4422IV4X6SJS6PO5PWQUEOLXAE","name":"Admins","description":"",
      "hostCount":1,"firewallRulesCount":0}
   ],"metadata":{"hasNextPage":false}}"#;
 
@@ -166,17 +166,17 @@ const TAGS: &str = r#"{"data":[
      "firewallRulesCount":0,"priority":null}
   ],"metadata":{"hasNextPage":false}}"#;
 
-const NETWORK: &str = r#"{"data":{"id":"network-EXAMPLE","name":"office",
+const NETWORK: &str = r#"{"data":{"id":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","name":"office",
     "cidrs":["100.100.0.0/22","fd00:c0:c0::/80"],"hostCount":3,"certVersion":2,
     "lighthousesAsRelays":false,"disableManagedLighthouses":true,"curve":"25519",
     "signingCAID":"ca-EXAMPLE","createdAt":"2025-11-02T09:00:00Z",
     "description":"Head office"},"metadata":{}}"#;
 
 const NETWORKS: &str = r#"{"data":[
-    {"id":"network-EXAMPLE","name":"office","cidrs":["100.100.0.0/22","fd00:c0:c0::/80"],
+    {"id":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","name":"office","cidrs":["100.100.0.0/22","fd00:c0:c0::/80"],
      "hostCount":3,"certVersion":2,"curve":"25519","description":"Head office",
      "lighthousesAsRelays":true,"disableManagedLighthouses":false},
-    {"id":"network-LAB","name":"lab","cidrs":["100.101.0.0/24"],
+    {"id":"network-2QYEBQUDORPGD7ZIHRIKDZ6O5I","name":"lab","cidrs":["100.101.0.0/24"],
      "hostCount":0,"certVersion":1,"curve":"P256","description":"",
      "lighthousesAsRelays":false,"disableManagedLighthouses":true}
   ],"metadata":{"hasNextPage":false}}"#;
@@ -188,7 +188,7 @@ const AUDIT_LOGS: &str = r#"{"data":[
      "event":{"type":"UPDATED"}},
     {"id":"log-2","timestamp":"2026-01-02T00:00:00Z",
      "actor":{"type":"apiKey","id":"dnkey-1","name":"ci"},
-     "target":{"type":"role","id":"role-WEB"},"event":{"type":"CREATED"}},
+     "target":{"type":"role","id":"role-MCXBVCRC56AF3ZNM57X7BO5JKE"},"event":{"type":"CREATED"}},
     {"id":"log-1","timestamp":"2026-01-01T00:00:00Z","actor":{"type":"system"},
      "target":{"type":"ca","id":"ca-EXAMPLE"},"event":{"type":"CREATED"}}
   ],"metadata":{"hasNextPage":true,"nextCursor":"page-2"}}"#;
@@ -198,7 +198,7 @@ const HOST_ID: &str = "host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI";
 const HOST_ROUTES: &[Route] = &[
     ("GET", "/v2/hosts", OK, HOSTS),
     ("GET", "/v2/hosts/host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI", OK, HOST),
-    ("GET", "/v1/roles/role-WEB", OK, ROLE),
+    ("GET", "/v1/roles/role-MCXBVCRC56AF3ZNM57X7BO5JKE", OK, ROLE),
     (
         "PUT",
         "/v3/hosts/host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
@@ -211,14 +211,29 @@ const HOST_ROUTES: &[Route] = &[
         OK,
         DELETED,
     ),
-    ("GET", "/v2/networks/network-EXAMPLE", OK, NETWORK),
+    (
+        "GET",
+        "/v2/networks/network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
+        OK,
+        NETWORK,
+    ),
     ("POST", "/v2/host-and-enrollment-code", OK, HOST_CREATED),
 ];
 
 const NETWORK_ROUTES: &[Route] = &[
     ("GET", "/v2/networks", OK, NETWORKS),
-    ("GET", "/v2/networks/network-EXAMPLE", OK, NETWORK),
-    ("DELETE", "/v1/networks/network-EXAMPLE", OK, DELETED),
+    (
+        "GET",
+        "/v2/networks/network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
+        OK,
+        NETWORK,
+    ),
+    (
+        "DELETE",
+        "/v1/networks/network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
+        OK,
+        DELETED,
+    ),
 ];
 
 const ROUTE: &str = r#"{"data":{"id":"route-YD7TPBTG7LCK3B7WUHZV3MP4VA","name":"Office LAN",
@@ -227,7 +242,7 @@ const ROUTE: &str = r#"{"data":{"id":"route-YD7TPBTG7LCK3B7WUHZV3MP4VA","name":"
     "createdAt":"2024-03-15T13:59:09Z","modifiedAt":"2024-03-15T13:59:09Z",
     "firewallRules":[
       {"localCIDR":"192.168.14.56/32","protocol":"TCP","portRange":{"from":22,"to":22},
-       "allowedRoleID":"role-ADM","allowedTags":null,"description":"ssh to the printer"},
+       "allowedRoleID":"role-4422IV4X6SJS6PO5PWQUEOLXAE","allowedTags":null,"description":"ssh to the printer"},
       {"localCIDR":"192.168.14.0/26","protocol":"ICMP","portRange":null,
        "allowedRoleID":null,"allowedTags":["site:hou"],"description":"ping"}]},
     "metadata":{}}"#;
@@ -254,10 +269,15 @@ const ROUTE_LIST_ROUTES: &[Route] = &[
 
 const ROLE_ROUTES: &[Route] = &[
     ("GET", "/v1/roles", OK, ROLES),
-    ("GET", "/v1/roles/role-WEB", OK, ROLE),
+    ("GET", "/v1/roles/role-MCXBVCRC56AF3ZNM57X7BO5JKE", OK, ROLE),
     ("POST", "/v1/roles", OK, ROLE),
-    ("PUT", "/v1/roles/role-WEB", OK, ROLE),
-    ("DELETE", "/v1/roles/role-WEB", OK, DELETED),
+    ("PUT", "/v1/roles/role-MCXBVCRC56AF3ZNM57X7BO5JKE", OK, ROLE),
+    (
+        "DELETE",
+        "/v1/roles/role-MCXBVCRC56AF3ZNM57X7BO5JKE",
+        OK,
+        DELETED,
+    ),
 ];
 
 const TAG_ROUTES: &[Route] = &[
@@ -301,7 +321,7 @@ const UNAUTHORIZED_ROUTES: &[Route] = &[(
 const ERROR_ROUTES: &[Route] = &[
     (
         "GET",
-        "/v2/hosts/host-MISSING",
+        "/v2/hosts/host-4LSTMYZG3ENRNEE46RF6TANA2M",
         "404 Not Found",
         r#"{"errors":[{"code":"ERR_NOT_FOUND","message":"host not found"}]}"#,
     ),
@@ -313,14 +333,19 @@ const ERROR_ROUTES: &[Route] = &[
     ),
     (
         "GET",
-        "/v2/hosts/host-NOREAD",
+        "/v2/hosts/host-NTC4C3RQGX4L6L73R6LCJL4SK4",
         "403 Forbidden",
         r#"{"errors":[{"code":"ERR_FORBIDDEN","message":"missing scope hosts:read"}]}"#,
     ),
-    ("DELETE", "/v1/hosts/host-NOREAD", OK, DELETED),
     (
         "DELETE",
-        "/v1/hosts/host-MISSING",
+        "/v1/hosts/host-NTC4C3RQGX4L6L73R6LCJL4SK4",
+        OK,
+        DELETED,
+    ),
+    (
+        "DELETE",
+        "/v1/hosts/host-4LSTMYZG3ENRNEE46RF6TANA2M",
         "404 Not Found",
         r#"{"errors":[{"code":"ERR_NOT_FOUND","message":"host not found"}]}"#,
     ),
@@ -341,7 +366,7 @@ human_output! {
     host_get: "Host detail view, with the role named and an available client update flagged.",
         HOST_ROUTES, &[], &["host", "get", HOST_ID];
     host_create: "Created host, its enrollment command, and the default-role firewall note.",
-        HOST_ROUTES, &[], &["host", "create", "web-2", "--network", "network-EXAMPLE"];
+        HOST_ROUTES, &[], &["host", "create", "web-2", "--network", "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU"];
     host_edit: "Edited host with its final tags, warning about a removed tag it never had.",
         HOST_ROUTES, &[], &["host", "edit", HOST_ID, "--add-tag", "team:infra", "--remove-tag", "gone:1"];
     host_edit_unchanged: "An edit that changes nothing skips the update and says so.",
@@ -354,9 +379,9 @@ human_output! {
     network_list: "Network table.",
         NETWORK_ROUTES, &[], &["network", "list"];
     network_get: "Network detail view.",
-        NETWORK_ROUTES, &[], &["network", "get", "network-EXAMPLE"];
+        NETWORK_ROUTES, &[], &["network", "get", "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU"];
     network_delete: "Network delete with --yes names the deleted network.",
-        NETWORK_ROUTES, &[], &["network", "delete", "network-EXAMPLE", "--yes"];
+        NETWORK_ROUTES, &[], &["network", "delete", "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU", "--yes"];
 
     route_list: "Route table, marking a range hosts don't install.",
         ROUTE_LIST_ROUTES, &[], &["route", "list"];
@@ -365,15 +390,15 @@ human_output! {
     role_list: "Role table.",
         ROLE_ROUTES, &[], &["role", "list"];
     role_get: "Role with its firewall rules; a rule allowing another role shows it by name.",
-        ROLE_ROUTES, &[], &["role", "get", "role-WEB"];
+        ROLE_ROUTES, &[], &["role", "get", "role-MCXBVCRC56AF3ZNM57X7BO5JKE"];
     role_create: "Created role, shown like role get.",
-        ROLE_ROUTES, &[], &["role", "create", "Web servers", "--rule", "tcp/443,desc=https from anywhere", "--rule", "tcp/22,from=role-ADM,desc=ssh from admins"];
+        ROLE_ROUTES, &[], &["role", "create", "Web servers", "--rule", "tcp/443,desc=https from anywhere", "--rule", "tcp/22,from=role-4422IV4X6SJS6PO5PWQUEOLXAE,desc=ssh from admins"];
     role_edit: "Edited role, warning about a removed rule it never had.",
-        ROLE_ROUTES, &[], &["role", "edit", "role-WEB", "--add-rule", "icmp", "--remove-rule", "udp/53"];
+        ROLE_ROUTES, &[], &["role", "edit", "role-MCXBVCRC56AF3ZNM57X7BO5JKE", "--add-rule", "icmp", "--remove-rule", "udp/53"];
     role_edit_unchanged: "A role edit that changes nothing skips the update and says so.",
-        ROLE_ROUTES, &[], &["role", "edit", "role-WEB", "--add-rule", "tcp/443,desc=https from anywhere"];
+        ROLE_ROUTES, &[], &["role", "edit", "role-MCXBVCRC56AF3ZNM57X7BO5JKE", "--add-rule", "tcp/443,desc=https from anywhere"];
     role_delete: "Role delete with --yes names the deleted role.",
-        ROLE_ROUTES, &[], &["role", "delete", "role-WEB", "--yes"];
+        ROLE_ROUTES, &[], &["role", "delete", "role-MCXBVCRC56AF3ZNM57X7BO5JKE", "--yes"];
 
     tag_list: "Tag table.",
         TAG_ROUTES, &[], &["tag", "list"];
@@ -382,7 +407,7 @@ human_output! {
     tag_create: "Created tag, shown like tag get.",
         TAG_ROUTES, &[], &["tag", "create", "env:prod", "--description", "Production", "--rule", "udp/53,tag=site:hou,desc=dns"];
     tag_edit: "Edited tag, warning about a route it was not subscribed to.",
-        TAG_ROUTES, &[], &["tag", "edit", "env:prod", "--add-rule", "tcp/443", "--remove-route", "route-Z"];
+        TAG_ROUTES, &[], &["tag", "edit", "env:prod", "--add-rule", "tcp/443", "--remove-route", "route-262MQKEOKIDPAUL465JTDZ32QI"];
     tag_delete: "Tag delete with --yes; tags are named by their id.",
         TAG_ROUTES, &[], &["tag", "delete", "env:prod", "--yes"];
 
@@ -405,13 +430,13 @@ human_output! {
         EMPTY_ROUTES, &[], &["audit-log", "list"];
 
     error_not_found: "A 404 reaches stderr as status, code and message, and exits 1.",
-        ERROR_ROUTES, &[], &["host", "get", "host-MISSING"];
+        ERROR_ROUTES, &[], &["host", "get", "host-4LSTMYZG3ENRNEE46RF6TANA2M"];
     error_forbidden: "A 403 on a list, naming the missing scope.",
         ERROR_ROUTES, &[], &["network", "list"];
     host_delete_without_read_scope: "Host delete with --yes on a key that can't read the host still deletes, named by id alone.",
-        ERROR_ROUTES, &[], &["host", "delete", "host-NOREAD", "--yes"];
+        ERROR_ROUTES, &[], &["host", "delete", "host-NTC4C3RQGX4L6L73R6LCJL4SK4", "--yes"];
     host_delete_missing: "Host delete with --yes on an id that doesn't exist: the DELETE's own 404 is the error.",
-        ERROR_ROUTES, &[], &["host", "delete", "host-MISSING", "--yes"];
+        ERROR_ROUTES, &[], &["host", "delete", "host-4LSTMYZG3ENRNEE46RF6TANA2M", "--yes"];
 
     auth_status: "Auth status names the key and its organization, as the API reports them.",
         WHOAMI_ROUTES, &[], &["auth", "status"];

@@ -2,9 +2,9 @@
 source: tests/human_output.rs
 description: "Edited role, warning about a removed rule it never had."
 ---
-$ dn role edit role-WEB --add-rule icmp --remove-rule udp/53
+$ dn role edit role-MCXBVCRC56AF3ZNM57X7BO5JKE --add-rule icmp --remove-rule udp/53
 Updated role
-Web servers (role-WEB)
+Web servers (role-MCXBVCRC56AF3ZNM57X7BO5JKE)
 Public HTTP
 Hosts: 3
 

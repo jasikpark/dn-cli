@@ -597,27 +597,41 @@ mod tests {
 
     #[test]
     fn parses_hosts_delete_with_short_yes() {
-        let cli = Cli::try_parse_from(["dn", "host", "delete", "host-1", "-y"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "dn",
+            "host",
+            "delete",
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
+            "-y",
+        ])
+        .unwrap();
         let Command::Host {
             command: HostCommand::Delete(args),
         } = cli.command
         else {
             panic!("expected `host delete` to parse into HostCommand::Delete");
         };
-        assert_eq!(args.host_id, "host-1");
+        assert_eq!(args.host_id, "host-FBNRAHQYQLWXWMCY7L4XP46ZXI");
         assert!(args.yes);
     }
 
     #[test]
     fn parses_role_delete_with_long_yes() {
-        let cli = Cli::try_parse_from(["dn", "roles", "delete", "role-1", "--yes"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "dn",
+            "roles",
+            "delete",
+            "role-4A2TRFEEBUMSGYTBSZRNVWJUQE",
+            "--yes",
+        ])
+        .unwrap();
         let Command::Role {
             command: RoleCommand::Delete(args),
         } = cli.command
         else {
             panic!("expected `role delete` to parse into RoleCommand::Delete");
         };
-        assert_eq!(args.role_id, "role-1");
+        assert_eq!(args.role_id, "role-4A2TRFEEBUMSGYTBSZRNVWJUQE");
         assert!(args.yes);
     }
 
@@ -636,14 +650,21 @@ mod tests {
 
     #[test]
     fn parses_network_delete_with_short_yes() {
-        let cli = Cli::try_parse_from(["dn", "networks", "delete", "network-1", "-y"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "dn",
+            "networks",
+            "delete",
+            "network-PP4ZXJCLB4VVUNOUYC67UW3UAE",
+            "-y",
+        ])
+        .unwrap();
         let Command::Network {
             command: NetworkCommand::Delete(args),
         } = cli.command
         else {
             panic!("expected `network delete` to parse into NetworkCommand::Delete");
         };
-        assert_eq!(args.network_id, "network-1");
+        assert_eq!(args.network_id, "network-PP4ZXJCLB4VVUNOUYC67UW3UAE");
         assert!(args.yes);
     }
 
@@ -683,7 +704,7 @@ mod tests {
             "dn",
             "hosts",
             "edit",
-            "host-1",
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
             "--add-tag",
             "dns:cloudflare",
             "--remove-tag",
@@ -696,7 +717,7 @@ mod tests {
         else {
             panic!("expected `host edit` to parse into HostCommand::Edit");
         };
-        assert_eq!(args.host_id, "host-1");
+        assert_eq!(args.host_id, "host-FBNRAHQYQLWXWMCY7L4XP46ZXI");
         assert_eq!(args.add_tag, vec!["dns:cloudflare"]);
         assert_eq!(args.remove_tag, vec!["old:stale"]);
     }
@@ -707,7 +728,7 @@ mod tests {
             "dn",
             "hosts",
             "edit",
-            "host-1",
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
             "--add-tag",
             "a:1",
             "--add-tag",
@@ -725,21 +746,38 @@ mod tests {
 
     #[test]
     fn parses_hosts_edit_with_role() {
-        let cli =
-            Cli::try_parse_from(["dn", "host", "edit", "host-1", "--role", "role-abc"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "dn",
+            "host",
+            "edit",
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
+            "--role",
+            "role-Y5LAD6TPG7QXASCOCUCBF632NI",
+        ])
+        .unwrap();
         let Command::Host {
             command: HostCommand::Edit(args),
         } = cli.command
         else {
             panic!("expected `host edit --role` to parse into HostCommand::Edit");
         };
-        assert_eq!(args.role.as_deref(), Some("role-abc"));
+        assert_eq!(
+            args.role.as_deref(),
+            Some("role-Y5LAD6TPG7QXASCOCUCBF632NI")
+        );
         assert!(validate_edit_preflight(&args).is_ok());
     }
 
     #[test]
     fn parses_hosts_edit_with_clear_role() {
-        let cli = Cli::try_parse_from(["dn", "host", "edit", "host-1", "--clear-role"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "dn",
+            "host",
+            "edit",
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
+            "--clear-role",
+        ])
+        .unwrap();
         let Command::Host {
             command: HostCommand::Edit(args),
         } = cli.command
@@ -757,9 +795,9 @@ mod tests {
             "dn",
             "hosts",
             "edit",
-            "host-1",
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
             "--role",
-            "role-a",
+            "role-H55C26ACPLURXFO4C3MWND4HHA",
             "--clear-role",
         ])
         .err()
@@ -769,14 +807,15 @@ mod tests {
 
     #[test]
     fn parses_roles_get() {
-        let cli = Cli::try_parse_from(["dn", "role", "get", "role-ABC"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["dn", "role", "get", "role-B2RPGZ2TEPSZO5EGJJAX5LNN7M"]).unwrap();
         let Command::Role {
             command: RoleCommand::Get(args),
         } = cli.command
         else {
             panic!("expected role get");
         };
-        assert_eq!(args.role_id, "role-ABC");
+        assert_eq!(args.role_id, "role-B2RPGZ2TEPSZO5EGJJAX5LNN7M");
     }
 
     #[test]
@@ -802,7 +841,7 @@ mod tests {
             "--cursor",
             "c1",
             "--target",
-            "host-1",
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI",
             "--target-type",
             "host",
         ])
@@ -815,7 +854,10 @@ mod tests {
         };
         assert_eq!(args.page.limit, 5);
         assert_eq!(args.page.cursor.as_deref(), Some("c1"));
-        assert_eq!(args.target.as_deref(), Some("host-1"));
+        assert_eq!(
+            args.target.as_deref(),
+            Some("host-FBNRAHQYQLWXWMCY7L4XP46ZXI")
+        );
         assert_eq!(args.target_type.as_deref(), Some("host"));
     }
 
@@ -901,14 +943,21 @@ mod tests {
                 command: TagCommand::Get(_)
             }
         ));
-        let cli = Cli::try_parse_from(["dn", "hosts", "get", "host-1"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["dn", "hosts", "get", "host-FBNRAHQYQLWXWMCY7L4XP46ZXI"]).unwrap();
         assert!(matches!(
             cli.command,
             Command::Host {
                 command: HostCommand::Get(_)
             }
         ));
-        let cli = Cli::try_parse_from(["dn", "networks", "get", "network-1"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "dn",
+            "networks",
+            "get",
+            "network-PP4ZXJCLB4VVUNOUYC67UW3UAE",
+        ])
+        .unwrap();
         assert!(matches!(
             cli.command,
             Command::Network {

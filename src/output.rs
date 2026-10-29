@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn render_details_aligns_values_and_skips_empty_rows() {
         let rows = [
-            ("ID", "host-1".to_string()),
+            ("ID", "host-FBNRAHQYQLWXWMCY7L4XP46ZXI".to_string()),
             ("Role", String::new()),
             ("IP addresses", "10.0.0.1".to_string()),
             ("Tags", "  ".to_string()),
@@ -363,7 +363,7 @@ mod tests {
         ];
         assert_eq!(
             render_details(&rows),
-            "ID:            host-1\nIP addresses:  10.0.0.1\n"
+            "ID:            host-FBNRAHQYQLWXWMCY7L4XP46ZXI\nIP addresses:  10.0.0.1\n"
         );
     }
 
@@ -375,8 +375,11 @@ mod tests {
 
     #[test]
     fn data_object_rejects_missing_or_non_object_data() {
-        let ok = serde_json::json!({"data": {"id": "host-1"}});
-        assert_eq!(data_object(&ok, "host").unwrap()["id"], "host-1");
+        let ok = serde_json::json!({"data": {"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI"}});
+        assert_eq!(
+            data_object(&ok, "host").unwrap()["id"],
+            "host-FBNRAHQYQLWXWMCY7L4XP46ZXI"
+        );
         for bad in [
             serde_json::json!({}),
             serde_json::json!({"data": []}),
@@ -390,11 +393,7 @@ mod tests {
     #[test]
     fn render_table_aligns_columns_no_trailing_space() {
         let rows = vec![
-            vec![
-                "host-1".to_string(),
-                "web".to_string(),
-                "10.0.0.1".to_string(),
-            ],
+            vec!["h1".to_string(), "web".to_string(), "10.0.0.1".to_string()],
             vec![
                 "h2".to_string(),
                 "longer-name".to_string(),
@@ -404,9 +403,9 @@ mod tests {
         let out = render_table(&["ID", "NAME", "IP"], &rows);
         assert_eq!(
             out,
-            "ID      NAME         IP\n\
-             host-1  web          10.0.0.1\n\
-             h2      longer-name  10.0.0.2\n"
+            "ID  NAME         IP\n\
+             h1  web          10.0.0.1\n\
+             h2  longer-name  10.0.0.2\n"
         );
         // Last column is never padded.
         assert!(out.lines().all(|l| !l.ends_with(' ')));

@@ -2,7 +2,7 @@
 source: tests/human_output.rs
 description: "Created host, its enrollment command, and the default-role firewall note."
 ---
-$ dn host create web-2 --network network-EXAMPLE
+$ dn host create web-2 --network network-Z2B7RBHWBP3VSDAPEWFWKMOMZU
 Created host "web-2" (host-Z3HWQ5ATVK2MRXE7NC4YLBPJDG)
   IP addresses: 100.100.0.40
 

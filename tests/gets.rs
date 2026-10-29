@@ -59,8 +59,8 @@ fn dn(url: &str, args: &[&str]) -> Output {
         .unwrap()
 }
 
-const HOST: &str = r#"{"data":{"id":"host-EXAMPLE","networkID":"network-EXAMPLE",
-    "roleID":"role-WEB","name":"web-1","ipAddresses":["100.100.0.29"],
+const HOST: &str = r#"{"data":{"id":"host-2NEVKKDUYRV67A5XIGFW44FH2I","networkID":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
+    "roleID":"role-MCXBVCRC56AF3ZNM57X7BO5JKE","name":"web-1","ipAddresses":["100.100.0.29"],
     "staticAddresses":[],"listenPort":0,"isLighthouse":false,"isRelay":false,
     "isBlocked":false,"createdAt":"2025-01-25T18:15:27Z","tags":["env:prod"],
     "configOverrides":[],"metadata":{"lastSeenAt":null,"platform":null,
@@ -68,10 +68,10 @@ const HOST: &str = r#"{"data":{"id":"host-EXAMPLE","networkID":"network-EXAMPLE"
 
 const ROLE_OK: (&str, &str) = (
     "200 OK",
-    r#"{"data":{"id":"role-WEB","name":"Web servers"}}"#,
+    r#"{"data":{"id":"role-MCXBVCRC56AF3ZNM57X7BO5JKE","name":"Web servers"}}"#,
 );
 
-const NETWORK: &str = r#"{"data":{"id":"network-EXAMPLE","name":"office",
+const NETWORK: &str = r#"{"data":{"id":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","name":"office",
     "cidrs":["100.100.0.0/22"],"hostCount":3,"certVersion":2,
     "lighthousesAsRelays":false,"disableManagedLighthouses":true,"curve":"25519"},
     "metadata":{}}"#;
@@ -79,11 +79,14 @@ const NETWORK: &str = r#"{"data":{"id":"network-EXAMPLE","name":"office",
 #[test]
 fn hosts_get_reads_v2_and_names_the_role() {
     let (url, seen) = serve(HOST, ROLE_OK);
-    let out = dn(&url, &["host", "get", "host-EXAMPLE"]);
+    let out = dn(&url, &["host", "get", "host-2NEVKKDUYRV67A5XIGFW44FH2I"]);
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.starts_with("web-1\n"), "{stdout}");
-    assert!(stdout.contains("Web servers (role-WEB)"), "{stdout}");
+    assert!(
+        stdout.contains("Web servers (role-MCXBVCRC56AF3ZNM57X7BO5JKE)"),
+        "{stdout}"
+    );
     let last_seen = stdout.lines().find(|l| l.starts_with("Last seen:"));
     assert_eq!(
         last_seen.map(|l| l.split_whitespace().collect::<Vec<_>>()),
@@ -92,7 +95,10 @@ fn hosts_get_reads_v2_and_names_the_role() {
     );
     assert_eq!(
         *seen.lock().unwrap(),
-        ["/v2/hosts/host-EXAMPLE", "/v1/roles/role-WEB"]
+        [
+            "/v2/hosts/host-2NEVKKDUYRV67A5XIGFW44FH2I",
+            "/v1/roles/role-MCXBVCRC56AF3ZNM57X7BO5JKE"
+        ]
     );
 }
 
@@ -105,7 +111,7 @@ fn hosts_get_falls_back_to_the_role_id_when_the_lookup_fails() {
             r#"{"errors":[{"code":"ERR_FORBIDDEN","message":"no"}]}"#,
         ),
     );
-    let out = dn(&url, &["host", "get", "host-EXAMPLE"]);
+    let out = dn(&url, &["host", "get", "host-2NEVKKDUYRV67A5XIGFW44FH2I"]);
     assert!(out.status.success(), "{out:?}");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("role lookup failed"), "{stderr}");
@@ -113,7 +119,7 @@ fn hosts_get_falls_back_to_the_role_id_when_the_lookup_fails() {
     let role = stdout.lines().find(|l| l.starts_with("Role:"));
     assert_eq!(
         role.map(|l| l.split_whitespace().collect::<Vec<_>>()),
-        Some(vec!["Role:", "role-WEB"]),
+        Some(vec!["Role:", "role-MCXBVCRC56AF3ZNM57X7BO5JKE"]),
         "{stdout}"
     );
 }
@@ -121,42 +127,65 @@ fn hosts_get_falls_back_to_the_role_id_when_the_lookup_fails() {
 #[test]
 fn hosts_get_json_passes_the_response_through_without_a_role_lookup() {
     let (url, seen) = serve(HOST, ROLE_OK);
-    let out = dn(&url, &["--json", "hosts", "get", "host-EXAMPLE"]);
+    let out = dn(
+        &url,
+        &["--json", "hosts", "get", "host-2NEVKKDUYRV67A5XIGFW44FH2I"],
+    );
     assert!(out.status.success(), "{out:?}");
     let got: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let want: serde_json::Value = serde_json::from_str(HOST).unwrap();
     assert_eq!(got, want);
-    assert_eq!(*seen.lock().unwrap(), ["/v2/hosts/host-EXAMPLE"]);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        ["/v2/hosts/host-2NEVKKDUYRV67A5XIGFW44FH2I"]
+    );
 }
 
 #[test]
 fn networks_get_reads_v2() {
     let (url, seen) = serve(NETWORK, ROLE_OK);
-    let out = dn(&url, &["network", "get", "network-EXAMPLE"]);
+    let out = dn(
+        &url,
+        &["network", "get", "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU"],
+    );
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.starts_with("office\n"), "{stdout}");
     assert!(stdout.contains("Managed lighthouses:    no\n"), "{stdout}");
-    assert_eq!(*seen.lock().unwrap(), ["/v2/networks/network-EXAMPLE"]);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        ["/v2/networks/network-Z2B7RBHWBP3VSDAPEWFWKMOMZU"]
+    );
 }
 
 #[test]
 fn networks_get_json_passes_the_response_through() {
     let (url, seen) = serve(NETWORK, ROLE_OK);
-    let out = dn(&url, &["--json", "networks", "get", "network-EXAMPLE"]);
+    let out = dn(
+        &url,
+        &[
+            "--json",
+            "networks",
+            "get",
+            "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
+        ],
+    );
     assert!(out.status.success(), "{out:?}");
     let got: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let want: serde_json::Value = serde_json::from_str(NETWORK).unwrap();
     assert_eq!(got, want);
-    assert_eq!(*seen.lock().unwrap(), ["/v2/networks/network-EXAMPLE"]);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        ["/v2/networks/network-Z2B7RBHWBP3VSDAPEWFWKMOMZU"]
+    );
 }
 
 const ROUTE: &str = r#"{"data":{"id":"route-YD7TPBTG7LCK3B7WUHZV3MP4VA","name":"Office LAN",
-    "description":"to the printers","routerHostID":"host-EXAMPLE",
+    "description":"to the printers","routerHostID":"host-2NEVKKDUYRV67A5XIGFW44FH2I",
     "routableCIDRs":{"192.168.14.0/26":{"install":true}},
     "createdAt":"2024-03-15T13:59:09Z","modifiedAt":"2024-03-15T13:59:09Z",
     "firewallRules":[{"localCIDR":"192.168.14.56/32","protocol":"TCP",
-      "portRange":{"from":22,"to":22},"allowedRoleID":"role-EXAMPLE",
+      "portRange":{"from":22,"to":22},"allowedRoleID":"role-KCDMEJATVFNPKRG6GKL4DDCEY4",
       "allowedTags":null,"description":"ssh to the printer"}]}}"#;
 
 #[test]
@@ -173,7 +202,10 @@ fn routes_get_reads_v1_and_falls_back_to_role_ids_without_a_roles_list() {
         "{stdout}"
     );
     assert!(stdout.contains("192.168.14.56/32"), "{stdout}");
-    assert!(stdout.contains("\"role-EXAMPLE\" hosts"), "{stdout}");
+    assert!(
+        stdout.contains("\"role-KCDMEJATVFNPKRG6GKL4DDCEY4\" hosts"),
+        "{stdout}"
+    );
     assert_eq!(
         *seen.lock().unwrap(),
         [
@@ -208,8 +240,11 @@ fn routes_get_json_passes_the_response_through() {
 #[test]
 fn gets_reject_non_object_data() {
     for (args, kind) in [
-        (["host", "get", "host-EXAMPLE"], "host"),
-        (["network", "get", "network-EXAMPLE"], "network"),
+        (["host", "get", "host-2NEVKKDUYRV67A5XIGFW44FH2I"], "host"),
+        (
+            ["network", "get", "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU"],
+            "network",
+        ),
         (
             ["route", "get", "route-YD7TPBTG7LCK3B7WUHZV3MP4VA"],
             "route",
@@ -246,12 +281,15 @@ fn gets_reject_malformed_ids_before_any_request() {
 
 #[test]
 fn hosts_get_skips_the_role_lookup_for_a_malformed_role_id() {
-    const BAD_ROLE: &str = r#"{"data":{"id":"host-EXAMPLE","name":"web-1",
+    const BAD_ROLE: &str = r#"{"data":{"id":"host-2NEVKKDUYRV67A5XIGFW44FH2I","name":"web-1",
         "roleID":"role-1/../../v2/hosts"},"metadata":{}}"#;
     let (url, seen) = serve(BAD_ROLE, ROLE_OK);
-    let out = dn(&url, &["host", "get", "host-EXAMPLE"]);
+    let out = dn(&url, &["host", "get", "host-2NEVKKDUYRV67A5XIGFW44FH2I"]);
     assert!(out.status.success(), "{out:?}");
-    assert_eq!(*seen.lock().unwrap(), ["/v2/hosts/host-EXAMPLE"]);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        ["/v2/hosts/host-2NEVKKDUYRV67A5XIGFW44FH2I"]
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("role-1/../../v2/hosts"), "{stdout}");
 }

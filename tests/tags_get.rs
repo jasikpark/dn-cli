@@ -28,7 +28,7 @@ fn serve(tag_body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
                 .unwrap_or_default()
                 .to_string();
             let body = if target.starts_with("/v1/roles") {
-                r#"{"data":[{"id":"role-ADM","name":"Admins"}],"metadata":{}}"#
+                r#"{"data":[{"id":"role-4422IV4X6SJS6PO5PWQUEOLXAE","name":"Admins"}],"metadata":{}}"#
             } else {
                 tag_body
             };
@@ -58,7 +58,7 @@ fn dn(url: &str, args: &[&str]) -> Output {
 
 const TAG: &str = r#"{"data":{"name":"env:prod","hostCount":2,"firewallRulesCount":1,
     "firewallRules":[{"protocol":"TCP","portRange":{"from":22,"to":22},
-    "allowedRoleID":"role-ADM","allowedTags":null,"description":"ssh"}]}}"#;
+    "allowedRoleID":"role-4422IV4X6SJS6PO5PWQUEOLXAE","allowedTags":null,"description":"ssh"}]}}"#;
 
 #[test]
 fn tags_get_names_rule_roles_from_the_roles_list() {
