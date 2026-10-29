@@ -11,7 +11,7 @@ inspect and manage the user's network.
 
 ## Versions
 
-This skill documents `dn` 0.4.3. `dn --version` says what's installed. When
+This skill documents `dn` 0.4.4. `dn --version` says what's installed. When
 the two differ, one of them is behind, and `dn <command> --help` is the
 authority on what exists until they match.
 
@@ -295,7 +295,7 @@ dn route get <ROUTE_ID> --json
 Returns `{ "data": route }` with the `route list` fields plus
 `firewallRules`: the inbound rules the router host accepts for the routed
 ranges, in the role-rule shape plus a `localCIDR` (the part of the routable
-range each rule applies to; `0.0.0.0/0` means all of it). These rules are on
+range each rule applies to; `0.4.4.0/0` means all of it). These rules are on
 the router, not on subscribing hosts: a host reaching through the route needs
 a rule here whose source matches it (`allowedRoleID` / `allowedTags`, as for
 roles) and whose `localCIDR` covers the destination. Human output lists the
