@@ -221,6 +221,32 @@ const NETWORK_ROUTES: &[Route] = &[
     ("DELETE", "/v1/networks/network-EXAMPLE", OK, DELETED),
 ];
 
+const ROUTE: &str = r#"{"data":{"id":"route-EXAMPLE","name":"Office LAN",
+    "description":"to the printers","routerHostID":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
+    "routableCIDRs":{"192.168.14.0/26":{"install":true},"10.9.0.0/16":{"install":false}},
+    "createdAt":"2024-03-15T13:59:09Z","modifiedAt":"2024-03-15T13:59:09Z",
+    "firewallRules":[
+      {"localCIDR":"192.168.14.56/32","protocol":"TCP","portRange":{"from":22,"to":22},
+       "allowedRoleID":"role-ADM","allowedTags":null,"description":"ssh to the printer"},
+      {"localCIDR":"192.168.14.0/26","protocol":"ICMP","portRange":null,
+       "allowedRoleID":null,"allowedTags":["site:hou"],"description":"ping"}]},
+    "metadata":{}}"#;
+
+const ROUTES: &str = r#"{"data":[
+    {"id":"route-EXAMPLE","name":"Office LAN","description":"to the printers",
+     "routerHostID":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
+     "routableCIDRs":{"192.168.14.0/26":{"install":true},"10.9.0.0/16":{"install":false}},
+     "firewallRulesCount":2},
+    {"id":"route-LAB","name":"Lab","description":"","routerHostID":null,
+     "routableCIDRs":{},"firewallRulesCount":0}
+  ],"metadata":{"hasNextPage":false}}"#;
+
+const ROUTE_LIST_ROUTES: &[Route] = &[
+    ("GET", "/v1/routes", OK, ROUTES),
+    ("GET", "/v1/routes/route-EXAMPLE", OK, ROUTE),
+    ("GET", "/v1/roles", OK, ROLES),
+];
+
 const ROLE_ROUTES: &[Route] = &[
     ("GET", "/v1/roles", OK, ROLES),
     ("GET", "/v1/roles/role-WEB", OK, ROLE),
@@ -243,6 +269,7 @@ const EMPTY_ROUTES: &[Route] = &[
     ("GET", "/v2/hosts", OK, EMPTY_PAGE),
     ("GET", "/v2/networks", OK, EMPTY_PAGE),
     ("GET", "/v1/roles", OK, EMPTY_PAGE),
+    ("GET", "/v1/routes", OK, EMPTY_PAGE),
     ("GET", "/v2/tags", OK, EMPTY_PAGE),
     ("GET", "/v1/audit-logs", OK, EMPTY_PAGE),
 ];
@@ -326,6 +353,10 @@ human_output! {
     network_delete: "Network delete with --yes names the deleted network.",
         NETWORK_ROUTES, &[], &["network", "delete", "network-EXAMPLE", "--yes"];
 
+    route_list: "Route table, marking a range hosts don't install.",
+        ROUTE_LIST_ROUTES, &[], &["route", "list"];
+    route_get: "Route detail view with rules by local CIDR and the allowed role named.",
+        ROUTE_LIST_ROUTES, &[], &["route", "get", "route-EXAMPLE"];
     role_list: "Role table.",
         ROLE_ROUTES, &[], &["role", "list"];
     role_get: "Role with its firewall rules; a rule allowing another role shows it by name.",
@@ -359,6 +390,8 @@ human_output! {
         EMPTY_ROUTES, &[], &["host", "search", "nothing"];
     network_list_empty: "Network list with no rows.",
         EMPTY_ROUTES, &[], &["network", "list"];
+    route_list_empty: "Route list with no rows.",
+        EMPTY_ROUTES, &[], &["route", "list"];
     role_list_empty: "Role list with no rows.",
         EMPTY_ROUTES, &[], &["role", "list"];
     tag_list_empty: "Tag list with no rows.",

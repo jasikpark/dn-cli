@@ -44,6 +44,12 @@ pub enum Command {
         #[command(subcommand)]
         command: NetworkCommand,
     },
+    /// Inspect routes: the IPv4 ranges a router host forwards for
+    #[command(alias = "routes")]
+    Route {
+        #[command(subcommand)]
+        command: RouteCommand,
+    },
     /// Inspect and delete firewall roles
     #[command(alias = "roles")]
     Role {
@@ -145,6 +151,21 @@ pub struct NetworkDeleteArgs {
     /// with --json)
     #[arg(short = 'y', long)]
     pub yes: bool,
+}
+
+#[derive(Subcommand)]
+pub enum RouteCommand {
+    /// List routes
+    List(PageArgs),
+    /// Show one route: its router host, routable ranges, and the inbound
+    /// rules the router accepts for them
+    Get(RouteGetArgs),
+}
+
+#[derive(Args)]
+pub struct RouteGetArgs {
+    /// Route id (route-…). Find ids with `dn route list`.
+    pub route_id: String,
 }
 
 #[derive(Subcommand)]

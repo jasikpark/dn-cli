@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: Route list with no rows.
+---
+$ dn route list
+No routes found.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

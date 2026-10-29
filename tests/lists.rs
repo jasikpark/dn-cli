@@ -60,8 +60,9 @@ const PAGE: &str = r#"{"data":[{"id":"x-1","name":"one"}],
 
 #[test]
 fn every_list_fetches_one_page_of_500_by_default() {
-    let cases: [(&[&str], &str); 5] = [
+    let cases: [(&[&str], &str); 6] = [
         (&["host", "list"], "/v2/hosts?pageSize=500"),
+        (&["route", "list"], "/v1/routes?pageSize=500"),
         (
             &["host", "search", "web"],
             "/v2/hosts?filter.search=web&pageSize=500",

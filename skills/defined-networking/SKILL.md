@@ -266,6 +266,41 @@ fails with an error telling you to pass it — there is no prompt you can answer
 (`dn host list --json` gives the id → name mapping). Never infer which host to
 delete from context; one id per call.
 
+### List routes — `dn route list`
+
+```bash
+dn route list --json
+```
+
+Returns `{ "data": [ route… ], "metadata": { … } }`. A route is a router host
+plus the IPv4 ranges it forwards for; hosts reach those ranges by carrying a
+tag that subscribes to the route (`routeSubscriptions` on `dn tag get`, set
+with `dn tag edit --add-route`). Each route has `id` (`route-…`), `name`,
+`description`, `routerHostID` (`null` when no router is set — the route then
+forwards nothing), `routableCIDRs` (an object keyed by CIDR, each
+`{ "install": bool }`; `false` means subscribing hosts don't add the route
+to their routing table), and `firewallRulesCount`. Use it to find route ids
+for `tag create --route` / `tag edit --add-route`, and to answer "which
+hosts can reach 192.168.x" — find the route covering the range, then the
+tags subscribed to it, then the hosts carrying those tags. Key permission:
+`routes:list`.
+
+### Show one route — `dn route get`
+
+```bash
+dn route get <ROUTE_ID> --json
+```
+
+Returns `{ "data": route }` with the `route list` fields plus
+`firewallRules`: the inbound rules the router host accepts for the routed
+ranges, in the role-rule shape plus a `localCIDR` (the part of the routable
+range each rule applies to; `0.0.0.0/0` means all of it). These rules are on
+the router, not on subscribing hosts: a host reaching through the route needs
+a rule here whose source matches it (`allowedRoleID` / `allowedTags`, as for
+roles) and whose `localCIDR` covers the destination. Human output lists the
+ranges, then the rules by local CIDR with the role named. Key permission:
+`routes:read` (plus `roles:list` to name roles; without it ids show).
+
 ### List roles — `dn role list`
 
 ```bash

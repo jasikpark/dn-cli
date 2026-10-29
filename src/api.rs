@@ -248,6 +248,16 @@ impl Client {
         self.get(&tag_path(name))
     }
 
+    /// One page of routes (`routes:list`).
+    pub fn list_routes(&self, page: &PageArgs) -> Result<Value> {
+        self.list_page("/v1/routes", &[], page)
+    }
+
+    /// One route with its firewall rules (`routes:read`).
+    pub fn get_route(&self, id: &str) -> Result<Value> {
+        self.get(&format!("/v1/routes/{id}"))
+    }
+
     /// One page of networks.
     pub fn list_networks(&self, page: &PageArgs) -> Result<Value> {
         self.list_page("/v2/networks", &[], page)

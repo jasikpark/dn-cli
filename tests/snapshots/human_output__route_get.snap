@@ -1,0 +1,17 @@
+---
+source: tests/human_output.rs
+description: Route detail view with rules by local CIDR and the allowed role named.
+---
+$ dn route get route-EXAMPLE
+Office LAN (route-EXAMPLE)
+Description:     to the printers
+ID:              route-EXAMPLE
+Router host:     host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
+Routable CIDRs:  192.168.14.0/26, 10.9.0.0/16 (not installed)
+Created:         2024-03-15T13:59:09Z
+
+LOCAL CIDR        ALLOWED HOSTS                PROTOCOL  PORTS  DESCRIPTION
+192.168.14.0/26   All hosts tagged "site:hou"  ICMP      any    ping
+192.168.14.56/32  "Admins" hosts               TCP       22     ssh to the printer
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

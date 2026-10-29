@@ -5,4 +5,5 @@ pub mod firewall;
 pub mod firewall_edit;
 pub mod hosts;
 pub mod networks;
+pub mod routes;
 pub mod rules;
