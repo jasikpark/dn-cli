@@ -160,7 +160,10 @@ const ROUTE: &str = r#"{"data":{"id":"route-EXAMPLE","name":"Office LAN",
       "allowedTags":null,"description":"ssh to the printer"}]}}"#;
 
 #[test]
-fn routes_get_reads_v1_and_names_the_allowed_role() {
+fn routes_get_reads_v1_and_falls_back_to_role_ids_without_a_roles_list() {
+    // This mock answers the roles list with the route body, so no role
+    // names resolve and the rule shows the id, as a key lacking
+    // `roles:list` would see.
     let (url, seen) = serve(ROUTE, ROLE_OK);
     let out = dn(&url, &["route", "get", "route-EXAMPLE"]);
     assert!(out.status.success(), "{out:?}");
@@ -170,7 +173,7 @@ fn routes_get_reads_v1_and_names_the_allowed_role() {
         "{stdout}"
     );
     assert!(stdout.contains("192.168.14.56/32"), "{stdout}");
-    assert!(stdout.contains("\"Admins\" hosts"), "{stdout}");
+    assert!(stdout.contains("\"role-EXAMPLE\" hosts"), "{stdout}");
     assert_eq!(
         *seen.lock().unwrap(),
         ["/v1/routes/route-EXAMPLE", "/v1/roles?pageSize=500"]
