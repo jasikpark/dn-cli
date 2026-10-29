@@ -355,6 +355,49 @@ impl Client {
         })?)
     }
 
+    /// Create a role (`roles:create`). The body is the `POST /v1/roles`
+    /// object: `name`, `description`, `firewallRules`.
+    pub fn create_role(&self, body: &Value) -> Result<Value> {
+        self.post_json("/v1/roles", body)
+    }
+
+    /// Replace a role's description and firewall rules (`roles:update`).
+    /// `PUT /v1/roles/{id}` resets any field left out, so callers read the
+    /// role first and send the whole thing back.
+    pub fn update_role(&self, id: &str, body: &Value) -> Result<Value> {
+        read_json(self.send(&format!("/v1/roles/{id}"), |url, auth| {
+            self.agent
+                .put(url)
+                .header("Authorization", auth)
+                .send_json(body)
+        })?)
+    }
+
+    /// Create a tag (`tags:create`): the `POST /v1/tags` object.
+    pub fn create_tag(&self, body: &Value) -> Result<Value> {
+        self.post_json("/v1/tags", body)
+    }
+
+    /// Change some of a tag's fields (`tags:update`). `PATCH /v1/tags/{tag}`
+    /// leaves out-of-body fields alone, unlike the role update.
+    pub fn patch_tag(&self, name: &str, body: &Value) -> Result<Value> {
+        read_json(self.send(&tag_path(name), |url, auth| {
+            self.agent
+                .patch(url)
+                .header("Authorization", auth)
+                .send_json(body)
+        })?)
+    }
+
+    fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
+        read_json(self.send(path, |url, auth| {
+            self.agent
+                .post(url)
+                .header("Authorization", auth)
+                .send_json(body)
+        })?)
+    }
+
     /// Delete a host, which needs the `hosts:delete` scope. v1 is the only
     /// version of the API with a host delete.
     pub fn delete_host(&self, id: &str) -> Result<()> {

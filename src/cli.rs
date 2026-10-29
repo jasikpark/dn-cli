@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
 use crate::api::MAX_PAGE_SIZE;
+use crate::commands::rules::RULE_SPEC_HELP;
 use crate::output::OutputMode;
 
 #[derive(Parser)]
@@ -152,6 +153,10 @@ pub enum RoleCommand {
     List(PageArgs),
     /// Show one role and its inbound firewall rules
     Get(RoleGetArgs),
+    /// Create a role with a description and inbound firewall rules
+    Create(RoleCreateArgs),
+    /// Edit a role's description or firewall rules. Roles can't be renamed.
+    Edit(RoleEditArgs),
     /// Delete a role. Asks for confirmation unless --yes is passed.
     Delete(RoleDeleteArgs),
 }
@@ -162,12 +167,63 @@ pub struct RoleGetArgs {
     pub role_id: String,
 }
 
+/// Arguments for `dn role create`: the `POST /v1/roles` body.
+#[derive(Args)]
+pub struct RoleCreateArgs {
+    /// Role name (1–50 characters)
+    pub name: String,
+    /// Description (up to 255 characters)
+    #[arg(long, value_name = "TEXT")]
+    pub description: Option<String>,
+    /// An inbound firewall rule. Repeatable. With none, the role allows no
+    /// inbound traffic.
+    #[arg(long = "rule", value_name = "RULE", long_help = RULE_SPEC_HELP)]
+    pub rules: Vec<String>,
+}
+
+/// Arguments for `dn role edit`. The API's role update replaces the whole
+/// role, so `dn` reads it first and writes back the current values with
+/// these changes applied.
+#[derive(Args)]
+pub struct RoleEditArgs {
+    /// Role id (role-…). Find ids with `dn role list`.
+    pub role_id: String,
+    /// Replace the description (`--description ""` clears it)
+    #[arg(long, value_name = "TEXT")]
+    pub description: Option<String>,
+    #[command(flatten)]
+    pub rules: RuleEditArgs,
+}
+
+/// Firewall rule edits shared by `role edit` and `tag edit`. Removes run
+/// before adds, and `--clear-rules --add-rule …` replaces the whole list.
+#[derive(Args, Clone, Debug, Default)]
+pub struct RuleEditArgs {
+    /// Add an inbound firewall rule, or update the description of one that
+    /// already allows the same traffic. Repeatable.
+    #[arg(long, value_name = "RULE", long_help = RULE_SPEC_HELP)]
+    pub add_rule: Vec<String>,
+    /// Remove every rule allowing the same traffic as this spec (its
+    /// description doesn't matter). Repeatable.
+    #[arg(long, value_name = "RULE", conflicts_with = "clear_rules")]
+    pub remove_rule: Vec<String>,
+    /// Remove every rule, before any --add-rule is applied
+    #[arg(long)]
+    pub clear_rules: bool,
+}
+
 #[derive(Subcommand)]
 pub enum TagCommand {
     /// List tags
     List(PageArgs),
     /// Show one tag and the inbound firewall rules it adds to its hosts
     Get(TagGetArgs),
+    /// Create a tag, with optional firewall rules, route subscriptions, and
+    /// a position in the priority order
+    Create(TagCreateArgs),
+    /// Edit a tag's description, firewall rules, route subscriptions, or
+    /// priority. Config overrides are left as they are.
+    Edit(TagEditArgs),
     /// Delete a tag. Asks for confirmation unless --yes is passed.
     Delete(TagDeleteArgs),
 }
@@ -176,6 +232,62 @@ pub enum TagCommand {
 pub struct TagGetArgs {
     /// Tag name in `key:value` form, e.g. `env:prod`
     pub tag: String,
+}
+
+/// Arguments for `dn tag create`: the `POST /v1/tags` body.
+#[derive(Args)]
+pub struct TagCreateArgs {
+    /// Tag name in `key:value` form (key ≤20 chars, value ≤50, no
+    /// whitespace around either)
+    pub tag: String,
+    /// Description (up to 255 characters)
+    #[arg(long, value_name = "TEXT")]
+    pub description: Option<String>,
+    /// An inbound firewall rule added to every host carrying the tag.
+    /// Repeatable.
+    #[arg(long = "rule", value_name = "RULE", long_help = RULE_SPEC_HELP)]
+    pub rules: Vec<String>,
+    /// A route (route-…) every host carrying the tag subscribes to.
+    /// Repeatable.
+    #[arg(long = "route", value_name = "ROUTE_ID")]
+    pub routes: Vec<String>,
+    /// Place the tag just before this one in the priority order (lower
+    /// precedence than it). Mutually exclusive with --after.
+    #[arg(long, value_name = "TAG", conflicts_with = "after")]
+    pub before: Option<String>,
+    /// Place the tag just after this one in the priority order (higher
+    /// precedence than it)
+    #[arg(long, value_name = "TAG")]
+    pub after: Option<String>,
+}
+
+/// Arguments for `dn tag edit`. Tags have a partial update, so only the
+/// fields that change are sent; config overrides are never touched.
+#[derive(Args)]
+pub struct TagEditArgs {
+    /// Tag name in `key:value` form, e.g. `env:prod`
+    pub tag: String,
+    /// Replace the description (`--description ""` clears it)
+    #[arg(long, value_name = "TEXT")]
+    pub description: Option<String>,
+    #[command(flatten)]
+    pub rules: RuleEditArgs,
+    /// Subscribe the tag's hosts to a route (route-…). Repeatable.
+    #[arg(long, value_name = "ROUTE_ID")]
+    pub add_route: Vec<String>,
+    /// Unsubscribe from a route. Repeatable.
+    #[arg(long, value_name = "ROUTE_ID", conflicts_with = "clear_routes")]
+    pub remove_route: Vec<String>,
+    /// Unsubscribe from every route, before any --add-route is applied
+    #[arg(long)]
+    pub clear_routes: bool,
+    /// Move the tag just before this one in the priority order. Mutually
+    /// exclusive with --after.
+    #[arg(long, value_name = "TAG", conflicts_with = "after")]
+    pub before: Option<String>,
+    /// Move the tag just after this one in the priority order
+    #[arg(long, value_name = "TAG")]
+    pub after: Option<String>,
 }
 
 #[derive(Args)]

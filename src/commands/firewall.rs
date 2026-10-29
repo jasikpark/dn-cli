@@ -157,7 +157,7 @@ fn print_rule_holder(
 /// Role names for the roles `data.firewallRules` allow, resolved the way
 /// the admin panel does. The lookup needs `roles:list`, so a failure
 /// degrades to raw ids; no rule naming a role skips it.
-fn rule_role_names(client: &Client, data: &Value) -> HashMap<String, String> {
+pub(crate) fn rule_role_names(client: &Client, data: &Value) -> HashMap<String, String> {
     let references_roles = data
         .get("firewallRules")
         .and_then(Value::as_array)
@@ -197,7 +197,10 @@ fn role_names_by_id(res: &Value) -> HashMap<String, String> {
 /// whose fields have unexpected types, rather than rendering it: every
 /// lenient default here (no role, no tags, any port) would read as a wider
 /// rule than the API holds.
-fn render_role(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Result<String> {
+pub(crate) fn render_role(
+    data: &Value,
+    role_names: &HashMap<String, String>,
+) -> anyhow::Result<String> {
     let rules = checked_firewall_rules(data)?;
 
     let mut out = String::new();
@@ -221,7 +224,7 @@ fn render_role(data: &Value, role_names: &HashMap<String, String>) -> anyhow::Re
 /// Render a tag and the inbound firewall rules it adds to every host that
 /// carries it, with the same layout and strictness as [`render_role`].
 /// A response without a name falls back to `requested`, the name asked for.
-fn render_tag(
+pub(crate) fn render_tag(
     data: &Value,
     requested: &str,
     role_names: &HashMap<String, String>,
@@ -307,7 +310,7 @@ fn push_rules(
 
 /// `data.firewallRules`, failing on a missing or non-list value or on a
 /// rule [`check_firewall_rule`] rejects.
-fn checked_firewall_rules(data: &Value) -> anyhow::Result<&Vec<Value>> {
+pub(crate) fn checked_firewall_rules(data: &Value) -> anyhow::Result<&Vec<Value>> {
     let rules = data
         .get("firewallRules")
         .and_then(Value::as_array)
@@ -366,7 +369,7 @@ fn check_firewall_rule(rule: &Value) -> anyhow::Result<()> {
 /// The rule's port range, or `None` when it covers every port: a null
 /// range, an ICMP rule (Nebula ignores ports there), or a range starting at
 /// 0 (Nebula's any-port value, which also discards the end port).
-fn rule_ports(rule: &Value) -> Option<(u64, u64)> {
+pub(crate) fn rule_ports(rule: &Value) -> Option<(u64, u64)> {
     if rule["protocol"].as_str() == Some("ICMP") {
         return None;
     }

@@ -1,0 +1,15 @@
+---
+source: tests/human_output.rs
+description: "Created tag, shown like tag get."
+---
+$ dn tag create env:prod --description Production --rule udp/53,tag=site:hou,desc=dns
+Created tag
+env:prod
+Production
+Hosts: 2
+Priority: 10
+
+ALLOWED HOSTS                PROTOCOL  PORTS  DESCRIPTION
+All hosts tagged "site:hou"  UDP       53     dns
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
