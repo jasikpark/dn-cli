@@ -161,7 +161,7 @@ JSON yourself. Flags combine with AND.
 | `--tag key:value` | hosts carrying that tag; repeat it to require several |
 | `--lighthouse` / `--relay` / `--blocked` | lighthouses, relays, or blocked hosts; `=false` keeps the opposite (`--lighthouse=false`) |
 | `--update-available` | hosts with a client update pending; `--update-available=false` the up-to-date ones |
-| `--platform <mobile\|dnclient\|dnclient-desktop\|null>` | hosts whose client reports that platform; `null` those that never reported one |
+| `--platform <PLATFORM>` | hosts whose client reports that platform, named as `metadata.platform` shows it (the documented ones are `mobile`, `dnclient`, `dnclient-desktop`, but the API reports others); `null` those that never reported one |
 | `--never-seen` | hosts that have never connected to Defined Networking |
 | `--oidc-user <USER_ID>` | hosts enrolled by that endpoint OIDC user; `any` / `null` as for `--role` |
 
@@ -172,8 +172,13 @@ dn host list --update-available --platform dnclient  # what needs upgrading
 dn host list --lighthouse=false --never-seen         # enrolled but never came up
 ```
 
-Ids are checked for shape locally (a malformed `--role` fails before any
-request); whether they exist is up to the API. `--tag` must be `key:value`.
+Ids are checked for shape locally (`--role notarole` fails before any
+request, naming the shape expected); whether they exist is up to the API.
+`--tag` must be `key:value`. The platform and update filters only cover
+hosts whose client reports those fields: to answer "is everything up to
+date?", read `metadata.updateAvailable` across the full `host list --json`
+rather than trusting that `--update-available` and `--update-available=false`
+between them cover every host.
 
 ### Show one host — `dn host get`
 

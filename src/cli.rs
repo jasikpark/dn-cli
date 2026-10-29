@@ -459,13 +459,10 @@ pub struct HostFilterArgs {
     /// `--update-available=false` for up-to-date ones
     #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
     pub update_available: Option<bool>,
-    /// Only hosts whose client reports this platform. `null` keeps hosts
-    /// that have never reported one.
-    #[arg(
-        long,
-        value_name = "PLATFORM",
-        value_parser = ["mobile", "dnclient", "dnclient-desktop", "null"]
-    )]
+    /// Only hosts whose client reports this platform, named as the API
+    /// reports it in `metadata.platform` (for example mobile, dnclient,
+    /// dnclient-desktop). `null` keeps hosts that have never reported one.
+    #[arg(long, value_name = "PLATFORM", value_parser = non_blank)]
     pub platform: Option<String>,
     /// Only hosts that have never connected to Defined Networking
     #[arg(long)]

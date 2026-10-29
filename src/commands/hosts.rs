@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::api::Client;
 use crate::cli::{HostFilterArgs, HostListArgs, HostSearchArgs};
-use crate::ids::validate_id;
+use crate::ids::validate_id_shape;
 use crate::output::{OutputMode, joined_field, print_list, sanitize_for_display, str_field};
 
 pub fn hosts_list(client: &Client, args: &HostListArgs, output: OutputMode) -> anyhow::Result<()> {
@@ -22,23 +22,28 @@ pub fn hosts_list(client: &Client, args: &HostListArgs, output: OutputMode) -> a
 }
 
 /// Reject filter values the API would reject anyway, before credentials are
-/// resolved or the wire is touched. Ids get the same character check as a
-/// path id (`filter.roleID` and friends also accept `any` / `null`); tags
-/// must be `key:value`. The API stays the authority on whether an id exists.
+/// resolved or the wire is touched. Ids must have the shape the API issues
+/// (`filter.roleID` and friends also accept `any` / `null`); tags must be
+/// `key:value`. The API stays the authority on whether an id exists.
 pub fn validate_list_preflight(args: &HostListArgs) -> anyhow::Result<()> {
     validate_filters(&args.filters)
 }
 
 fn validate_filters(filters: &HostFilterArgs) -> anyhow::Result<()> {
-    for (kind, value) in [
-        ("role", &filters.role),
-        ("network", &filters.network),
-        ("endpoint OIDC user", &filters.oidc_user),
+    for (flag, kind, prefix, value) in [
+        ("--role", "role", "role", &filters.role),
+        ("--network", "network", "network", &filters.network),
+        (
+            "--oidc-user",
+            "endpoint OIDC user",
+            "eoidcuser",
+            &filters.oidc_user,
+        ),
     ] {
         if let Some(value) = value
             && !(kind != "network" && matches!(value.as_str(), "any" | "null"))
         {
-            validate_id(kind, value)?;
+            validate_id_shape(kind, prefix, value).map_err(|e| anyhow!("{flag}: {e}"))?;
         }
     }
     for tag in &filters.tag {
@@ -299,7 +304,9 @@ mod tests {
             ["--role=any"],
             ["--role=null"],
             ["--oidc-user=null"],
-            ["--role=role-ABC_1"],
+            ["--role=role-ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
+            ["--network=network-01234567890123456789012345"],
+            ["--oidc-user=eoidcuser-ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
         ] {
             assert!(
                 validate_list_preflight(&list_args(&argv)).is_ok(),
@@ -311,7 +318,20 @@ mod tests {
     #[test]
     fn list_preflight_rejects_malformed_ids_and_tags() {
         for (argv, want) in [
-            (["--role=role/1"], "role id contains invalid character '/'"),
+            (
+                ["--role=role/1"],
+                "--role: role id contains invalid character '/'",
+            ),
+            (["--role=notarole"], "--role: role id must look like role-"),
+            (["--role=role-ABC_1"], "must look like role-"),
+            (
+                ["--network=any"],
+                "--network: network id must look like network-",
+            ),
+            (
+                ["--oidc-user=user-ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
+                "must look like eoidcuser-",
+            ),
             (
                 ["--network=net work"],
                 "network id contains invalid character ' '",
@@ -328,12 +348,20 @@ mod tests {
     }
 
     #[test]
-    fn platform_flag_only_takes_the_known_platforms() {
-        assert!(Cli::try_parse_from(["dn", "host", "list", "--platform=windows"]).is_err());
-        assert_eq!(
-            list_args(&["--platform=null"]).filters.platform.as_deref(),
-            Some("null")
-        );
+    fn platform_flag_takes_any_name_the_api_might_report() {
+        // The documented values are examples, not a closed list: the API
+        // reports platforms the spec doesn't enumerate.
+        for platform in ["mobile", "dnclient-desktop", "null", "some-new-client"] {
+            assert_eq!(
+                list_args(&[&format!("--platform={platform}")])
+                    .filters
+                    .platform
+                    .as_deref(),
+                Some(platform)
+            );
+        }
+        assert!(Cli::try_parse_from(["dn", "host", "list", "--platform="]).is_err());
+        assert!(Cli::try_parse_from(["dn", "host", "list", "--platform", " "]).is_err());
     }
 
     #[test]
