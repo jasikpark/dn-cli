@@ -295,7 +295,7 @@ dn route get <ROUTE_ID> --json
 Returns `{ "data": route }` with the `route list` fields plus
 `firewallRules`: the inbound rules the router host accepts for the routed
 ranges, in the role-rule shape plus a `localCIDR` (the part of the routable
-range each rule applies to; `0.4.4.0/0` means all of it). These rules are on
+range each rule applies to; `0.0.0.0/0` means all of it). These rules are on
 the router, not on subscribing hosts: a host reaching through the route needs
 a rule here whose source matches it (`allowedRoleID` / `allowedTags`, as for
 roles) and whose `localCIDR` covers the destination. Human output lists the
@@ -581,15 +581,7 @@ manageable.
 | `host list`, `host get`, `host search`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get`, `audit-log list` | free — reads change nothing |
 | `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
 | `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
+| `role create`, `role edit`, `tag create`, `tag edit` | a write: rules change what inbound traffic every host with that role or tag accepts, and a tag's route subscriptions change what those hosts can reach. Confirm the role or tag and the rules or routes being added or removed with the user first; name it when a rule allows all hosts on any protocol and port. |
 | `host delete` | destructive and irreversible: the device loses network access, and getting it back means creating a new host and re-enrolling. Always get explicit user confirmation for the specific host. |
 | `role delete`, `tag delete` | destructive and irreversible: the firewall rules go with it, which can change what traffic hosts that had it can receive. Always get explicit user confirmation for the specific role or tag. |
 | `network delete` | destructive and irreversible, though the API refuses while the network has hosts. Always get explicit user confirmation for the specific network. |
-
-## Where this is going (not built yet)
-
-Role writes are still missing: `role create` / `role add-rule`. The
-account's default role denies all inbound traffic, so nothing can reach a
-host enrolled via `host create` until a role with firewall rules exists
-and is assigned, or it carries a tag with firewall rules. `dn role list`
-shows whether such a role already exists, and `host edit --role` assigns it; creating the role itself still happens in
-the admin panel. Say so rather than promising two hosts will reach each other.

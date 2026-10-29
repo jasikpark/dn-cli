@@ -13,7 +13,9 @@ versioned_files = [
     "Cargo.lock",
     { path = ".claude-plugin/plugin.json", regex = '"version": "(?<version>\d+\.\d+\.\d+)"' },
     { path = ".claude-plugin/marketplace.json", regex = '"version": "(?<version>\d+\.\d+\.\d+)"' },
-    { path = "skills/defined-networking/SKILL.md", regex = '(?<version>\d+\.\d+\.\d+)' },
+    # Anchored to the "documents `dn` X.Y.Z" line: an unanchored version regex
+    # also rewrites other dotted numbers, e.g. 0.0.0.0/0 became 0.4.4.0/0.
+    { path = "skills/defined-networking/SKILL.md", regex = '`dn` (?<version>\d+\.\d+\.\d+)' },
 ]
 changelog = "CHANGELOG.md"
 
