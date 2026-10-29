@@ -1,8 +1,12 @@
+mod common;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+use common::mock_id;
 
 /// Answer every request with the API's empty delete envelope, recording each
 /// request's method and path.
@@ -59,25 +63,27 @@ fn stdout_json(out: &Output) -> serde_json::Value {
 #[test]
 fn host_delete_with_yes_deletes_on_v1_without_a_lookup() {
     let (url, seen) = serve();
-    let out = dn(&url, &["--json", "host", "delete", "host-1", "--yes"]);
+    let host = mock_id("host", "build server");
+    let out = dn(&url, &["--json", "host", "delete", &host, "--yes"]);
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         stdout_json(&out),
-        serde_json::json!({"id": "host-1", "deleted": true})
+        serde_json::json!({"id": host, "deleted": true})
     );
-    assert_eq!(*seen.lock().unwrap(), ["DELETE /v1/hosts/host-1"]);
+    assert_eq!(*seen.lock().unwrap(), [format!("DELETE /v1/hosts/{host}")]);
 }
 
 #[test]
 fn role_delete_with_yes_deletes_on_v1_without_a_lookup() {
     let (url, seen) = serve();
-    let out = dn(&url, &["--json", "role", "delete", "role-ABC", "-y"]);
+    let role = mock_id("role", "admins");
+    let out = dn(&url, &["--json", "role", "delete", &role, "-y"]);
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         stdout_json(&out),
-        serde_json::json!({"id": "role-ABC", "deleted": true})
+        serde_json::json!({"id": role, "deleted": true})
     );
-    assert_eq!(*seen.lock().unwrap(), ["DELETE /v1/roles/role-ABC"]);
+    assert_eq!(*seen.lock().unwrap(), [format!("DELETE /v1/roles/{role}")]);
 }
 
 #[test]

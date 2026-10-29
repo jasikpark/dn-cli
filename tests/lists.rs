@@ -1,8 +1,12 @@
+mod common;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+use common::mock_id;
 
 /// Answer every request with `PAGE`, a middle page that has both neighbours.
 /// Records each request's path and query.
@@ -129,6 +133,7 @@ fn host_filters_become_filter_query_parameters() {
 #[test]
 fn host_search_takes_the_same_filters_as_host_list() {
     let (url, seen) = serve();
+    let network = mock_id("network", "lab");
     let out = dn(
         &url,
         &[
@@ -136,16 +141,16 @@ fn host_search_takes_the_same_filters_as_host_list() {
             "search",
             "web",
             "--network",
-            "network-A",
+            &network,
             "--relay=false",
         ],
     );
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         *seen.lock().unwrap(),
-        [
-            "/v2/hosts?filter.search=web&filter.networkID=network-A&filter.isRelay=false&pageSize=500"
-        ]
+        [format!(
+            "/v2/hosts?filter.search=web&filter.networkID={network}&filter.isRelay=false&pageSize=500"
+        )]
     );
 }
 
