@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use anyhow::{anyhow, bail};
 use serde_json::{Value, json};
 
+use super::firewall::rule_ports;
 use super::hosts::parse_tag;
 use crate::ids::validate_id;
 
@@ -138,12 +139,13 @@ fn parse_ports(ports: &str) -> anyhow::Result<Value> {
 
 /// Whether two rules allow the same traffic: same protocol, ports, and
 /// allowed role and tags. The description is a label, so it doesn't count.
+/// Ports compare the way the `role get` table reads them ([`rule_ports`]):
+/// a null range, a range starting at 0, and any range on an ICMP rule all
+/// mean every port, so `--remove-rule any` finds an allow-everything rule
+/// the API stored as `{from: 0, to: 0}`.
 pub fn rules_match(a: &Value, b: &Value) -> bool {
     let protocol = |r: &Value| r["protocol"].as_str().map(str::to_ascii_uppercase);
-    let ports = |r: &Value| {
-        let range = &r["portRange"];
-        (!range.is_null()).then(|| (range["from"].as_u64(), range["to"].as_u64()))
-    };
+    let ports = rule_ports;
     let role = |r: &Value| r["allowedRoleID"].as_str().map(str::to_string);
     let tags = |r: &Value| -> BTreeSet<String> {
         r["allowedTags"]
@@ -275,6 +277,44 @@ mod tests {
             &a,
             &parse_rule_spec("tcp/22,from=role-A,tags=a:1+b:1").unwrap()
         ));
+    }
+
+    #[test]
+    fn a_zero_port_range_matches_an_any_port_spec() {
+        // The API can store "every port" as {from: 0, to: 0}; the spec
+        // grammar says it as no ports at all.
+        let stored = json!({"protocol": "ANY", "portRange": {"from": 0, "to": 0},
+                            "allowedRoleID": null, "allowedTags": null, "description": "open"});
+        let spec = parse_rule_spec("any,desc=still open").unwrap();
+        assert!(rules_match(&stored, &spec));
+        assert!(!rules_match(
+            &stored,
+            &parse_rule_spec("any,from=role-A").unwrap()
+        ));
+
+        // ICMP ignores ports entirely, however the API spelled them.
+        let ping = json!({"protocol": "ICMP", "portRange": {"from": 8, "to": 8},
+                          "allowedRoleID": null, "allowedTags": null, "description": ""});
+        assert!(rules_match(&ping, &parse_rule_spec("icmp").unwrap()));
+
+        // So removing finds it, and re-adding replaces rather than duplicates.
+        let current = vec![stored.clone(), parse_rule_spec("tcp/22").unwrap()];
+        let remove = RuleEdits {
+            clear: false,
+            remove: vec![spec.clone()],
+            add: vec![],
+        };
+        let (rules, unmatched) = apply_rule_edits(&current, &remove);
+        assert!(unmatched.is_empty());
+        assert_eq!(rules, [parse_rule_spec("tcp/22").unwrap()]);
+        let readd = RuleEdits {
+            clear: false,
+            remove: vec![],
+            add: vec![spec.clone()],
+        };
+        let (rules, _) = apply_rule_edits(&current, &readd);
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0]["description"], "still open");
     }
 
     #[test]

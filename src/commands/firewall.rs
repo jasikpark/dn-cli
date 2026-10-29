@@ -369,7 +369,7 @@ fn check_firewall_rule(rule: &Value) -> anyhow::Result<()> {
 /// The rule's port range, or `None` when it covers every port: a null
 /// range, an ICMP rule (Nebula ignores ports there), or a range starting at
 /// 0 (Nebula's any-port value, which also discards the end port).
-fn rule_ports(rule: &Value) -> Option<(u64, u64)> {
+pub(crate) fn rule_ports(rule: &Value) -> Option<(u64, u64)> {
     if rule["protocol"].as_str() == Some("ICMP") {
         return None;
     }
