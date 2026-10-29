@@ -174,11 +174,7 @@ dn host list --lighthouse=false --never-seen         # enrolled but never came u
 
 Ids are checked for shape locally (`--role notarole` fails before any
 request, naming the shape expected); whether they exist is up to the API.
-`--tag` must be `key:value`. The platform and update filters only cover
-hosts whose client reports those fields: to answer "is everything up to
-date?", read `metadata.updateAvailable` across the full `host list --json`
-rather than trusting that `--update-available` and `--update-available=false`
-between them cover every host.
+`--tag` must be `key:value`.
 
 ### Show one host — `dn host get`
 
