@@ -133,6 +133,33 @@ Use this to answer questions like "what hosts do I have", "is <device> online"
 (check `metadata.lastSeenAt`), "which hosts need an update"
 (`metadata.updateAvailable`), or "which are lighthouses".
 
+#### Filters
+
+Every filter is applied server-side (the `filter.*` parameters of
+`GET /v2/hosts`), so prefer a filter over fetching every host and sifting the
+JSON yourself. Flags combine with AND.
+
+| flag | keeps |
+|------|-------|
+| `--role <ROLE_ID>` | hosts assigned that role; `--role any` hosts with any role, `--role null` hosts with none |
+| `--network <NETWORK_ID>` | hosts on that network |
+| `--tag key:value` | hosts carrying that tag; repeat it to require several |
+| `--lighthouse` / `--relay` / `--blocked` | lighthouses, relays, or blocked hosts; `=false` keeps the opposite (`--lighthouse=false`) |
+| `--update-available` | hosts with a client update pending; `--update-available=false` the up-to-date ones |
+| `--platform <mobile\|dnclient\|dnclient-desktop\|null>` | hosts whose client reports that platform; `null` those that never reported one |
+| `--never-seen` | hosts that have never connected to Defined Networking |
+| `--oidc-user <USER_ID>` | hosts enrolled by that endpoint OIDC user; `any` / `null` as for `--role` |
+
+```bash
+dn host list --role null --json                      # hosts still on the default role
+dn host list --tag env:prod --tag region:us-east-1   # both tags
+dn host list --update-available --platform dnclient  # what needs upgrading
+dn host list --lighthouse=false --never-seen         # enrolled but never came up
+```
+
+Ids are checked for shape locally (a malformed `--role` fails before any
+request); whether they exist is up to the API. `--tag` must be `key:value`.
+
 ### Show one host — `dn host get`
 
 ```bash
@@ -157,7 +184,9 @@ Returns the same `{ "data": [ host… ], "metadata": { … } }` shape as
 host's `name`, `ipAddresses`, assigned role name, and `tags`. The query must be
 at least two characters — a shorter one fails locally before any request. Prefer
 this over pulling the full list and filtering yourself when the user names a
-specific host, IP, role, or tag. Key permission: `hosts:list`.
+specific host, IP, role, or tag. It takes the same filter flags as `host list`
+(`--role`, `--tag`, `--lighthouse`, …), ANDed with the query. Key permission:
+`hosts:list`.
 
 ### Create a host — `dn host create`
 

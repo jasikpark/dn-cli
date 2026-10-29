@@ -28,7 +28,8 @@ use crate::commands::{
     firewall::{roles_delete, roles_get, roles_list, tags_delete, tags_get, tags_list},
     hosts::{
         hosts_create, hosts_delete, hosts_edit, hosts_get, hosts_list, hosts_search, parse_tag,
-        validate_create_preflight, validate_edit_preflight, validate_search_preflight,
+        validate_create_preflight, validate_edit_preflight, validate_list_preflight,
+        validate_search_preflight,
     },
     networks::{networks_delete, networks_get, networks_list},
 };
@@ -86,7 +87,7 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
                 preflight_delete(args.yes, output)?;
             }
             HostCommand::Get(args) => validate_id("host", &args.host_id)?,
-            HostCommand::List(_) => {}
+            HostCommand::List(args) => validate_list_preflight(args)?,
         },
         Command::Role {
             command: RoleCommand::Get(args),
@@ -172,7 +173,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Host { command } => {
             let client = api_client(cli)?;
             match command {
-                HostCommand::List(page) => hosts_list(&client, page, output)?,
+                HostCommand::List(args) => hosts_list(&client, args, output)?,
                 HostCommand::Get(args) => hosts_get(&client, args, output)?,
                 HostCommand::Search(args) => hosts_search(&client, args, output)?,
                 HostCommand::Create(args) => hosts_create(&client, args, output)?,

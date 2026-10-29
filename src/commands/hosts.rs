@@ -12,12 +12,80 @@ use anyhow::{anyhow, bail};
 use serde_json::Value;
 
 use crate::api::Client;
-use crate::cli::{HostSearchArgs, PageArgs};
+use crate::cli::{HostFilterArgs, HostListArgs, HostSearchArgs};
+use crate::ids::validate_id;
 use crate::output::{OutputMode, joined_field, print_list, sanitize_for_display, str_field};
 
-pub fn hosts_list(client: &Client, page: &PageArgs, output: OutputMode) -> anyhow::Result<()> {
-    let res = client.list_hosts(page)?;
+pub fn hosts_list(client: &Client, args: &HostListArgs, output: OutputMode) -> anyhow::Result<()> {
+    let res = client.list_hosts(&host_filters(&args.filters), &args.page)?;
     render_hosts(&res, output, "No hosts found.")
+}
+
+/// Reject filter values the API would reject anyway, before credentials are
+/// resolved or the wire is touched. Ids get the same character check as a
+/// path id (`filter.roleID` and friends also accept `any` / `null`); tags
+/// must be `key:value`. The API stays the authority on whether an id exists.
+pub fn validate_list_preflight(args: &HostListArgs) -> anyhow::Result<()> {
+    validate_filters(&args.filters)
+}
+
+fn validate_filters(filters: &HostFilterArgs) -> anyhow::Result<()> {
+    for (kind, value) in [
+        ("role", &filters.role),
+        ("network", &filters.network),
+        ("endpoint OIDC user", &filters.oidc_user),
+    ] {
+        if let Some(value) = value
+            && !(kind != "network" && matches!(value.as_str(), "any" | "null"))
+        {
+            validate_id(kind, value)?;
+        }
+    }
+    for tag in &filters.tag {
+        parse_tag(tag).map_err(|e| anyhow!("--tag: {e}"))?;
+    }
+    Ok(())
+}
+
+/// The `filter.*` query parameters for a set of host filters, in flag order.
+/// Booleans serialise as `true` / `false`; `--never-seen` is the API's
+/// `filter.metadata.lastSeenAt=null`; `--tag` repeats, one parameter per tag.
+fn host_filters(filters: &HostFilterArgs) -> Vec<(&'static str, &str)> {
+    fn flag(b: bool) -> &'static str {
+        if b { "true" } else { "false" }
+    }
+    let mut params: Vec<(&'static str, &str)> = Vec::new();
+    if let Some(role) = &filters.role {
+        params.push(("filter.roleID", role));
+    }
+    if let Some(network) = &filters.network {
+        params.push(("filter.networkID", network));
+    }
+    for tag in &filters.tag {
+        params.push(("filter.tag", tag));
+    }
+    if let Some(b) = filters.lighthouse {
+        params.push(("filter.isLighthouse", flag(b)));
+    }
+    if let Some(b) = filters.relay {
+        params.push(("filter.isRelay", flag(b)));
+    }
+    if let Some(b) = filters.blocked {
+        params.push(("filter.isBlocked", flag(b)));
+    }
+    if let Some(b) = filters.update_available {
+        params.push(("filter.metadata.updateAvailable", flag(b)));
+    }
+    if let Some(platform) = &filters.platform {
+        params.push(("filter.metadata.platform", platform));
+    }
+    if filters.never_seen {
+        params.push(("filter.metadata.lastSeenAt", "null"));
+    }
+    if let Some(user) = &filters.oidc_user {
+        params.push(("filter.endpointOIDCUserID", user));
+    }
+    params
 }
 
 /// The `filter.search` term for `dn host search`, joined from the argv words
@@ -36,7 +104,7 @@ pub fn validate_search_preflight(args: &HostSearchArgs) -> anyhow::Result<()> {
     if query.chars().count() < 2 {
         bail!("search query must be at least 2 characters");
     }
-    Ok(())
+    validate_filters(&args.filters)
 }
 
 pub fn hosts_search(
@@ -45,7 +113,7 @@ pub fn hosts_search(
     output: OutputMode,
 ) -> anyhow::Result<()> {
     let query = search_query(args);
-    let res = client.search_hosts(&query, &args.page)?;
+    let res = client.search_hosts(&query, &host_filters(&args.filters), &args.page)?;
     render_hosts(
         &res,
         output,
@@ -117,7 +185,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::cli::{Cli, Command, HostCommand};
+    use crate::cli::{Cli, Command, HostCommand, PageArgs};
 
     #[test]
     fn host_fields_extracts_present_columns() {
@@ -161,8 +229,112 @@ mod tests {
     fn search_args(query: &[&str]) -> HostSearchArgs {
         HostSearchArgs {
             query: query.iter().map(|s| (*s).to_string()).collect(),
+            filters: HostFilterArgs::default(),
             page: PageArgs::default(),
         }
+    }
+
+    fn list_args(argv: &[&str]) -> HostListArgs {
+        let cli = Cli::try_parse_from(["dn", "host", "list"].iter().chain(argv)).unwrap();
+        match cli.command {
+            Command::Host {
+                command: HostCommand::List(args),
+            } => args,
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn no_filter_flags_send_no_filter_params() {
+        assert!(host_filters(&list_args(&[]).filters).is_empty());
+    }
+
+    #[test]
+    fn every_filter_flag_maps_to_its_query_parameter() {
+        let args = list_args(&[
+            "--role=role-A",
+            "--network=network-B",
+            "--tag=env:prod",
+            "--tag=region:us",
+            "--lighthouse",
+            "--relay=false",
+            "--blocked=true",
+            "--update-available=false",
+            "--platform=dnclient",
+            "--never-seen",
+            "--oidc-user=any",
+        ]);
+        assert_eq!(
+            host_filters(&args.filters),
+            [
+                ("filter.roleID", "role-A"),
+                ("filter.networkID", "network-B"),
+                ("filter.tag", "env:prod"),
+                ("filter.tag", "region:us"),
+                ("filter.isLighthouse", "true"),
+                ("filter.isRelay", "false"),
+                ("filter.isBlocked", "true"),
+                ("filter.metadata.updateAvailable", "false"),
+                ("filter.metadata.platform", "dnclient"),
+                ("filter.metadata.lastSeenAt", "null"),
+                ("filter.endpointOIDCUserID", "any"),
+            ]
+        );
+    }
+
+    #[test]
+    fn list_preflight_accepts_any_and_null_for_role_and_oidc_user() {
+        for argv in [
+            ["--role=any"],
+            ["--role=null"],
+            ["--oidc-user=null"],
+            ["--role=role-ABC_1"],
+        ] {
+            assert!(
+                validate_list_preflight(&list_args(&argv)).is_ok(),
+                "{argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_preflight_rejects_malformed_ids_and_tags() {
+        for (argv, want) in [
+            (["--role=role/1"], "role id contains invalid character '/'"),
+            (
+                ["--network=net work"],
+                "network id contains invalid character ' '",
+            ),
+            (
+                ["--oidc-user=u?x"],
+                "endpoint OIDC user id contains invalid character '?'",
+            ),
+            (["--tag=noseparator"], "--tag: "),
+        ] {
+            let err = validate_list_preflight(&list_args(&argv)).unwrap_err();
+            assert!(err.to_string().contains(want), "{argv:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn platform_flag_only_takes_the_known_platforms() {
+        assert!(Cli::try_parse_from(["dn", "host", "list", "--platform=windows"]).is_err());
+        assert_eq!(
+            list_args(&["--platform=null"]).filters.platform.as_deref(),
+            Some("null")
+        );
+    }
+
+    #[test]
+    fn search_preflight_checks_the_shared_filters_too() {
+        let cli = Cli::try_parse_from(["dn", "host", "search", "web", "--tag=bad"]).unwrap();
+        let Command::Host {
+            command: HostCommand::Search(args),
+        } = cli.command
+        else {
+            unreachable!()
+        };
+        assert!(validate_search_preflight(&args).is_err());
     }
 
     #[test]

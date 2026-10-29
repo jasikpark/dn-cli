@@ -266,8 +266,9 @@ pub struct AuthLoginArgs {
 
 #[derive(Subcommand)]
 pub enum HostCommand {
-    /// List hosts
-    List(PageArgs),
+    /// List hosts, optionally narrowed by role, network, tag, kind, or
+    /// client state. Every filter is applied server-side.
+    List(HostListArgs),
     /// Show one host: its addresses, role, tags, and when it was last seen
     Get(HostGetArgs),
     /// Search hosts by name, IP, role name, or tag (server-side, whole
@@ -282,9 +283,69 @@ pub enum HostCommand {
     Delete(HostDeleteArgs),
 }
 
+/// Arguments for `dn host list`: the `filter.*` query parameters of
+/// `GET /v2/hosts` plus paging.
+#[derive(Args, Default)]
+pub struct HostListArgs {
+    #[command(flatten)]
+    pub filters: HostFilterArgs,
+    #[command(flatten)]
+    pub page: PageArgs,
+}
+
+/// The server-side filters `GET /v2/hosts` accepts, shared by `host list`
+/// and `host search` so a search can be narrowed the same way. Each flag maps
+/// to one `filter.*` query parameter; combining flags ANDs them.
+///
+/// The boolean flags take an optional value, so `--lighthouse` keeps only
+/// lighthouses and `--lighthouse=false` keeps only non-lighthouses; leaving a
+/// flag off means "don't filter on it".
+#[derive(Args, Clone, Debug, Default)]
+pub struct HostFilterArgs {
+    /// Only hosts assigned this role (role-…). `any` keeps hosts that have
+    /// a role, `null` hosts that have none.
+    #[arg(long, value_name = "ROLE_ID|any|null", value_parser = non_blank)]
+    pub role: Option<String>,
+    /// Only hosts on this network (network-…)
+    #[arg(long, value_name = "NETWORK_ID", value_parser = non_blank)]
+    pub network: Option<String>,
+    /// Only hosts carrying this tag (key:value). Repeatable; a host must
+    /// have every tag given.
+    #[arg(long, value_name = "TAG", value_parser = non_blank)]
+    pub tag: Vec<String>,
+    /// Only lighthouses; `--lighthouse=false` for everything but
+    #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
+    pub lighthouse: Option<bool>,
+    /// Only relays; `--relay=false` for everything but
+    #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
+    pub relay: Option<bool>,
+    /// Only blocked hosts; `--blocked=false` for unblocked ones
+    #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
+    pub blocked: Option<bool>,
+    /// Only hosts with a client update available;
+    /// `--update-available=false` for up-to-date ones
+    #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
+    pub update_available: Option<bool>,
+    /// Only hosts whose client reports this platform. `null` keeps hosts
+    /// that have never reported one.
+    #[arg(
+        long,
+        value_name = "PLATFORM",
+        value_parser = ["mobile", "dnclient", "dnclient-desktop", "null"]
+    )]
+    pub platform: Option<String>,
+    /// Only hosts that have never connected to Defined Networking
+    #[arg(long)]
+    pub never_seen: bool,
+    /// Only hosts enrolled by this endpoint OIDC user (eoidcuser-…).
+    /// `any` keeps hosts that have one, `null` hosts that have none.
+    #[arg(long, value_name = "USER_ID|any|null", value_parser = non_blank)]
+    pub oidc_user: Option<String>,
+}
+
 /// Arguments for `dn host search`. Wraps the `filter.search` query on
 /// `GET /v2/hosts` — a server-side match across a host's name, IPs, role
-/// name, and tags.
+/// name, and tags — plus the same filters as `host list`.
 #[derive(Args)]
 pub struct HostSearchArgs {
     /// Search term (case-insensitive substring). At least two characters —
@@ -292,6 +353,8 @@ pub struct HostSearchArgs {
     /// space, so `dn host search web server` searches for "web server".
     #[arg(required = true, num_args = 1.., value_name = "QUERY")]
     pub query: Vec<String>,
+    #[command(flatten)]
+    pub filters: HostFilterArgs,
     #[command(flatten)]
     pub page: PageArgs,
 }
@@ -648,12 +711,12 @@ mod tests {
         let cli = Cli::try_parse_from(["dn", "host", "list", "--cursor", "p2", "--cursor", "-p3"])
             .unwrap();
         let Command::Host {
-            command: HostCommand::List(page),
+            command: HostCommand::List(args),
         } = cli.command
         else {
             panic!("expected `host list`");
         };
-        assert_eq!(page.cursor.as_deref(), Some("-p3"));
+        assert_eq!(args.page.cursor.as_deref(), Some("-p3"));
     }
 
     #[test]

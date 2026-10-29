@@ -189,12 +189,11 @@ impl Client {
         })?)
     }
 
-    /// One page of hosts (v2 endpoint — dual-stack `ipAddresses`).
-    ///
-    /// TODO(write-phase): add ?networkID= filtering once the exact query
-    /// param is confirmed against the live API.
-    pub fn list_hosts(&self, page: &PageArgs) -> Result<Value> {
-        self.list_page("/v2/hosts", &[], page)
+    /// One page of hosts (v2 endpoint — dual-stack `ipAddresses`), narrowed
+    /// by `filters`: `filter.*` query parameters from `GET /v2/hosts`, such
+    /// as `filter.roleID` or a repeated `filter.tag`.
+    pub fn list_hosts(&self, filters: &[(&str, &str)], page: &PageArgs) -> Result<Value> {
+        self.list_page("/v2/hosts", filters, page)
     }
 
     /// One page of hosts matching a free-text query. Wraps
@@ -203,13 +202,19 @@ impl Client {
     /// role name, and tags (the same surface the admin panel's host search
     /// box drives). The API rejects a query shorter than two characters with
     /// a 400 (`ERR_TOO_SHORT`); callers should preflight to spare the round
-    /// trip. Needs the `hosts:list` scope, same as `list_hosts`.
-    ///
-    /// `filter.search` is undocumented in the public OpenAPI spec (only the
-    /// structured `filter.*` params are), so this is pinned to the admin panel's
-    /// observed behaviour rather than a published contract.
-    pub fn search_hosts(&self, query: &str, page: &PageArgs) -> Result<Value> {
-        self.list_page("/v2/hosts", &[("filter.search", query)], page)
+    /// trip. Needs the `hosts:list` scope, same as `list_hosts`. `filters`
+    /// are the same `filter.*` parameters `list_hosts` takes; they AND with
+    /// the search.
+    pub fn search_hosts(
+        &self,
+        query: &str,
+        filters: &[(&str, &str)],
+        page: &PageArgs,
+    ) -> Result<Value> {
+        let mut params = Vec::with_capacity(filters.len() + 1);
+        params.push(("filter.search", query));
+        params.extend_from_slice(filters);
+        self.list_page("/v2/hosts", &params, page)
     }
 
     /// One page of roles.
