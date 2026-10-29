@@ -2,7 +2,7 @@
 source: tests/human_output.rs
 description: "Created tag, shown like tag get."
 ---
-$ dn tag create env:prod --description Production --rule udp/53,tags=site:hou,desc=dns
+$ dn tag create env:prod --description Production --rule udp/53,tag=site:hou,desc=dns
 Created tag
 env:prod
 Production

@@ -12,17 +12,18 @@ use crate::ids::validate_id;
 
 /// The grammar, shown as the flags' long help.
 pub const RULE_SPEC_HELP: &str = "\
-A firewall rule: PROTO[/PORTS][,from=ROLE_ID][,tags=KEY:VALUE[+KEY:VALUE…]][,desc=TEXT]
+A firewall rule: PROTO[/PORTS][,from=ROLE_ID][,tag=KEY:VALUE]...[,desc=TEXT]
 
 PROTO is any, tcp, udp or icmp. PORTS is one port (22) or a range (8000-9000); \
 leave it off to allow every port (icmp takes none). from= allows only hosts \
-with that role and tags= only hosts carrying every listed tag; leave both off \
-to allow all hosts. desc= must come last and may contain commas.
+with that role; tag= (repeatable) only hosts carrying every tag given; leave \
+both off to allow all hosts. desc= must come last and may contain commas. A \
+tag whose value contains a comma can't be written in a spec.
 
 Examples:
   tcp/22
   tcp/443,desc=https from anywhere
-  udp/53,from=role-ABC,tags=env:prod+site:hou,desc=dns";
+  udp/53,from=role-ABC,tag=env:prod,tag=site:hou,desc=dns";
 
 /// Parse one rule spec into the API's `FirewallRule` object, with every
 /// field present: `allowedRoleID` and `allowedTags` are `null` when the rule
@@ -54,15 +55,15 @@ pub fn parse_rule_spec(spec: &str) -> anyhow::Result<Value> {
     }
 
     let mut role = Value::Null;
-    let mut tags = Value::Null;
+    let mut tags: Vec<String> = Vec::new();
     let mut description = String::new();
     let mut seen: Vec<String> = Vec::new();
     while !rest.is_empty() {
         let (key, after) = rest
             .split_once('=')
-            .ok_or_else(|| anyhow!("expected from=, tags= or desc=, got {rest:?}"))?;
+            .ok_or_else(|| anyhow!("expected from=, tag= or desc=, got {rest:?}"))?;
         let key = key.trim();
-        if seen.iter().any(|s| s == key) {
+        if key != "tag" && seen.iter().any(|s| s == key) {
             bail!("{key}= given twice");
         }
         // desc= runs to the end of the spec; the others end at the next comma.
@@ -82,16 +83,11 @@ pub fn parse_rule_spec(spec: &str) -> anyhow::Result<Value> {
                 validate_id("role", value).map_err(|e| anyhow!("from=: {e}"))?;
                 role = json!(value);
             }
-            "tags" => {
-                let mut list: Vec<String> = Vec::new();
-                for tag in value.split('+') {
-                    let tag = tag.trim();
-                    parse_tag(tag).map_err(|e| anyhow!("tags=: {e}"))?;
-                    if !list.iter().any(|t| t == tag) {
-                        list.push(tag.to_string());
-                    }
+            "tag" => {
+                parse_tag(value).map_err(|e| anyhow!("tag=: {e}"))?;
+                if !tags.iter().any(|t| t == value) {
+                    tags.push(value.to_string());
                 }
-                tags = json!(list);
             }
             "desc" => {
                 if value.chars().count() > 255 {
@@ -99,7 +95,7 @@ pub fn parse_rule_spec(spec: &str) -> anyhow::Result<Value> {
                 }
                 description = value.to_string();
             }
-            other => bail!("unknown rule field {other:?}; expected from=, tags= or desc="),
+            other => bail!("unknown rule field {other:?}; expected from=, tag= or desc="),
         }
         seen.push(key.to_string());
         rest = next;
@@ -109,7 +105,7 @@ pub fn parse_rule_spec(spec: &str) -> anyhow::Result<Value> {
         "protocol": protocol,
         "portRange": port_range,
         "allowedRoleID": role,
-        "allowedTags": tags,
+        "allowedTags": if tags.is_empty() { Value::Null } else { json!(tags) },
         "description": description,
     }))
 }
@@ -167,10 +163,12 @@ pub struct RuleEdits {
 }
 
 /// Apply edits to a rule list: clear, then remove every rule that
-/// [`rules_match`] a `remove` entry, then add — an `add` that matches an
-/// existing rule replaces it (so re-adding a rule updates its description)
-/// rather than duplicating it. Returns the new list and the indices into
-/// `remove` that matched nothing, for the caller to warn about.
+/// [`rules_match`] a `remove` entry, then add. An `add` that matches an
+/// existing rule keeps that rule as the API stored it (same traffic,
+/// whatever encoding) and only changes its description when the spec's
+/// differs, so re-adding an unchanged rule leaves the list untouched and
+/// nothing is written. Returns the new list and the indices into `remove`
+/// that matched nothing, for the caller to warn about.
 pub fn apply_rule_edits(current: &[Value], edits: &RuleEdits) -> (Vec<Value>, Vec<usize>) {
     let mut rules: Vec<Value> = if edits.clear {
         Vec::new()
@@ -187,7 +185,11 @@ pub fn apply_rule_edits(current: &[Value], edits: &RuleEdits) -> (Vec<Value>, Ve
     }
     for new in &edits.add {
         match rules.iter_mut().find(|r| rules_match(r, new)) {
-            Some(slot) => *slot = new.clone(),
+            Some(existing) => {
+                if existing["description"] != new["description"] {
+                    existing["description"] = new["description"].clone();
+                }
+            }
             None => rules.push(new.clone()),
         }
     }
@@ -210,8 +212,10 @@ mod tests {
     #[test]
     fn a_full_spec_fills_every_field() {
         assert_eq!(
-            parse_rule_spec(" udp/53 , from=role-ABC, tags=env:prod+site:hou , desc=dns, primary ")
-                .unwrap(),
+            parse_rule_spec(
+                " udp/53 , from=role-ABC, tag=env:prod, tag=site:hou , desc=dns, primary "
+            )
+            .unwrap(),
             json!({"protocol": "UDP", "portRange": {"from": 53, "to": 53},
                    "allowedRoleID": "role-ABC", "allowedTags": ["env:prod", "site:hou"],
                    "description": "dns, primary"})
@@ -226,9 +230,9 @@ mod tests {
     }
 
     #[test]
-    fn repeated_tags_collapse() {
-        let rule = parse_rule_spec("tcp,tags=a:b+a:b").unwrap();
-        assert_eq!(rule["allowedTags"], json!(["a:b"]));
+    fn repeated_tags_collapse_and_plus_is_an_ordinary_character() {
+        let rule = parse_rule_spec("tcp,tag=a:b,tag=a:b,tag=lang:c++").unwrap();
+        assert_eq!(rule["allowedTags"], json!(["a:b", "lang:c++"]));
     }
 
     #[test]
@@ -247,10 +251,10 @@ mod tests {
                 "tcp,from=role/x",
                 "from=: role id contains invalid character '/'",
             ),
-            ("tcp,tags=nocolon", "tags=: "),
+            ("tcp,tag=nocolon", "tag=: "),
             ("tcp,port=22", "unknown rule field \"port\""),
             ("tcp,from=role-A,from=role-B", "from= given twice"),
-            ("tcp,junk", "expected from=, tags= or desc="),
+            ("tcp,junk", "expected from=, tag= or desc="),
         ] {
             let err = parse_rule_spec(spec).unwrap_err().to_string();
             assert!(err.contains(want), "{spec:?}: {err}");
@@ -263,19 +267,19 @@ mod tests {
     fn matching_ignores_description_tag_order_and_protocol_case() {
         let a = json!({"protocol": "tcp", "portRange": {"from": 22, "to": 22},
                        "allowedRoleID": null, "allowedTags": ["b:1", "a:1"], "description": "x"});
-        let b = parse_rule_spec("TCP/22,tags=a:1+b:1,desc=y").unwrap();
+        let b = parse_rule_spec("TCP/22,tag=a:1,tag=b:1,desc=y").unwrap();
         assert!(rules_match(&a, &b));
         assert!(!rules_match(
             &a,
-            &parse_rule_spec("tcp/22,tags=a:1").unwrap()
+            &parse_rule_spec("tcp/22,tag=a:1").unwrap()
         ));
         assert!(!rules_match(
             &a,
-            &parse_rule_spec("tcp/23,tags=a:1+b:1").unwrap()
+            &parse_rule_spec("tcp/23,tag=a:1,tag=b:1").unwrap()
         ));
         assert!(!rules_match(
             &a,
-            &parse_rule_spec("tcp/22,from=role-A,tags=a:1+b:1").unwrap()
+            &parse_rule_spec("tcp/22,from=role-A,tag=a:1,tag=b:1").unwrap()
         ));
     }
 
@@ -315,6 +319,23 @@ mod tests {
         let (rules, _) = apply_rule_edits(&current, &readd);
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0]["description"], "still open");
+        // The stored encoding is kept; only the description moved.
+        assert_eq!(rules[0]["portRange"], json!({"from": 0, "to": 0}));
+    }
+
+    #[test]
+    fn re_adding_an_unchanged_rule_leaves_the_list_as_stored() {
+        let stored = json!({"protocol": "tcp", "portRange": {"from": 0, "to": 0},
+                            "allowedRoleID": null, "allowedTags": ["b:1", "a:1"],
+                            "description": "same", "futureField": true});
+        let current = vec![stored.clone()];
+        let edits = RuleEdits {
+            clear: false,
+            remove: vec![],
+            add: vec![parse_rule_spec("TCP,tag=a:1,tag=b:1,desc=same").unwrap()],
+        };
+        let (rules, _) = apply_rule_edits(&current, &edits);
+        assert_eq!(rules, current);
     }
 
     #[test]

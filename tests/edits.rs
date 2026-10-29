@@ -117,7 +117,7 @@ fn role_create_posts_name_description_and_parsed_rules() {
             "--rule",
             "tcp/443,desc=https from anywhere",
             "--rule",
-            "tcp/22,from=role-ADM,tags=team:ops+env:prod,desc=ssh, admins only",
+            "tcp/22,from=role-ADM,tag=team:ops,tag=env:prod,desc=ssh, admins only",
             "--rule",
             "icmp",
         ],
@@ -302,6 +302,82 @@ fn tag_edit_that_changes_nothing_only_reads() {
         "{stderr}"
     );
     assert!(stderr.contains("nothing changed"), "{stderr}");
+}
+
+const ROLE_ZERO_PORTS: &str = r#"{"data":{"id":"role-OPEN","name":"Open","description":"",
+  "hostCount":0,"firewallRulesCount":1,"firewallRules":[
+    {"protocol":"ANY","portRange":{"from":0,"to":0},"allowedRoleID":null,
+     "allowedTags":["b:1","a:1"],"description":"open"}]},"metadata":{}}"#;
+
+#[test]
+fn re_adding_a_rule_the_api_encoded_differently_writes_nothing() {
+    let (url, seen) = serve(ROLE_ZERO_PORTS);
+    let out = dn(
+        &url,
+        &[
+            "role",
+            "edit",
+            "role-OPEN",
+            "--add-rule",
+            "any,tag=a:1,tag=b:1,desc=open",
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(requests(&seen).len(), 1, "only the read");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("nothing changed"));
+}
+
+#[test]
+fn changing_only_a_description_keeps_the_stored_rule_encoding() {
+    let (url, seen) = serve(ROLE_ZERO_PORTS);
+    let out = dn(
+        &url,
+        &[
+            "--json",
+            "role",
+            "edit",
+            "role-OPEN",
+            "--add-rule",
+            "any,tag=a:1,tag=b:1,desc=wide open",
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let seen = requests(&seen);
+    assert_eq!(seen[1].0, "PUT");
+    assert_eq!(
+        seen[1].2["firewallRules"],
+        json!([{"protocol":"ANY","portRange":{"from":0,"to":0},"allowedRoleID":null,
+                "allowedTags":["b:1","a:1"],"description":"wide open"}])
+    );
+}
+
+const ROLE_ODD_TAGS: &str = r#"{"data":{"id":"role-ODD","name":"Odd","description":"",
+  "hostCount":0,"firewallRulesCount":1,"firewallRules":[
+    {"protocol":"TCP","portRange":{"from":22,"to":22},"allowedRoleID":null,
+     "allowedTags":"env:prod","description":"ssh"}]},"metadata":{}}"#;
+
+const TAG_ODD_ROUTES: &str = r#"{"data":{"name":"env:prod","description":"Production","hostCount":2,
+  "priority":10,"routeSubscriptions":["route-A",7],"firewallRules":[]},"metadata":{}}"#;
+
+#[test]
+fn an_edit_refuses_to_write_over_a_response_it_cannot_read() {
+    // A tag restriction stored in a shape this code doesn't understand must
+    // not be matched as "no tags" and removed.
+    let (url, seen) = serve(ROLE_ODD_TAGS);
+    let out = dn(
+        &url,
+        &["role", "edit", "role-ODD", "--remove-rule", "tcp/22"],
+    );
+    assert!(!out.status.success(), "{out:?}");
+    assert_eq!(requests(&seen).len(), 1, "read only, no PUT");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("firewall rule 0"));
+
+    // Likewise a route list with an entry that isn't a string.
+    let (url, seen) = serve(TAG_ODD_ROUTES);
+    let out = dn(&url, &["tag", "edit", "env:prod", "--add-route", "route-B"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert_eq!(requests(&seen).len(), 1, "read only, no PATCH");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("routeSubscriptions"));
 }
 
 #[test]

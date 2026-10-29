@@ -9,13 +9,13 @@
 use anyhow::{anyhow, bail};
 use serde_json::{Map, Value, json};
 
-use super::firewall::{render_role, render_tag, rule_role_names};
+use super::firewall::{checked_firewall_rules, render_role, render_tag, rule_role_names};
 use super::hosts::parse_tag;
 use super::rules::{RuleEdits, apply_rule_edits, parse_rule_spec};
 use crate::api::Client;
 use crate::cli::{RoleCreateArgs, RoleEditArgs, RuleEditArgs, TagCreateArgs, TagEditArgs};
 use crate::ids::validate_id;
-use crate::output::{OutputMode, data_object, sanitize_for_display, str_field};
+use crate::output::{OutputMode, data_object, sanitize_for_display};
 
 const MAX_DESCRIPTION_CHARS: usize = 255;
 const MAX_ROLE_NAME_CHARS: usize = 50;
@@ -118,12 +118,39 @@ fn rule_edits(args: &RuleEditArgs) -> anyhow::Result<RuleEdits> {
     })
 }
 
-/// The current `firewallRules`, failing on a response without a list: a
-/// write built on a guess would silently drop every rule the API holds.
+/// The current `firewallRules`, checked field by field the way the rule
+/// table checks them before rendering. A write built on a rule this code
+/// can't read (a tag list that isn't a list, a role id that isn't a
+/// string) could drop a restriction the API holds, so it fails instead.
 fn current_rules(data: &Value) -> anyhow::Result<&Vec<Value>> {
-    data.get("firewallRules")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("unexpected response: firewallRules missing or not a list"))
+    checked_firewall_rules(data)
+}
+
+/// The current `description`, failing when it isn't a string: a role edit
+/// writes it back, and a tag edit compares against it.
+fn current_description(data: &Value) -> anyhow::Result<&str> {
+    data.get("description")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("unexpected response: description missing or not a string"))
+}
+
+/// The current `routeSubscriptions` as ids, failing on anything that
+/// isn't a list of strings rather than quietly dropping entries from the
+/// list written back.
+fn current_routes(data: &Value) -> anyhow::Result<Vec<String>> {
+    let routes = match data.get("routeSubscriptions") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(routes)) => routes,
+        Some(_) => bail!("unexpected response: routeSubscriptions is not a list"),
+    };
+    routes
+        .iter()
+        .map(|r| {
+            r.as_str().map(str::to_string).ok_or_else(|| {
+                anyhow!("unexpected response: routeSubscriptions has a non-string entry")
+            })
+        })
+        .collect()
 }
 
 /// Say which `--remove-rule` specs matched nothing, in human mode only.
@@ -165,11 +192,12 @@ pub fn roles_edit(client: &Client, args: &RoleEditArgs, output: OutputMode) -> a
 
     let (rules, unmatched) = apply_rule_edits(current, &rule_edits(&args.rules)?);
     warn_unmatched(output, "--remove-rule", &args.rules.remove_rule, &unmatched);
+    let stored_description = current_description(data)?;
     let description = args
         .description
         .as_deref()
-        .map_or_else(|| str_field(data, "description"), str::trim);
-    let unchanged = description == str_field(data, "description") && rules == *current;
+        .map_or(stored_description, str::trim);
+    let unchanged = description == stored_description && rules == *current;
     let body = json!({ "description": description, "firewallRules": rules });
 
     // A no-op edit still echoes the role under `--json`, so a script sees
@@ -233,7 +261,7 @@ pub fn tags_edit(client: &Client, args: &TagEditArgs, output: OutputMode) -> any
     let mut body = Map::new();
 
     if let Some(d) = &args.description
-        && d.trim() != str_field(data, "description")
+        && d.trim() != current_description(data)?
     {
         body.insert("description".into(), json!(d.trim()));
     }
@@ -246,13 +274,7 @@ pub fn tags_edit(client: &Client, args: &TagEditArgs, output: OutputMode) -> any
         }
     }
     if has_route_edits(args) {
-        let current: Vec<String> = data["routeSubscriptions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect();
+        let current = current_routes(data)?;
         let mut routes = if args.clear_routes {
             Vec::new()
         } else {

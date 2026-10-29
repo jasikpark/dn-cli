@@ -310,7 +310,7 @@ fn push_rules(
 
 /// `data.firewallRules`, failing on a missing or non-list value or on a
 /// rule [`check_firewall_rule`] rejects.
-fn checked_firewall_rules(data: &Value) -> anyhow::Result<&Vec<Value>> {
+pub(crate) fn checked_firewall_rules(data: &Value) -> anyhow::Result<&Vec<Value>> {
     let rules = data
         .get("firewallRules")
         .and_then(Value::as_array)

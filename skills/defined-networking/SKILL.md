@@ -338,19 +338,20 @@ unique (`ERR_DUPLICATE_VALUE` otherwise) and 1–50 characters.
 take the same spec:
 
 ```
-PROTO[/PORTS][,from=ROLE_ID][,tags=KEY:VALUE[+KEY:VALUE…]][,desc=TEXT]
+PROTO[/PORTS][,from=ROLE_ID][,tag=KEY:VALUE]...[,desc=TEXT]
 ```
 
 - `PROTO` is `any`, `tcp`, `udp`, or `icmp`.
 - `PORTS` is one port (`22`) or a range (`8000-9000`). Leave it off for every
   port; `icmp` takes none.
-- `from=` allows only hosts with that role; `tags=` only hosts carrying every
-  listed tag (`+`-separated). Leave both off to allow all hosts. Both together
-  means the source host needs the role *and* the tags.
-- `desc=` must be last and may contain commas.
+- `from=` allows only hosts with that role; `tag=` (repeat it for several)
+  only hosts carrying every tag given. Leave both off to allow all hosts.
+  Both together means the source host needs the role *and* the tags.
+- `desc=` must be last and may contain commas. A tag whose value contains a
+  comma can't be written in a spec.
 
 Examples: `tcp/22`, `tcp/443,desc=https from anywhere`,
-`udp/53,from=role-ABC,tags=env:prod+site:hou,desc=dns`. The spec is checked
+`udp/53,from=role-ABC,tag=env:prod,tag=site:hou,desc=dns`. The spec is checked
 locally before any request; a bad one fails with the reason. `any` with no
 ports and no source allows everything, and the human output warns about it.
 
@@ -367,12 +368,14 @@ the whole role, so `dn` reads it first, applies the flags, and writes back
 everything else unchanged. Removes run before adds. `--remove-rule` drops
 every rule allowing the same traffic as the spec (protocol, ports, source;
 the description doesn't matter) and warns on stderr when nothing matched.
-`--add-rule` of a rule that already allows the same traffic updates that
-rule's description instead of duplicating it. `--clear-rules` with
+`--add-rule` of a rule that already allows the same traffic keeps that rule
+and updates its description instead of duplicating it. `--clear-rules` with
 `--add-rule` replaces the list. An edit that changes nothing makes no write:
-`--json` echoes the current role, otherwise stderr says so. **Roles can't be
-renamed** — the API has no field for it. Key permission: `roles:update`
-(plus `roles:read` for the initial read).
+`--json` echoes the current role, otherwise stderr says so. If the role read
+back has a rule or field in a shape `dn` doesn't understand, the edit fails
+rather than writing a guess over it. **Roles can't be renamed** — the API
+has no field for it. Key permission: `roles:update` (plus `roles:read` for
+the initial read).
 
 ### Delete a role — `dn role delete`
 

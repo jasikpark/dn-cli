@@ -344,7 +344,7 @@ human_output! {
     tag_get: "Tag with its priority and a rule allowing hosts by tag.",
         TAG_ROUTES, &[], &["tag", "get", "env:prod"];
     tag_create: "Created tag, shown like tag get.",
-        TAG_ROUTES, &[], &["tag", "create", "env:prod", "--description", "Production", "--rule", "udp/53,tags=site:hou,desc=dns"];
+        TAG_ROUTES, &[], &["tag", "create", "env:prod", "--description", "Production", "--rule", "udp/53,tag=site:hou,desc=dns"];
     tag_edit: "Edited tag, warning about a route it was not subscribed to.",
         TAG_ROUTES, &[], &["tag", "edit", "env:prod", "--add-rule", "tcp/443", "--remove-route", "route-Z"];
     tag_delete: "Tag delete with --yes; tags are named by their id.",
