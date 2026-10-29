@@ -95,6 +95,71 @@ fn a_list_passes_the_cursor_and_page_size_it_is_given() {
 }
 
 #[test]
+fn host_filters_become_filter_query_parameters() {
+    let (url, seen) = serve();
+    let out = dn(
+        &url,
+        &[
+            "host",
+            "list",
+            "--role",
+            "null",
+            "--tag",
+            "env:prod",
+            "--tag",
+            "region:us-east-1",
+            "--lighthouse",
+            "--blocked=false",
+            "--never-seen",
+            "--limit",
+            "10",
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            "/v2/hosts?filter.roleID=null&filter.tag=env%3Aprod&filter.tag=region%3Aus-east-1\
+          &filter.isLighthouse=true&filter.isBlocked=false&filter.metadata.lastSeenAt=null\
+          &pageSize=10"
+        ]
+    );
+}
+
+#[test]
+fn host_search_takes_the_same_filters_as_host_list() {
+    let (url, seen) = serve();
+    let out = dn(
+        &url,
+        &[
+            "host",
+            "search",
+            "web",
+            "--network",
+            "network-A",
+            "--relay=false",
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            "/v2/hosts?filter.search=web&filter.networkID=network-A&filter.isRelay=false&pageSize=500"
+        ]
+    );
+}
+
+#[test]
+fn a_malformed_host_filter_fails_before_any_request() {
+    let (url, seen) = serve();
+    let out = dn(&url, &["host", "list", "--tag", "no-separator"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(seen.lock().unwrap().is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--tag"), "{stderr}");
+}
+
+#[test]
 fn json_lists_keep_both_cursors_and_say_nothing_on_stderr() {
     let (url, _) = serve();
     let out = dn(&url, &["--json", "network", "list"]);
