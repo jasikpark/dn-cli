@@ -13,6 +13,7 @@ versioned_files = [
     "Cargo.lock",
     { path = ".claude-plugin/plugin.json", regex = '"version": "(?<version>\d+\.\d+\.\d+)"' },
     { path = ".claude-plugin/marketplace.json", regex = '"version": "(?<version>\d+\.\d+\.\d+)"' },
+    { path = "skills/defined-networking/SKILL.md", regex = '(?<version>\d+\.\d+\.\d+)' },
 ]
 changelog = "CHANGELOG.md"
 

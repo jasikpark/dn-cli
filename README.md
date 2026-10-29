@@ -113,13 +113,27 @@ conventions, see [CONTRIBUTE.md](./CONTRIBUTE.md).
 This repo doubles as a [Claude Code](https://claude.com/claude-code) plugin
 (`.claude-plugin/plugin.json`). The `defined-networking` skill
 (`skills/defined-networking/SKILL.md`) teaches Claude to drive `dn` — checking
-`dn auth status --json` first and parsing `--json` output. The repo is also a
-one-plugin marketplace, so install it with:
+`dn auth status --json` first and parsing `--json` output.
+
+Any agent that reads `SKILL.md` (Claude Code, Codex, Cursor, OpenCode, …) can
+install the skill on its own with the [`skills`](https://skills.sh) CLI, which
+finds it from this repo's layout:
+
+```bash
+npx skills add jasikpark/dn-cli
+```
+
+For Claude Code the repo is also a one-plugin marketplace, so install it as a
+plugin with:
 
 ```bash
 claude plugin marketplace add jasikpark/dn-cli
 claude plugin install dn-cli@dn-cli
 ```
+
+Neither installs `dn` itself; see [Install](#install). The skill names the
+`dn` release it documents and tells the agent to compare it with
+`dn --version`.
 
 For local development, `claude --plugin-dir /path/to/dn-cli` loads the checkout
 for one session. The longer-term goal: *"I have this device, set it up on my

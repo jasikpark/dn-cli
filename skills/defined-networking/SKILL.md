@@ -9,6 +9,21 @@ description: View and manage a Defined Networking (Nebula mesh VPN) network with
 API — the managed [Nebula](https://github.com/slackhq/nebula) mesh VPN. Use it to
 inspect and manage the user's network.
 
+## Versions
+
+This skill documents `dn` 0.4.1. `dn --version` says what's installed. When
+the two differ, one of them is behind, and `dn <command> --help` is the
+authority on what exists until they match.
+
+- **`dn` is older:** update it. The README installer works for a shell
+  install (`curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jasikpark/dn-cli/releases/latest/download/dn-cli-installer.sh | sh`);
+  a cargo install is `cargo binstall --git https://github.com/jasikpark/dn-cli dn-cli`.
+  Offer to run the matching one.
+- **`dn` is newer:** update this skill. `claude plugin update dn-cli@dn-cli`
+  for the Claude Code plugin, `npx skills update` for a `skills` install.
+- **`dn` isn't installed:** same installer as above. Offer to run it; don't
+  build from source.
+
 ## Prerequisite: an API key source must be configured
 
 Each profile's key is in the OS keyring, or is a 1Password secret reference
