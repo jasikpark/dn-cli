@@ -38,6 +38,16 @@ suite did not notice, so it names a behaviour nothing asserts on.
 The `cargo-mutants` skill in `.claude/skills/` loads when Claude Code runs in this
 checkout and walks through a run and the survivor triage.
 
+### Mock ids
+
+Real ids are a kind prefix and 16 random bytes in unpadded base32, 26
+characters of `A-Z2-7`: `host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI`. Fixtures should
+look the same, so nothing passes on a width or character set the API would
+never produce. `tests/common/mod.rs` has `mock_id("host", "build server")`,
+which always returns the same id for the same label, `mock_ids` for several,
+and `any_id` as a proptest strategy. For a fixture typed by hand,
+`just mock-id host 3` prints three fresh ones.
+
 ## Testing against another API server
 
 Every profile talks to `https://api.defined.net` unless it was saved with
