@@ -140,7 +140,7 @@ pub fn tags_delete(
 
 /// Print a `role get` / `tag get` response: the raw envelope for `--json`,
 /// otherwise `render` of its `data` with rule role names resolved.
-fn print_rule_holder(
+pub(crate) fn print_rule_holder(
     client: &Client,
     res: &Value,
     output: OutputMode,
@@ -400,7 +400,7 @@ fn rule_port_width(rule: &Value) -> u64 {
 /// role-scoped ones, then wider port ranges first, then untagged rules
 /// first and more tags before fewer. Ties keep API order (`sort_by` is
 /// stable).
-fn compare_firewall_rules(a: &Value, b: &Value) -> std::cmp::Ordering {
+pub(crate) fn compare_firewall_rules(a: &Value, b: &Value) -> std::cmp::Ordering {
     let protocol = |r: &Value| r["protocol"].as_str().unwrap_or_default().to_string();
     let has_role = |r: &Value| r["allowedRoleID"].is_string();
     let tag_rank = |r: &Value| match rule_tags(r).len() {
@@ -415,7 +415,7 @@ fn compare_firewall_rules(a: &Value, b: &Value) -> std::cmp::Ordering {
 }
 
 /// Any protocol, any port, any host, no tags: every other rule is redundant.
-fn is_allow_everything_rule(rule: &Value) -> bool {
+pub(crate) fn is_allow_everything_rule(rule: &Value) -> bool {
     rule["protocol"].as_str() == Some("ANY")
         && rule_ports(rule).is_none()
         && !rule["allowedRoleID"].is_string()
@@ -430,7 +430,7 @@ fn is_allow_everything_rule(rule: &Value) -> bool {
 /// role named `All`, a tag containing ` + `); an unknown or empty role name
 /// falls back to the id. Ports is `any` when the rule covers every port
 /// (see [`rule_ports`]) and a single port when `from == to`.
-fn firewall_rule_row(rule: &Value, role_names: &HashMap<String, String>) -> Vec<String> {
+pub(crate) fn firewall_rule_row(rule: &Value, role_names: &HashMap<String, String>) -> Vec<String> {
     let mut hosts = match rule["allowedRoleID"].as_str() {
         None => "All hosts".to_string(),
         Some(id) => {

@@ -16,7 +16,7 @@ use clap::Parser;
 use crate::api::Client;
 use crate::cli::{
     AuditLogCommand, AuthCommand, Cli, Command, HostCommand, NetworkCommand, RoleCommand,
-    TagCommand,
+    RouteCommand, TagCommand,
 };
 use crate::commands::{
     audit_log::audit_log_list,
@@ -36,6 +36,7 @@ use crate::commands::{
         validate_search_preflight,
     },
     networks::{networks_delete, networks_get, networks_list},
+    routes::{routes_get, routes_list},
 };
 use crate::config::{
     Config, Migration, migrate_to_profiles, normalize_op_ref, validate_op_ref,
@@ -117,6 +118,9 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
         Command::Network {
             command: NetworkCommand::Get(args),
         } => validate_id("network", args.network_id.trim())?,
+        Command::Route {
+            command: RouteCommand::Get(args),
+        } => validate_id("route", args.route_id.trim())?,
         Command::Network {
             command: NetworkCommand::Delete(args),
         } => {
@@ -201,6 +205,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             NetworkCommand::List(page) => networks_list(&api_client(cli)?, page, output)?,
             NetworkCommand::Get(args) => networks_get(&api_client(cli)?, args, output)?,
             NetworkCommand::Delete(args) => networks_delete(&api_client(cli)?, args, output)?,
+        },
+        Command::Route { command } => match command {
+            RouteCommand::List(page) => routes_list(&api_client(cli)?, page, output)?,
+            RouteCommand::Get(args) => routes_get(&api_client(cli)?, args, output)?,
         },
         Command::Role { command } => match command {
             RoleCommand::List(page) => roles_list(&api_client(cli)?, page, output)?,

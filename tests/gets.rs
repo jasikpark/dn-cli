@@ -151,11 +151,69 @@ fn networks_get_json_passes_the_response_through() {
     assert_eq!(*seen.lock().unwrap(), ["/v2/networks/network-EXAMPLE"]);
 }
 
+const ROUTE: &str = r#"{"data":{"id":"route-YD7TPBTG7LCK3B7WUHZV3MP4VA","name":"Office LAN",
+    "description":"to the printers","routerHostID":"host-EXAMPLE",
+    "routableCIDRs":{"192.168.14.0/26":{"install":true}},
+    "createdAt":"2024-03-15T13:59:09Z","modifiedAt":"2024-03-15T13:59:09Z",
+    "firewallRules":[{"localCIDR":"192.168.14.56/32","protocol":"TCP",
+      "portRange":{"from":22,"to":22},"allowedRoleID":"role-EXAMPLE",
+      "allowedTags":null,"description":"ssh to the printer"}]}}"#;
+
+#[test]
+fn routes_get_reads_v1_and_falls_back_to_role_ids_without_a_roles_list() {
+    // This mock answers the roles list with the route body, so no role
+    // names resolve and the rule shows the id, as a key lacking
+    // `roles:list` would see.
+    let (url, seen) = serve(ROUTE, ROLE_OK);
+    let out = dn(&url, &["route", "get", "route-YD7TPBTG7LCK3B7WUHZV3MP4VA"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.starts_with("Office LAN (route-YD7TPBTG7LCK3B7WUHZV3MP4VA)\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("192.168.14.56/32"), "{stdout}");
+    assert!(stdout.contains("\"role-EXAMPLE\" hosts"), "{stdout}");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            "/v1/routes/route-YD7TPBTG7LCK3B7WUHZV3MP4VA",
+            "/v1/roles?pageSize=500"
+        ]
+    );
+}
+
+#[test]
+fn routes_get_json_passes_the_response_through() {
+    let (url, seen) = serve(ROUTE, ROLE_OK);
+    let out = dn(
+        &url,
+        &[
+            "--json",
+            "routes",
+            "get",
+            "route-YD7TPBTG7LCK3B7WUHZV3MP4VA",
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let got: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let want: serde_json::Value = serde_json::from_str(ROUTE).unwrap();
+    assert_eq!(got, want);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        ["/v1/routes/route-YD7TPBTG7LCK3B7WUHZV3MP4VA"]
+    );
+}
+
 #[test]
 fn gets_reject_non_object_data() {
     for (args, kind) in [
         (["host", "get", "host-EXAMPLE"], "host"),
         (["network", "get", "network-EXAMPLE"], "network"),
+        (
+            ["route", "get", "route-YD7TPBTG7LCK3B7WUHZV3MP4VA"],
+            "route",
+        ),
     ] {
         let (url, _) = serve(r#"{"data":[]}"#, ROLE_OK);
         let out = dn(&url, &args);
@@ -175,6 +233,7 @@ fn gets_reject_malformed_ids_before_any_request() {
         (["host", "get", ".."], "invalid character '.'"),
         (["host", "get", "host-1%2F.."], "invalid character '%'"),
         (["network", "get", "network-1?x"], "invalid character '?'"),
+        (["route", "get", "route-1#x"], "invalid character '#'"),
     ] {
         let (url, seen) = serve(HOST, ROLE_OK);
         let out = dn(&url, &args);

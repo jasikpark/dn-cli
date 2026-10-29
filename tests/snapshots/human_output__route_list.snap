@@ -1,0 +1,10 @@
+---
+source: tests/human_output.rs
+description: "Route table, marking a range hosts don't install."
+---
+$ dn route list
+ID                                NAME        ROUTER HOST                      CIDRS                                         RULES  DESCRIPTION
+route-YD7TPBTG7LCK3B7WUHZV3MP4VA  Office LAN  host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI  192.168.14.0/26, 10.9.0.0/16 (not installed)  2      to the printers
+route-SUFN7H7Z4OLWAQ5KUU522Q3BPA  Lab                                                                                        0      
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
