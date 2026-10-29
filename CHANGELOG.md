@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.4.4 (2026-10-29)
+
+### Features
+
+- list and show routes (#156)
+
+### Fixes
+
+- accept any platform value and shape-check the host id filters (#160)
+
 ## 0.4.3 (2026-10-29)
 
 ### Features
