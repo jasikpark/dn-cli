@@ -224,12 +224,16 @@ const NETWORK_ROUTES: &[Route] = &[
 const ROLE_ROUTES: &[Route] = &[
     ("GET", "/v1/roles", OK, ROLES),
     ("GET", "/v1/roles/role-WEB", OK, ROLE),
+    ("POST", "/v1/roles", OK, ROLE),
+    ("PUT", "/v1/roles/role-WEB", OK, ROLE),
     ("DELETE", "/v1/roles/role-WEB", OK, DELETED),
 ];
 
 const TAG_ROUTES: &[Route] = &[
     ("GET", "/v2/tags", OK, TAGS),
     ("GET", "/v1/tags/env:prod", OK, TAG),
+    ("POST", "/v1/tags", OK, TAG),
+    ("PATCH", "/v1/tags/env:prod", OK, TAG),
     ("DELETE", "/v1/tags/env:prod", OK, DELETED),
 ];
 
@@ -326,6 +330,12 @@ human_output! {
         ROLE_ROUTES, &[], &["role", "list"];
     role_get: "Role with its firewall rules; a rule allowing another role shows it by name.",
         ROLE_ROUTES, &[], &["role", "get", "role-WEB"];
+    role_create: "Created role, shown like role get.",
+        ROLE_ROUTES, &[], &["role", "create", "Web servers", "--rule", "tcp/443,desc=https from anywhere", "--rule", "tcp/22,from=role-ADM,desc=ssh from admins"];
+    role_edit: "Edited role, warning about a removed rule it never had.",
+        ROLE_ROUTES, &[], &["role", "edit", "role-WEB", "--add-rule", "icmp", "--remove-rule", "udp/53"];
+    role_edit_unchanged: "A role edit that changes nothing skips the update and says so.",
+        ROLE_ROUTES, &[], &["role", "edit", "role-WEB", "--add-rule", "tcp/443,desc=https from anywhere"];
     role_delete: "Role delete with --yes names the deleted role.",
         ROLE_ROUTES, &[], &["role", "delete", "role-WEB", "--yes"];
 
@@ -333,6 +343,10 @@ human_output! {
         TAG_ROUTES, &[], &["tag", "list"];
     tag_get: "Tag with its priority and a rule allowing hosts by tag.",
         TAG_ROUTES, &[], &["tag", "get", "env:prod"];
+    tag_create: "Created tag, shown like tag get.",
+        TAG_ROUTES, &[], &["tag", "create", "env:prod", "--description", "Production", "--rule", "udp/53,tags=site:hou,desc=dns"];
+    tag_edit: "Edited tag, warning about a route it was not subscribed to.",
+        TAG_ROUTES, &[], &["tag", "edit", "env:prod", "--add-rule", "tcp/443", "--remove-route", "route-Z"];
     tag_delete: "Tag delete with --yes; tags are named by their id.",
         TAG_ROUTES, &[], &["tag", "delete", "env:prod", "--yes"];
 

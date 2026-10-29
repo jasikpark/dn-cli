@@ -1,0 +1,16 @@
+---
+source: tests/human_output.rs
+description: "Edited tag, warning about a route it was not subscribed to."
+---
+$ dn tag edit env:prod --add-rule tcp/443 --remove-route route-Z
+Updated tag
+env:prod
+Production
+Hosts: 2
+Priority: 10
+
+ALLOWED HOSTS                PROTOCOL  PORTS  DESCRIPTION
+All hosts tagged "site:hou"  UDP       53     dns
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
+warning: the tag was not subscribed to route "route-Z"

@@ -26,6 +26,10 @@ use crate::commands::{
     },
     delete::{DELETE_NEEDS_YES, DeleteConfirmation, delete_confirmation},
     firewall::{roles_delete, roles_get, roles_list, tags_delete, tags_get, tags_list},
+    firewall_edit::{
+        roles_create, roles_edit, tags_create, tags_edit, validate_role_create_preflight,
+        validate_role_edit_preflight, validate_tag_create_preflight, validate_tag_edit_preflight,
+    },
     hosts::{
         hosts_create, hosts_delete, hosts_edit, hosts_get, hosts_list, hosts_search, parse_tag,
         validate_create_preflight, validate_edit_preflight, validate_list_preflight,
@@ -98,6 +102,18 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             validate_id("role", args.role_id.trim())?;
             preflight_delete(args.yes, output)?;
         }
+        Command::Role {
+            command: RoleCommand::Create(args),
+        } => validate_role_create_preflight(args)?,
+        Command::Role {
+            command: RoleCommand::Edit(args),
+        } => validate_role_edit_preflight(args)?,
+        Command::Tag {
+            command: TagCommand::Create(args),
+        } => validate_tag_create_preflight(args)?,
+        Command::Tag {
+            command: TagCommand::Edit(args),
+        } => validate_tag_edit_preflight(args)?,
         Command::Network {
             command: NetworkCommand::Get(args),
         } => validate_id("network", args.network_id.trim())?,
@@ -189,11 +205,15 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Role { command } => match command {
             RoleCommand::List(page) => roles_list(&api_client(cli)?, page, output)?,
             RoleCommand::Get(args) => roles_get(&api_client(cli)?, args, output)?,
+            RoleCommand::Create(args) => roles_create(&api_client(cli)?, args, output)?,
+            RoleCommand::Edit(args) => roles_edit(&api_client(cli)?, args, output)?,
             RoleCommand::Delete(args) => roles_delete(&api_client(cli)?, args, output)?,
         },
         Command::Tag { command } => match command {
             TagCommand::List(page) => tags_list(&api_client(cli)?, page, output)?,
             TagCommand::Get(args) => tags_get(&api_client(cli)?, args, output)?,
+            TagCommand::Create(args) => tags_create(&api_client(cli)?, args, output)?,
+            TagCommand::Edit(args) => tags_edit(&api_client(cli)?, args, output)?,
             TagCommand::Delete(args) => tags_delete(&api_client(cli)?, args, output)?,
         },
         Command::AuditLog { command } => match command {

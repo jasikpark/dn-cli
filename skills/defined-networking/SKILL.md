@@ -321,6 +321,59 @@ Without `--json`, rules print sorted the way the admin panel shows them, and
 a warning appears when a rule allows all hosts on any protocol and port,
 since every host with the role then accepts all inbound traffic.
 
+### Create a role — `dn role create`
+
+```bash
+dn role create <NAME> --description <TEXT> --rule <RULE> --rule <RULE> --json
+```
+
+Returns `{ "data": role }` in the `role get` shape. `--rule` is repeatable
+and optional; a role with no rules allows no inbound traffic (hosts still
+accept what their tags allow). Key permission: `roles:create`. Names must be
+unique (`ERR_DUPLICATE_VALUE` otherwise) and 1–50 characters.
+
+#### Rule specs
+
+`--rule`, `--add-rule`, and `--remove-rule` on `role` and `tag` commands all
+take the same spec:
+
+```
+PROTO[/PORTS][,from=ROLE_ID][,tags=KEY:VALUE[+KEY:VALUE…]][,desc=TEXT]
+```
+
+- `PROTO` is `any`, `tcp`, `udp`, or `icmp`.
+- `PORTS` is one port (`22`) or a range (`8000-9000`). Leave it off for every
+  port; `icmp` takes none.
+- `from=` allows only hosts with that role; `tags=` only hosts carrying every
+  listed tag (`+`-separated). Leave both off to allow all hosts. Both together
+  means the source host needs the role *and* the tags.
+- `desc=` must be last and may contain commas.
+
+Examples: `tcp/22`, `tcp/443,desc=https from anywhere`,
+`udp/53,from=role-ABC,tags=env:prod+site:hou,desc=dns`. The spec is checked
+locally before any request; a bad one fails with the reason. `any` with no
+ports and no source allows everything, and the human output warns about it.
+
+### Edit a role — `dn role edit`
+
+```bash
+dn role edit <ROLE_ID> --description <TEXT> --json
+dn role edit <ROLE_ID> --add-rule <RULE> --remove-rule <RULE> --json
+dn role edit <ROLE_ID> --clear-rules --add-rule <RULE> --json
+```
+
+Returns `{ "data": role }` after the change. The API's role update replaces
+the whole role, so `dn` reads it first, applies the flags, and writes back
+everything else unchanged. Removes run before adds. `--remove-rule` drops
+every rule allowing the same traffic as the spec (protocol, ports, source;
+the description doesn't matter) and warns on stderr when nothing matched.
+`--add-rule` of a rule that already allows the same traffic updates that
+rule's description instead of duplicating it. `--clear-rules` with
+`--add-rule` replaces the list. An edit that changes nothing makes no write:
+`--json` echoes the current role, otherwise stderr says so. **Roles can't be
+renamed** — the API has no field for it. Key permission: `roles:update`
+(plus `roles:read` for the initial read).
+
 ### Delete a role — `dn role delete`
 
 ```bash
@@ -364,6 +417,38 @@ allow-everything warning. It also warns when the server returns a different
 tag than the one asked for, or when `firewallRulesCount` disagrees with the
 rules listed. Use `--json` for config overrides and route subscriptions. Key
 permission: `tags:read`.
+
+### Create a tag — `dn tag create`
+
+```bash
+dn tag create <KEY:VALUE> --description <TEXT> --rule <RULE> --route <ROUTE_ID> --json
+dn tag create <KEY:VALUE> --after <KEY:VALUE> --json
+```
+
+Returns `{ "data": tag }` in the `tag get` shape. Everything but the name is
+optional: `--rule` (repeatable, see Rule specs above) adds inbound rules to
+every host carrying the tag, `--route` (repeatable) subscribes those hosts to
+a route, and `--before` / `--after` (one or the other) place the tag in the
+priority order next to an existing tag; without them the API picks. Key
+permission: `tags:create`.
+
+### Edit a tag — `dn tag edit`
+
+```bash
+dn tag edit <KEY:VALUE> --description <TEXT> --json
+dn tag edit <KEY:VALUE> --add-rule <RULE> --remove-rule <RULE> --clear-rules --json
+dn tag edit <KEY:VALUE> --add-route <ROUTE_ID> --remove-route <ROUTE_ID> --clear-routes --json
+dn tag edit <KEY:VALUE> --before <KEY:VALUE> --json
+```
+
+Returns `{ "data": tag }` after the change. Tags have a partial update, so
+`dn` reads the tag, works out which of description, firewall rules, and
+route subscriptions actually change, and sends only those (plus `--before`
+/ `--after`, which always move the tag). Config overrides are never sent, so
+they are never changed from here. Rule flags behave as on `role edit`;
+route flags work the same way on route ids, warning when a `--remove-route`
+wasn't subscribed. An edit that changes nothing makes no write. Key
+permission: `tags:update` (plus `tags:read`).
 
 ### Delete a tag — `dn tag delete`
 

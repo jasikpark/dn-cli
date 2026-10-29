@@ -1,0 +1,15 @@
+---
+source: tests/human_output.rs
+description: "Created role, shown like role get."
+---
+$ dn role create Web servers --rule tcp/443,desc=https from anywhere --rule tcp/22,from=role-ADM,desc=ssh from admins
+Created role
+Web servers (role-WEB)
+Public HTTP
+Hosts: 3
+
+ALLOWED HOSTS   PROTOCOL  PORTS  DESCRIPTION
+All hosts       TCP       443    https from anywhere
+"Admins" hosts  TCP       22     ssh from admins
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
