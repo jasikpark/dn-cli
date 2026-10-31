@@ -114,6 +114,15 @@ fn argument_errors_are_invalid_argument_before_credentials() {
             "pass --yes",
         ),
         (&["host", "get", "a/b", "--json"], "invalid character '/'"),
+        (&["host", "block", "a/b", "--json"], "invalid character '/'"),
+        (
+            &["host", "unblock", "a/b", "--json"],
+            "invalid character '/'",
+        ),
+        (
+            &["host", "enroll-code", "a?b", "--json"],
+            "invalid character '?'",
+        ),
         (
             &["network", "get", "network-1?x", "--json"],
             "invalid character '?'",

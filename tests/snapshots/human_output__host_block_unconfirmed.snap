@@ -1,0 +1,10 @@
+---
+source: tests/human_output.rs
+assertion_line: 400
+description: "A block whose response still says isBlocked: false fails instead of claiming success."
+---
+$ dn host block host-4LSTMYZG3ENRNEE46RF6TANA2M
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
+error: the API did not confirm that host host-4LSTMYZG3ENRNEE46RF6TANA2M is blocked; check with `dn host get host-4LSTMYZG3ENRNEE46RF6TANA2M`
+--- exit 1

@@ -399,6 +399,28 @@ impl Client {
         })?)
     }
 
+    /// Block a host (`hosts:block`): it stays in the account but can't talk
+    /// to the rest of the network until unblocked. Returns the updated host.
+    pub fn block_host(&self, id: &str) -> Result<Value> {
+        self.post_json(&format!("/v2/hosts/{id}/block"), &json!({}))
+    }
+
+    /// Unblock a host (`hosts:unblock`). Returns the updated host.
+    pub fn unblock_host(&self, id: &str) -> Result<Value> {
+        self.post_json(&format!("/v2/hosts/{id}/unblock"), &json!({}))
+    }
+
+    /// Issue a new enrollment code for an existing host (`hosts:enroll`).
+    /// The API refuses a blocked host (`ERR_HOST_BLOCKED`) and one enrolled
+    /// through an endpoint OIDC provider.
+    pub fn create_enrollment_code(&self, id: &str, lifetime: Option<u64>) -> Result<Value> {
+        let body = match lifetime {
+            Some(secs) => json!({ "lifetimeSeconds": secs }),
+            None => json!({}),
+        };
+        self.post_json(&format!("/v1/hosts/{id}/enrollment-code"), &body)
+    }
+
     fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
         read_json(self.send(path, |url, auth| {
             self.agent

@@ -1,0 +1,9 @@
+---
+source: tests/human_output.rs
+assertion_line: 400
+description: "Unblocked host, one line."
+---
+$ dn host unblock host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
+Unblocked host "Build Server" (host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI)
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

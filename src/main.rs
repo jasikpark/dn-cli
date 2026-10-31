@@ -31,9 +31,9 @@ use crate::commands::{
         validate_role_edit_preflight, validate_tag_create_preflight, validate_tag_edit_preflight,
     },
     hosts::{
-        hosts_create, hosts_delete, hosts_edit, hosts_get, hosts_list, hosts_search, parse_tag,
-        validate_create_preflight, validate_edit_preflight, validate_list_preflight,
-        validate_search_preflight,
+        hosts_block, hosts_create, hosts_delete, hosts_edit, hosts_enroll_code, hosts_get,
+        hosts_list, hosts_search, hosts_unblock, parse_tag, validate_create_preflight,
+        validate_edit_preflight, validate_list_preflight, validate_search_preflight,
     },
     networks::{networks_delete, networks_get, networks_list},
     routes::{routes_get, routes_list},
@@ -91,7 +91,10 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
                 validate_id("host", &args.host_id)?;
                 preflight_delete(args.yes, output)?;
             }
-            HostCommand::Get(args) => validate_id("host", &args.host_id)?,
+            HostCommand::Get(args) | HostCommand::Block(args) | HostCommand::Unblock(args) => {
+                validate_id("host", &args.host_id)?;
+            }
+            HostCommand::EnrollCode(args) => validate_id("host", &args.host_id)?,
             HostCommand::List(args) => validate_list_preflight(args)?,
         },
         Command::Role {
@@ -199,6 +202,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 HostCommand::Create(args) => hosts_create(&client, args, output)?,
                 HostCommand::Edit(args) => hosts_edit(&client, args, output)?,
                 HostCommand::Delete(args) => hosts_delete(&client, args, output)?,
+                HostCommand::Block(args) => hosts_block(&client, args, output)?,
+                HostCommand::Unblock(args) => hosts_unblock(&client, args, output)?,
+                HostCommand::EnrollCode(args) => hosts_enroll_code(&client, args, output)?,
             }
         }
         Command::Network { command } => match command {

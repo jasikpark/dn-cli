@@ -1,0 +1,10 @@
+---
+source: tests/human_output.rs
+assertion_line: 400
+description: "Enroll-code on a blocked host: the API's ERR_HOST_BLOCKED, exit 1."
+---
+$ dn host enroll-code host-4LSTMYZG3ENRNEE46RF6TANA2M
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
+error: Defined API error (HTTP 400)   ERR_HOST_BLOCKED: cannot create enrollment code for blocked host - unblock the host to continue
+--- exit 1

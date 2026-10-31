@@ -1,0 +1,14 @@
+---
+source: tests/human_output.rs
+assertion_line: 400
+description: "A new enrollment code: the dnclient command and when it expires."
+---
+$ dn host enroll-code host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI --code-lifetime 3600
+Enrollment code for host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
+
+On the device, install dnclient and run:
+  dnclient enroll H8NEbm99QvupjqW1PsdVR9DNSiFmoQtJXyGTQxerlSU
+
+The code expires in 1h.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
