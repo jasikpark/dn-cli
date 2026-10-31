@@ -414,6 +414,24 @@ pub enum HostCommand {
     Edit(HostEditArgs),
     /// Delete a host. Asks for confirmation unless --yes is passed.
     Delete(HostDeleteArgs),
+    /// Block a host: it stays in the account but can't reach, or be reached
+    /// by, other hosts until it is unblocked.
+    Block(HostGetArgs),
+    /// Unblock a host so it can rejoin the network.
+    Unblock(HostGetArgs),
+    /// Issue a new enrollment code for an existing host, e.g. to re-enroll
+    /// it after a reinstall. Prints the code to give to `dnclient enroll`.
+    EnrollCode(HostEnrollCodeArgs),
+}
+
+#[derive(Args)]
+pub struct HostEnrollCodeArgs {
+    /// Host id (host-…). Find ids with `dn host list` or `dn host search`.
+    pub host_id: String,
+    /// How long the code stays valid, in seconds: 60 to 604800 (7 days).
+    /// The API default is 86400 (24h).
+    #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(60..=604_800))]
+    pub code_lifetime: Option<u64>,
 }
 
 /// Arguments for `dn host list`: the `filter.*` query parameters of

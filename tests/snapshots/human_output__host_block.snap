@@ -1,0 +1,11 @@
+---
+source: tests/human_output.rs
+assertion_line: 400
+description: Blocked host and the command that undoes it.
+---
+$ dn host block host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
+Blocked host "Build Server" (host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI)
+It can't reach, or be reached by, other hosts until you run:
+  dn host unblock host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

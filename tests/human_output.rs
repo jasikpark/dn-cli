@@ -193,6 +193,15 @@ const AUDIT_LOGS: &str = r#"{"data":[
      "target":{"type":"ca","id":"ca-EXAMPLE"},"event":{"type":"CREATED"}}
   ],"metadata":{"hasNextPage":true,"nextCursor":"page-2"}}"#;
 
+const HOST_BLOCKED: &str = r#"{"data":{"id":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
+    "name":"Build Server","isBlocked":true},"metadata":{}}"#;
+
+const HOST_UNBLOCKED: &str = r#"{"data":{"id":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
+    "name":"Build Server","isBlocked":false},"metadata":{}}"#;
+
+const ENROLLMENT_CODE: &str =
+    r#"{"data":{"code":"H8NEbm99QvupjqW1PsdVR9DNSiFmoQtJXyGTQxerlSU","lifetimeSeconds":3600}}"#;
+
 const HOST_ID: &str = "host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI";
 
 const HOST_ROUTES: &[Route] = &[
@@ -218,6 +227,24 @@ const HOST_ROUTES: &[Route] = &[
         NETWORK,
     ),
     ("POST", "/v2/host-and-enrollment-code", OK, HOST_CREATED),
+    (
+        "POST",
+        "/v2/hosts/host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI/block",
+        OK,
+        HOST_BLOCKED,
+    ),
+    (
+        "POST",
+        "/v2/hosts/host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI/unblock",
+        OK,
+        HOST_UNBLOCKED,
+    ),
+    (
+        "POST",
+        "/v1/hosts/host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI/enrollment-code",
+        OK,
+        ENROLLMENT_CODE,
+    ),
 ];
 
 const NETWORK_ROUTES: &[Route] = &[
@@ -349,6 +376,18 @@ const ERROR_ROUTES: &[Route] = &[
         "404 Not Found",
         r#"{"errors":[{"code":"ERR_NOT_FOUND","message":"host not found"}]}"#,
     ),
+    (
+        "POST",
+        "/v1/hosts/host-4LSTMYZG3ENRNEE46RF6TANA2M/enrollment-code",
+        "400 Bad Request",
+        r#"{"errors":[{"code":"ERR_HOST_BLOCKED","message":"cannot create enrollment code for blocked host - unblock the host to continue"}]}"#,
+    ),
+    (
+        "POST",
+        "/v2/hosts/host-4LSTMYZG3ENRNEE46RF6TANA2M/block",
+        OK,
+        r#"{"data":{"id":"host-4LSTMYZG3ENRNEE46RF6TANA2M","name":"web","isBlocked":false},"metadata":{}}"#,
+    ),
 ];
 
 const AUTH_FILE: &[(&str, &str)] = &[(
@@ -375,6 +414,12 @@ human_output! {
         HOST_ROUTES, &[], &["host", "delete", HOST_ID, "--yes"];
     host_delete_needs_yes: "Without --yes and without a terminal to prompt on, delete refuses.",
         HOST_ROUTES, &[], &["host", "delete", HOST_ID];
+    host_block: "Blocked host and the command that undoes it.",
+        HOST_ROUTES, &[], &["host", "block", HOST_ID];
+    host_unblock: "Unblocked host, one line.",
+        HOST_ROUTES, &[], &["host", "unblock", HOST_ID];
+    host_enroll_code: "A new enrollment code: the dnclient command and when it expires.",
+        HOST_ROUTES, &[], &["host", "enroll-code", HOST_ID, "--code-lifetime", "3600"];
 
     network_list: "Network table.",
         NETWORK_ROUTES, &[], &["network", "list"];
@@ -437,6 +482,10 @@ human_output! {
         ERROR_ROUTES, &[], &["host", "delete", "host-NTC4C3RQGX4L6L73R6LCJL4SK4", "--yes"];
     host_delete_missing: "Host delete with --yes on an id that doesn't exist: the DELETE's own 404 is the error.",
         ERROR_ROUTES, &[], &["host", "delete", "host-4LSTMYZG3ENRNEE46RF6TANA2M", "--yes"];
+    host_enroll_code_blocked: "Enroll-code on a blocked host: the API's ERR_HOST_BLOCKED, exit 1.",
+        ERROR_ROUTES, &[], &["host", "enroll-code", "host-4LSTMYZG3ENRNEE46RF6TANA2M"];
+    host_block_unconfirmed: "A block whose response still says isBlocked: false fails instead of claiming success.",
+        ERROR_ROUTES, &[], &["host", "block", "host-4LSTMYZG3ENRNEE46RF6TANA2M"];
 
     auth_status: "Auth status names the key and its organization, as the API reports them.",
         WHOAMI_ROUTES, &[], &["auth", "status"];
