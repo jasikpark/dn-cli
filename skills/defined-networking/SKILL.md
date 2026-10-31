@@ -11,7 +11,7 @@ inspect and manage the user's network.
 
 ## Versions
 
-This skill documents `dn` 0.4.4. `dn --version` says what's installed. When
+This skill documents `dn` 0.4.5. `dn --version` says what's installed. When
 the two differ, one of them is behind, and `dn <command> --help` is the
 authority on what exists until they match.
 
