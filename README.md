@@ -1,6 +1,9 @@
 # dn-cli
 
 An unofficial CLI (`dn`) for the [Defined Networking](https://defined.net) API.
+The commands wrap the [API reference](https://www.defined.net/docs/api/);
+its [OpenAPI spec](https://www.defined.net/docs/openapi.yaml) is the
+authority on every field `dn` prints or sends.
 
 **This is not an officially supported Defined Networking product.** Defined
 Networking neither endorses nor supports it; report problems in this
