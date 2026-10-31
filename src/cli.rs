@@ -4,8 +4,19 @@ use crate::api::MAX_PAGE_SIZE;
 use crate::commands::rules::RULE_SPEC_HELP;
 use crate::output::OutputMode;
 
+/// Links shown at the end of `dn --help`: the API reference the commands wrap
+/// and its OpenAPI spec, for anyone generating a client or checking a field.
+const API_DOCS_HELP: &str = "\
+API reference: https://www.defined.net/docs/api/
+OpenAPI spec:  https://www.defined.net/docs/openapi.yaml";
+
 #[derive(Parser)]
-#[command(name = "dn", version, about = "CLI for the Defined Networking API")]
+#[command(
+    name = "dn",
+    version,
+    about = "CLI for the Defined Networking API",
+    after_help = API_DOCS_HELP
+)]
 pub struct Cli {
     /// Output machine-readable JSON (including errors) instead of human tables
     #[arg(long, global = true)]
@@ -609,6 +620,7 @@ pub struct HostDeleteArgs {
 mod tests {
     use super::*;
     use crate::commands::hosts::validate_edit_preflight;
+    use clap::CommandFactory;
 
     #[test]
     fn parses_hosts_delete_with_short_yes() {
@@ -979,5 +991,15 @@ mod tests {
                 command: NetworkCommand::Get(_)
             }
         ));
+    }
+
+    #[test]
+    fn help_links_to_api_reference_and_openapi_spec() {
+        let help = Cli::command().render_help().to_string();
+        assert!(help.contains("https://www.defined.net/docs/api/"), "{help}");
+        assert!(
+            help.contains("https://www.defined.net/docs/openapi.yaml"),
+            "{help}"
+        );
     }
 }
