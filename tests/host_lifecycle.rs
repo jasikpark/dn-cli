@@ -133,7 +133,7 @@ fn enroll_code_sends_the_lifetime_only_when_given() {
     let out = dn(&url, &["host", "enroll-code", &host]);
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.contains("dnclient enroll abc123"), "{stdout}");
+    assert!(stdout.contains("dnclient enroll -code abc123"), "{stdout}");
     assert!(stdout.contains("expires in 1h"), "{stdout}");
 
     let out = dn(

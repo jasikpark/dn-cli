@@ -7,7 +7,7 @@ Created host "web-2" (host-Z3HWQ5ATVK2MRXE7NC4YLBPJDG)
   IP addresses: 100.100.0.40
 
 To enroll the device, install dnclient and run:
-  dnclient enroll EXAMPLE-ENROLLMENT-CODE
+  dnclient enroll -code EXAMPLE-ENROLLMENT-CODE
 
 Note: the default role denies all inbound traffic. New hosts will be on
 the network but unable to reach each other until a role with firewall

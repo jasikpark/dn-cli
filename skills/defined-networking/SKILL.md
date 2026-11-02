@@ -225,7 +225,7 @@ Creates the host **and** its one-time enrollment code in a single call.
 
 Returns `{ "data": { "host": { … }, "enrollmentCode": { "code", "lifetimeSeconds" } } }`.
 Hand the user the code and the exact command to run on the device —
-`dnclient enroll <code>` — and tell them it expires (`lifetimeSeconds`). The
+`dnclient enroll -code <code>` — and tell them it expires (`lifetimeSeconds`). The
 human view prints the same thing, plus a reminder that the default role denies
 all inbound traffic: nothing can reach a freshly enrolled host until its role
 or one of its `--tags` allows it (`dn tag get`). What the new host can reach
@@ -315,7 +315,7 @@ dn host enroll-code <HOST_ID> --code-lifetime 3600 --json
 Issues a new one-time enrollment code for a host that already exists, e.g.
 after the device was reinstalled or `dnclient` lost its state. Returns
 `{ "data": { "code", "lifetimeSeconds" } }`; hand the user
-`dnclient enroll <code>` and when it expires, as for `host create`.
+`dnclient enroll -code <code>` and when it expires, as for `host create`.
 `--code-lifetime` takes 60 to 604800 seconds (API default 86400). Key
 permission: `hosts:enroll`.
 

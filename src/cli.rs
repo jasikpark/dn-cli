@@ -525,7 +525,7 @@ pub enum HostCommand {
     /// account). The query must be at least two characters.
     Search(HostSearchArgs),
     /// Create a host (or lighthouse / relay) and an enrollment code in one
-    /// transaction. Prints the OTP to give to `dnclient enroll`.
+    /// transaction. Prints the OTP to give to `dnclient enroll -code`.
     Create(HostCreateArgs),
     /// Edit a host — rename it, assign a role, or add/remove tags.
     Edit(HostEditArgs),
@@ -537,7 +537,7 @@ pub enum HostCommand {
     /// Unblock a host so it can rejoin the network.
     Unblock(HostGetArgs),
     /// Issue a new enrollment code for an existing host, e.g. to re-enroll
-    /// it after a reinstall. Prints the code to give to `dnclient enroll`.
+    /// it after a reinstall. Prints the code to give to `dnclient enroll -code`.
     EnrollCode(HostEnrollCodeArgs),
 }
 

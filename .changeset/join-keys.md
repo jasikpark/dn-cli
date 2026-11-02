@@ -20,3 +20,7 @@ marking expired ones; `dn join-key edit` renames a key or changes its expiry
 (`--no-expiry` removes it); `dn join-key delete` (alias `revoke`) stops a
 key from enrolling anything more, after the usual confirmation. `join-keys`,
 `join-token`, and `join-tokens` are aliases of `join-key`.
+
+`dn host create` and `dn host enroll-code` now print `dnclient enroll -code <code>`:
+`dnclient` takes the code only through its `-code` flag, so the bare form
+those commands printed before fails with "-code flag must be set".

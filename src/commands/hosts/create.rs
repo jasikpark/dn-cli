@@ -159,7 +159,7 @@ fn build_host_create_body(
 }
 
 /// Human-readable post-create summary. Surfaces what the user needs to act on
-/// next: the OTP to feed `dnclient enroll`, and the deny-all-default warning
+/// next: the OTP to feed `dnclient enroll -code`, and the deny-all-default warning
 /// so a fresh user doesn't wonder why the hosts can't reach each other yet.
 ///
 /// Treated as the user-facing UX surface — strings, ordering, and emphasis
@@ -191,7 +191,7 @@ fn render_host_create_human(res: &Value) -> String {
         Ok(code) => {
             out.push('\n');
             out.push_str("To enroll the device, install dnclient and run:\n");
-            out.push_str(&format!("  dnclient enroll {code}\n"));
+            out.push_str(&format!("  dnclient enroll -code {code}\n"));
         }
         Err(_) => {
             out.push('\n');

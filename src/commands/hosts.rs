@@ -179,7 +179,7 @@ pub fn parse_tag(s: &str) -> anyhow::Result<(String, String)> {
 
 /// An enrollment code from an API response, if it looks like one the API
 /// issues: 1–256 characters of base64url (`A-Z a-z 0-9 - _`). The human views
-/// print it inside a `dnclient enroll <code>` line the user pastes into a
+/// print it inside a `dnclient enroll -code <code>` line the user pastes into a
 /// shell, so anything else (empty, shell metacharacters, bidi or zero-width
 /// characters from a hostile or broken server) must never reach that line.
 pub(crate) fn checked_enroll_code(code: &str) -> anyhow::Result<&str> {
