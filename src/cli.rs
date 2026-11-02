@@ -153,11 +153,13 @@ pub struct JoinKeyCreateArgs {
     /// are v6-only
     #[arg(long)]
     pub no_ipv4: bool,
-    /// When the key stops enrolling hosts, as an RFC 3339 timestamp
-    /// (2027-01-01T00:00:00Z). Omit for a key that never expires.
+    /// When the key stops enrolling hosts, as an RFC 3339 timestamp in any
+    /// UTC offset (2027-01-01T00:00:00Z, 2027-01-01T09:00:00-05:00). Omit
+    /// for a key that never expires.
     #[arg(long, value_name = "TIMESTAMP", value_parser = non_blank, conflicts_with = "expires_in")]
     pub expires_at: Option<String>,
-    /// How long from now the key enrolls hosts: 30m, 12h, 7d, 1d12h
+    /// How long from now the key enrolls hosts: 12h, 7d, 30d, 90d, 1y, or
+    /// a mix like 1d12h
     #[arg(long, value_name = "DURATION", value_parser = non_blank)]
     pub expires_in: Option<String>,
 }
@@ -171,7 +173,8 @@ pub struct JoinKeyEditArgs {
     /// Rename the key (same rules as `join-key create`)
     #[arg(long, value_name = "NAME", value_parser = non_blank)]
     pub name: Option<String>,
-    /// New expiry, as an RFC 3339 timestamp (2027-01-01T00:00:00Z)
+    /// New expiry, as an RFC 3339 timestamp in any UTC offset
+    /// (2027-01-01T00:00:00Z)
     #[arg(
         long,
         value_name = "TIMESTAMP",
@@ -179,7 +182,8 @@ pub struct JoinKeyEditArgs {
         conflicts_with_all = ["expires_in", "no_expiry"]
     )]
     pub expires_at: Option<String>,
-    /// New expiry, as a duration from now: 30m, 12h, 7d, 1d12h
+    /// New expiry, as a duration from now: 12h, 7d, 30d, 90d, 1y, or a mix
+    /// like 1d12h
     #[arg(long, value_name = "DURATION", value_parser = non_blank, conflicts_with = "no_expiry")]
     pub expires_in: Option<String>,
     /// Remove the expiry so the key never stops enrolling hosts

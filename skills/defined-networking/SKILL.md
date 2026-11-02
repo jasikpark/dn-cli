@@ -686,7 +686,7 @@ dn join-key create <NAME> --network <NETWORK_ID> --role <ROLE_ID> --tag env:ci -
 | `--role <id>` | to give enrolled hosts a role other than the default (deny-all). Can't be changed later |
 | `--tag k:v` | repeatable; every enrolled host gets the tags. Can't be changed later |
 | `--cidr <prefix>` / `--no-ipv4` | the prefixes enrolled hosts get addresses from (the network's exact IPv4 CIDR or IPv6 prefix, repeatable). Omitted, `dn` sends the network's IPv4 prefix on a dual-stack network so hosts get an IPv4, as `host create` does; `--no-ipv4` makes them v6-only. Can't be changed later |
-| `--expires-at <RFC 3339>` / `--expires-in <duration>` | when the key stops enrolling (`2027-01-01T00:00:00Z`, or `30m`, `12h`, `7d`, `1d12h` from now). Omitted, the key never expires |
+| `--expires-at <RFC 3339>` / `--expires-in <duration>` | when the key stops enrolling: a timestamp in any UTC offset (`2027-01-01T00:00:00Z`, `2027-01-01T09:00:00-05:00`; `dn` sends it as UTC), or a duration from now (`12h`, `7d`, `30d`, `90d`, `1y`, `1d12h`; the admin panel's 7/30/90/365-day choices are `7d`, `30d`, `90d`, `365d`). Omitted, the key never expires |
 
 `<NAME>` must be a DNS label — lowercase letters, digits, and hyphens, not
 at either end, up to 54 characters — and unique in the organization

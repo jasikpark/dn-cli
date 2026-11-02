@@ -6,7 +6,6 @@ mod error;
 mod ids;
 mod keystore;
 mod output;
-mod rfc3339;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;

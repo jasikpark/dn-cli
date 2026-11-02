@@ -12,8 +12,9 @@ only time the API shows it; the token is printed only when it looks like one
 the API issues. Like `host create`, the network is auto-picked when the
 account has exactly one, and on a dual-stack network the IPv4 prefix is sent
 so enrolled hosts get an IPv4 address (`--cidr` and `--no-ipv4` override).
-`--expires-at` takes an RFC 3339 timestamp and `--expires-in` a duration
-such as `12h` or `7d`; both are checked before any request.
+`--expires-at` takes an RFC 3339 timestamp in any UTC offset and
+`--expires-in` a duration such as `12h`, `7d`, `30d`, or `1y`; both are
+checked before any request and sent as UTC.
 
 `dn join-key list` and `dn join-key get` show keys without their tokens,
 marking expired ones; `dn join-key edit` renames a key or changes its expiry
