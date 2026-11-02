@@ -1,0 +1,27 @@
+---
+source: tests/human_output.rs
+description: "Created join key on the named network, its enrollment command, the once-only warning, and the default-role note."
+---
+$ dn join-key create ci-runner --network network-Z2B7RBHWBP3VSDAPEWFWKMOMZU --tag env:ci --expires-at 2099-01-01T00:00:00Z
+Created join key "ci-runner" (dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA)
+ID:                 dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA
+Network:            network-Z2B7RBHWBP3VSDAPEWFWKMOMZU
+Role:               default role
+Tags:               env:ci
+Auto-assign CIDRs:  100.100.0.0/22, fd00:c0:c0::/80
+Expires:            2099-01-01T00:00:00Z
+Created:            2026-10-29T15:00:00Z
+Modified:           2026-10-29T15:00:00Z
+
+On each machine, install dnclient and run:
+  dnclient enroll -code dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA-6YQKZ3VNB2XGJ4MEPLRT7WCSAHDUF5IO3QXBKZNYV2MJ4RLEHGTA
+
+The token is shown only this once; store it somewhere safe. Every machine
+that enrolls with it joins as a new host.
+
+Note: the default role denies all inbound traffic. Hosts enrolled with this
+key will be on the network but unreachable until a role with firewall rules
+is assigned to them (see `dn role list`), unless one of the key's tags
+carries firewall rules (see `dn tag get`).
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

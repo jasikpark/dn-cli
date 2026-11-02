@@ -1,0 +1,16 @@
+---
+source: tests/human_output.rs
+description: "Edited join key, shown like join-key get."
+---
+$ dn join-key edit dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA --no-expiry
+ci-runner
+ID:                 dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA
+Network:            network-Z2B7RBHWBP3VSDAPEWFWKMOMZU
+Role:               Web servers (role-MCXBVCRC56AF3ZNM57X7BO5JKE)
+Tags:               env:ci
+Auto-assign CIDRs:  100.100.0.0/22, fd00:c0:c0::/80
+Expires:            2099-01-01T00:00:00Z
+Created:            2026-10-29T15:00:00Z
+Modified:           2026-10-29T15:00:00Z
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

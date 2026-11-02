@@ -5,9 +5,11 @@ mod get;
 mod lifecycle;
 
 pub use create::{hosts_create, validate_create_preflight};
+pub(crate) use create::{network_ipv4_cidr, pick_network};
 pub use delete::hosts_delete;
 pub use edit::{hosts_edit, validate_edit_preflight};
 pub use get::hosts_get;
+pub(crate) use get::role_name;
 pub use lifecycle::{hosts_block, hosts_enroll_code, hosts_unblock};
 
 use anyhow::{anyhow, bail};
@@ -180,7 +182,7 @@ pub fn parse_tag(s: &str) -> anyhow::Result<(String, String)> {
 /// print it inside a `dnclient enroll <code>` line the user pastes into a
 /// shell, so anything else (empty, shell metacharacters, bidi or zero-width
 /// characters from a hostile or broken server) must never reach that line.
-fn checked_enroll_code(code: &str) -> anyhow::Result<&str> {
+pub(crate) fn checked_enroll_code(code: &str) -> anyhow::Result<&str> {
     if code.is_empty() {
         bail!("unexpected response: missing enrollment code");
     }

@@ -317,6 +317,67 @@ const TAG_ROUTES: &[Route] = &[
 
 const AUDIT_LOG_ROUTES: &[Route] = &[("GET", "/v1/audit-logs", OK, AUDIT_LOGS)];
 
+const JOIN_KEY: &str = r#"{"data":{"id":"dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA",
+    "organizationID":"org-F63A24JGCLJV3ZEUTLCBISGETA","name":"ci-runner",
+    "networkID":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","roleID":"role-MCXBVCRC56AF3ZNM57X7BO5JKE",
+    "tags":["env:ci"],"autoAssignCIDRs":["100.100.0.0/22","fd00:c0:c0::/80"],
+    "expiresAt":"2099-01-01T00:00:00Z","createdAt":"2026-10-29T15:00:00Z",
+    "modifiedAt":"2026-10-29T15:00:00Z"},"metadata":{}}"#;
+
+const JOIN_KEY_CREATED: &str = r#"{"data":{"id":"dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA",
+    "organizationID":"org-F63A24JGCLJV3ZEUTLCBISGETA","name":"ci-runner",
+    "networkID":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","roleID":null,
+    "tags":["env:ci"],"autoAssignCIDRs":["100.100.0.0/22","fd00:c0:c0::/80"],
+    "expiresAt":"2099-01-01T00:00:00Z","createdAt":"2026-10-29T15:00:00Z",
+    "modifiedAt":"2026-10-29T15:00:00Z",
+    "token":"dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA-6YQKZ3VNB2XGJ4MEPLRT7WCSAHDUF5IO3QXBKZNYV2MJ4RLEHGTA"},
+    "metadata":{}}"#;
+
+const JOIN_KEYS: &str = r#"{"data":[
+    {"id":"dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA","name":"ci-runner",
+     "networkID":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","roleID":"role-MCXBVCRC56AF3ZNM57X7BO5JKE",
+     "tags":["env:ci"],"autoAssignCIDRs":["100.100.0.0/22","fd00:c0:c0::/80"],
+     "expiresAt":"2099-01-01T00:00:00Z"},
+    {"id":"dnjoin-6YQKZ3VNB2XGJ4MEPLRT7WCSAH","name":"lab-boxes",
+     "networkID":"network-2QYEBQUDORPGD7ZIHRIKDZ6O5I","roleID":null,
+     "tags":[],"autoAssignCIDRs":["100.101.0.0/24"],"expiresAt":null},
+    {"id":"dnjoin-DUF5IO3QXBKZNYV2MJ4RLEHGTA","name":"old-batch",
+     "networkID":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","roleID":null,
+     "tags":["env:ci","batch:2020"],"autoAssignCIDRs":["fd00:c0:c0::/80"],
+     "expiresAt":"2020-06-01T00:00:00Z"}
+  ],"metadata":{"hasNextPage":false}}"#;
+
+const JOIN_KEY_ROUTES: &[Route] = &[
+    ("GET", "/v1/join-keys", OK, JOIN_KEYS),
+    (
+        "GET",
+        "/v1/join-keys/dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA",
+        OK,
+        JOIN_KEY,
+    ),
+    ("POST", "/v1/join-keys", OK, JOIN_KEY_CREATED),
+    (
+        "PATCH",
+        "/v1/join-keys/dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA",
+        OK,
+        JOIN_KEY,
+    ),
+    (
+        "DELETE",
+        "/v1/join-keys/dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA",
+        OK,
+        DELETED,
+    ),
+    ("GET", "/v2/networks", OK, NETWORKS),
+    (
+        "GET",
+        "/v2/networks/network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
+        OK,
+        NETWORK,
+    ),
+    ("GET", "/v1/roles/role-MCXBVCRC56AF3ZNM57X7BO5JKE", OK, ROLE),
+];
+
 const EMPTY_ROUTES: &[Route] = &[
     ("GET", "/v2/hosts", OK, EMPTY_PAGE),
     ("GET", "/v2/networks", OK, EMPTY_PAGE),
@@ -324,6 +385,7 @@ const EMPTY_ROUTES: &[Route] = &[
     ("GET", "/v1/routes", OK, EMPTY_PAGE),
     ("GET", "/v2/tags", OK, EMPTY_PAGE),
     ("GET", "/v1/audit-logs", OK, EMPTY_PAGE),
+    ("GET", "/v1/join-keys", OK, EMPTY_PAGE),
 ];
 
 /// A whoami body carrying a field `auth status` must not pass through.
@@ -387,6 +449,12 @@ const ERROR_ROUTES: &[Route] = &[
         "/v2/hosts/host-4LSTMYZG3ENRNEE46RF6TANA2M/block",
         OK,
         r#"{"data":{"id":"host-4LSTMYZG3ENRNEE46RF6TANA2M","name":"web","isBlocked":false},"metadata":{}}"#,
+    ),
+    (
+        "POST",
+        "/v1/join-keys",
+        "400 Bad Request",
+        r#"{"errors":[{"code":"ERR_LIMIT_EXCEEDED","message":"no more than 10 join keys are allowed","extra":{"limit":10,"limitName":"joinKeys"}}]}"#,
     ),
 ];
 
@@ -459,6 +527,17 @@ human_output! {
     audit_log_list: "Audit log table with each actor kind (user email, API key name, system) and a next-page hint.",
         AUDIT_LOG_ROUTES, &[], &["audit-log", "list"];
 
+    join_key_list: "Join key table: a key with a role, one that never expires, and one already expired.",
+        JOIN_KEY_ROUTES, &[], &["join-key", "list"];
+    join_key_get: "Join key detail view with the role named; the token is never shown.",
+        JOIN_KEY_ROUTES, &[], &["join-key", "get", "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA"];
+    join_key_create: "Created join key on the named network, its enrollment command, the once-only warning, and the default-role note.",
+        JOIN_KEY_ROUTES, &[], &["join-key", "create", "ci-runner", "--network", "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU", "--tag", "env:ci", "--expires-at", "2099-01-01T00:00:00Z"];
+    join_key_edit: "Edited join key, shown like join-key get.",
+        JOIN_KEY_ROUTES, &[], &["join-key", "edit", "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA", "--no-expiry"];
+    join_key_delete: "Join key delete with --yes names the revoked key.",
+        JOIN_KEY_ROUTES, &[], &["join-key", "delete", "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA", "--yes"];
+
     host_list_empty: "Host list with no rows.",
         EMPTY_ROUTES, &[], &["host", "list"];
     host_search_empty: "Host search with no matches names the query.",
@@ -473,6 +552,8 @@ human_output! {
         EMPTY_ROUTES, &[], &["tag", "list"];
     audit_log_list_empty: "Audit log list with no rows.",
         EMPTY_ROUTES, &[], &["audit-log", "list"];
+    join_key_list_empty: "Join key list with no rows.",
+        EMPTY_ROUTES, &[], &["join-key", "list"];
 
     error_not_found: "A 404 reaches stderr as status, code and message, and exits 1.",
         ERROR_ROUTES, &[], &["host", "get", "host-4LSTMYZG3ENRNEE46RF6TANA2M"];
@@ -486,6 +567,8 @@ human_output! {
         ERROR_ROUTES, &[], &["host", "enroll-code", "host-4LSTMYZG3ENRNEE46RF6TANA2M"];
     host_block_unconfirmed: "A block whose response still says isBlocked: false fails instead of claiming success.",
         ERROR_ROUTES, &[], &["host", "block", "host-4LSTMYZG3ENRNEE46RF6TANA2M"];
+    join_key_create_limit: "Join key create at the organization's key limit: the API's ERR_LIMIT_EXCEEDED, exit 1.",
+        ERROR_ROUTES, &[], &["join-key", "create", "one-too-many", "--network", "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU", "--no-ipv4"];
 
     auth_status: "Auth status names the key and its organization, as the API reports them.",
         WHOAMI_ROUTES, &[], &["auth", "status"];

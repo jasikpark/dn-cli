@@ -69,7 +69,7 @@ pub fn validate_create_preflight(args: &HostCreateArgs) -> anyhow::Result<()> {
 /// usefully-typed error when auto-pick is ambiguous (0 networks → tell user
 /// to create one; ≥2, or more pages → tell user to pass --network), so the
 /// caller doesn't have to know the shape of the response to recover.
-fn pick_network(networks: &Value) -> anyhow::Result<&Value> {
+pub(crate) fn pick_network(networks: &Value) -> anyhow::Result<&Value> {
     let rows = networks
         .get("data")
         .and_then(Value::as_array)
@@ -102,7 +102,7 @@ fn wants_auto_ipv4(args: &HostCreateArgs) -> bool {
 /// network. Sent as an `ipAddresses` entry it makes the server auto-assign an
 /// IPv4 inside that prefix; the API honours only the network's exact prefix
 /// (sub-prefixes are rejected), so this is the one CIDR worth sending.
-fn network_ipv4_cidr(network: &Value) -> Option<String> {
+pub(crate) fn network_ipv4_cidr(network: &Value) -> Option<String> {
     network
         .get("cidrs")?
         .as_array()?

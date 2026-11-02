@@ -79,6 +79,112 @@ pub enum Command {
         #[command(subcommand)]
         command: AuditLogCommand,
     },
+    /// Manage join keys: reusable enrollment tokens any number of machines
+    /// can enroll with, each joining as a new host
+    #[command(aliases = ["join-keys", "join-token", "join-tokens"])]
+    JoinKey {
+        #[command(subcommand)]
+        command: JoinKeyCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum JoinKeyCommand {
+    /// List join keys (tokens are never listed)
+    List(PageArgs),
+    /// Show one join key: the network, role, tags, and address prefixes its
+    /// hosts get, and when it expires. The token is not shown.
+    Get(JoinKeyGetArgs),
+    /// Create a join key and print its token, the one time the API shows it
+    Create(JoinKeyCreateArgs),
+    /// Rename a join key or change when it expires. Its network, role, tags,
+    /// and prefixes can't change; create a new key instead.
+    Edit(JoinKeyEditArgs),
+    /// Revoke a join key so nothing more can enroll with it. Hosts it already
+    /// enrolled stay. Asks for confirmation unless --yes is passed.
+    #[command(alias = "revoke")]
+    Delete(JoinKeyDeleteArgs),
+}
+
+#[derive(Args)]
+pub struct JoinKeyGetArgs {
+    /// Join key id (dnjoin-…). Find ids with `dn join-key list`.
+    pub join_key_id: String,
+}
+
+#[derive(Args)]
+pub struct JoinKeyDeleteArgs {
+    /// Join key id (dnjoin-…). Find ids with `dn join-key list`.
+    pub join_key_id: String,
+    /// Skip the confirmation prompt (required when stdin is not a terminal or
+    /// with --json)
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+}
+
+/// Arguments for `dn join-key create`: the `POST /v1/join-keys` body, plus
+/// the same network auto-pick and IPv4 auto-assign as `host create`.
+#[derive(Args)]
+pub struct JoinKeyCreateArgs {
+    /// Key name: lowercase letters, digits, and hyphens, not starting or
+    /// ending with a hyphen (1–54 characters), unique in the organization.
+    /// Hosts that enroll without a usable hostname are named after it.
+    pub name: String,
+    /// Network (network-…) that enrolled hosts join. Omit if the account has
+    /// exactly one network. Can't be changed later.
+    #[arg(long, value_name = "NETWORK_ID", value_parser = non_blank)]
+    pub network: Option<String>,
+    /// Role (role-…) assigned to enrolled hosts. Omit for the account's
+    /// default role (deny-all firewall). Can't be changed later.
+    #[arg(long, value_name = "ROLE_ID", value_parser = non_blank)]
+    pub role: Option<String>,
+    /// A tag (key:value) given to every enrolled host. Repeatable. Can't be
+    /// changed later.
+    #[arg(long, value_name = "TAG", value_parser = non_blank)]
+    pub tag: Vec<String>,
+    /// A prefix enrolled hosts get addresses from: the network's exact IPv4
+    /// CIDR or IPv6 prefix. Repeatable. When omitted, hosts on a network
+    /// with an IPv4 prefix still get an IPv4: the CLI sends that prefix,
+    /// because the API otherwise leaves dual-stack hosts v6-only. See
+    /// `--no-ipv4`.
+    #[arg(long, value_name = "CIDR", value_parser = non_blank, conflicts_with = "no_ipv4")]
+    pub cidr: Vec<String>,
+    /// Skip the IPv4 auto-assign on a dual-stack network, so enrolled hosts
+    /// are v6-only
+    #[arg(long)]
+    pub no_ipv4: bool,
+    /// When the key stops enrolling hosts, as an RFC 3339 timestamp
+    /// (2027-01-01T00:00:00Z). Omit for a key that never expires.
+    #[arg(long, value_name = "TIMESTAMP", value_parser = non_blank, conflicts_with = "expires_in")]
+    pub expires_at: Option<String>,
+    /// How long from now the key enrolls hosts: 30m, 12h, 7d, 1d12h
+    #[arg(long, value_name = "DURATION", value_parser = non_blank)]
+    pub expires_in: Option<String>,
+}
+
+/// Arguments for `dn join-key edit`: the `PATCH /v1/join-keys/{id}` body.
+/// Only the name and expiry can change.
+#[derive(Args)]
+pub struct JoinKeyEditArgs {
+    /// Join key id (dnjoin-…). Find ids with `dn join-key list`.
+    pub join_key_id: String,
+    /// Rename the key (same rules as `join-key create`)
+    #[arg(long, value_name = "NAME", value_parser = non_blank)]
+    pub name: Option<String>,
+    /// New expiry, as an RFC 3339 timestamp (2027-01-01T00:00:00Z)
+    #[arg(
+        long,
+        value_name = "TIMESTAMP",
+        value_parser = non_blank,
+        conflicts_with_all = ["expires_in", "no_expiry"]
+    )]
+    pub expires_at: Option<String>,
+    /// New expiry, as a duration from now: 30m, 12h, 7d, 1d12h
+    #[arg(long, value_name = "DURATION", value_parser = non_blank, conflicts_with = "no_expiry")]
+    pub expires_in: Option<String>,
+    /// Remove the expiry so the key never stops enrolling hosts
+    #[arg(long)]
+    pub no_expiry: bool,
 }
 
 #[derive(Subcommand)]
@@ -991,6 +1097,157 @@ mod tests {
                 command: NetworkCommand::Get(_)
             }
         ));
+    }
+
+    #[test]
+    fn parses_join_key_create_with_every_flag() {
+        let cli = Cli::try_parse_from([
+            "dn",
+            "join-key",
+            "create",
+            "ci-runner",
+            "--network",
+            "network-PP4ZXJCLB4VVUNOUYC67UW3UAE",
+            "--role",
+            "role-4A2TRFEEBUMSGYTBSZRNVWJUQE",
+            "--tag",
+            "env:ci",
+            "--tag",
+            "team:infra",
+            "--cidr",
+            "100.100.0.0/22",
+            "--expires-at",
+            "2099-01-01T00:00:00Z",
+        ])
+        .unwrap();
+        let Command::JoinKey {
+            command: JoinKeyCommand::Create(args),
+        } = cli.command
+        else {
+            panic!("expected `join-key create`");
+        };
+        assert_eq!(args.name, "ci-runner");
+        assert_eq!(
+            args.network.as_deref(),
+            Some("network-PP4ZXJCLB4VVUNOUYC67UW3UAE")
+        );
+        assert_eq!(
+            args.role.as_deref(),
+            Some("role-4A2TRFEEBUMSGYTBSZRNVWJUQE")
+        );
+        assert_eq!(args.tag, ["env:ci", "team:infra"]);
+        assert_eq!(args.cidr, ["100.100.0.0/22"]);
+        assert_eq!(args.expires_at.as_deref(), Some("2099-01-01T00:00:00Z"));
+        assert!(args.expires_in.is_none());
+        assert!(!args.no_ipv4);
+    }
+
+    #[test]
+    fn join_key_create_expiry_and_ipv4_flags_conflict() {
+        for args in [
+            [
+                "dn",
+                "join-key",
+                "create",
+                "k",
+                "--expires-at",
+                "2099-01-01T00:00:00Z",
+                "--expires-in",
+                "7d",
+            ],
+            [
+                "dn",
+                "join-key",
+                "create",
+                "k",
+                "--cidr",
+                "100.100.0.0/22",
+                "--no-ipv4",
+                "--no-ipv4",
+            ],
+        ] {
+            let kind = Cli::try_parse_from(args).err().map(|e| e.kind());
+            assert_eq!(
+                kind,
+                Some(clap::error::ErrorKind::ArgumentConflict),
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_join_key_edit_and_its_expiry_flags_conflict() {
+        let cli = Cli::try_parse_from([
+            "dn",
+            "join-keys",
+            "edit",
+            "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA",
+            "--name",
+            "ci",
+            "--no-expiry",
+        ])
+        .unwrap();
+        let Command::JoinKey {
+            command: JoinKeyCommand::Edit(args),
+        } = cli.command
+        else {
+            panic!("expected `join-key edit`");
+        };
+        assert_eq!(args.join_key_id, "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA");
+        assert_eq!(args.name.as_deref(), Some("ci"));
+        assert!(args.no_expiry);
+        for extra in [
+            ["--expires-at", "2099-01-01T00:00:00Z", "--no-expiry"],
+            ["--expires-in", "7d", "--no-expiry"],
+            ["--expires-at", "2099-01-01T00:00:00Z", "--expires-in=7d"],
+        ] {
+            let argv = [
+                "dn",
+                "join-key",
+                "edit",
+                "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA",
+            ]
+            .into_iter()
+            .chain(extra);
+            let kind = Cli::try_parse_from(argv).err().map(|e| e.kind());
+            assert_eq!(
+                kind,
+                Some(clap::error::ErrorKind::ArgumentConflict),
+                "{extra:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn join_key_aliases_parse() {
+        for group in ["join-key", "join-keys", "join-token", "join-tokens"] {
+            let cli = Cli::try_parse_from(["dn", group, "list"]).unwrap();
+            assert!(
+                matches!(
+                    cli.command,
+                    Command::JoinKey {
+                        command: JoinKeyCommand::List(_)
+                    }
+                ),
+                "{group}"
+            );
+        }
+        let cli = Cli::try_parse_from([
+            "dn",
+            "join-key",
+            "revoke",
+            "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA",
+            "-y",
+        ])
+        .unwrap();
+        let Command::JoinKey {
+            command: JoinKeyCommand::Delete(args),
+        } = cli.command
+        else {
+            panic!("expected `join-key revoke` to parse into JoinKeyCommand::Delete");
+        };
+        assert_eq!(args.join_key_id, "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA");
+        assert!(args.yes);
     }
 
     #[test]

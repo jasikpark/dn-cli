@@ -6,6 +6,7 @@ mod error;
 mod ids;
 mod keystore;
 mod output;
+mod rfc3339;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -15,8 +16,8 @@ use clap::Parser;
 
 use crate::api::Client;
 use crate::cli::{
-    AuditLogCommand, AuthCommand, Cli, Command, HostCommand, NetworkCommand, RoleCommand,
-    RouteCommand, TagCommand,
+    AuditLogCommand, AuthCommand, Cli, Command, HostCommand, JoinKeyCommand, NetworkCommand,
+    RoleCommand, RouteCommand, TagCommand,
 };
 use crate::commands::{
     audit_log::audit_log_list,
@@ -34,6 +35,10 @@ use crate::commands::{
         hosts_block, hosts_create, hosts_delete, hosts_edit, hosts_enroll_code, hosts_get,
         hosts_list, hosts_search, hosts_unblock, parse_tag, validate_create_preflight,
         validate_edit_preflight, validate_list_preflight, validate_search_preflight,
+    },
+    join_keys::{
+        join_keys_create, join_keys_delete, join_keys_edit, join_keys_get, join_keys_list,
+        validate_join_key_create_preflight, validate_join_key_edit_preflight,
     },
     networks::{networks_delete, networks_get, networks_list},
     routes::{routes_get, routes_list},
@@ -141,6 +146,16 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             parse_tag(args.tag.trim())?;
             preflight_delete(args.yes, output)?;
         }
+        Command::JoinKey { command } => match command {
+            JoinKeyCommand::List(_) => {}
+            JoinKeyCommand::Get(args) => validate_id("join key", args.join_key_id.trim())?,
+            JoinKeyCommand::Create(args) => validate_join_key_create_preflight(args)?,
+            JoinKeyCommand::Edit(args) => validate_join_key_edit_preflight(args)?,
+            JoinKeyCommand::Delete(args) => {
+                validate_id("join key", args.join_key_id.trim())?;
+                preflight_delete(args.yes, output)?;
+            }
+        },
         Command::Auth {
             command: AuthCommand::Switch(args),
         } => validate_profile_name(&args.name)?,
@@ -233,6 +248,16 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::AuditLog { command } => match command {
             AuditLogCommand::List(args) => audit_log_list(&api_client(cli)?, args, output)?,
         },
+        Command::JoinKey { command } => {
+            let client = api_client(cli)?;
+            match command {
+                JoinKeyCommand::List(page) => join_keys_list(&client, page, output)?,
+                JoinKeyCommand::Get(args) => join_keys_get(&client, args, output)?,
+                JoinKeyCommand::Create(args) => join_keys_create(&client, args, output)?,
+                JoinKeyCommand::Edit(args) => join_keys_edit(&client, args, output)?,
+                JoinKeyCommand::Delete(args) => join_keys_delete(&client, args, output)?,
+            }
+        }
     }
 
     Ok(())

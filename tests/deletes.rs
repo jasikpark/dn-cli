@@ -111,6 +111,22 @@ fn network_delete_with_yes_deletes_on_v1_without_a_lookup() {
 }
 
 #[test]
+fn join_key_delete_with_yes_revokes_on_v1_without_a_lookup() {
+    let (url, seen) = serve();
+    let key = mock_id("dnjoin", "ci runners");
+    let out = dn(&url, &["--json", "join-key", "revoke", &key, "--yes"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        stdout_json(&out),
+        serde_json::json!({"id": key, "deleted": true})
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [format!("DELETE /v1/join-keys/{key}")]
+    );
+}
+
+#[test]
 fn tag_delete_with_yes_prints_the_tag_it_deleted() {
     let (url, seen) = serve();
     let out = dn(&url, &["tags", "delete", "env:prod", "--yes"]);
@@ -173,6 +189,13 @@ fn deletes_without_yes_are_refused_before_any_request() {
         ],
         &["tag", "delete", "env:prod"],
         &["--json", "tag", "delete", "env:prod"],
+        &["join-key", "delete", "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA"],
+        &[
+            "--json",
+            "join-key",
+            "delete",
+            "dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA",
+        ],
     ] {
         let (url, seen) = serve();
         let out = dn(&url, args);
@@ -192,6 +215,7 @@ fn deletes_reject_malformed_ids_before_any_request() {
         &["tag", "delete", "nocolon", "--yes"],
         &["network", "delete", "network-1/x", "--yes"],
         &["host", "delete", "host-1?x", "--yes"],
+        &["join-key", "delete", "dnjoin-1#x", "--yes"],
     ] {
         let (url, seen) = serve();
         let out = dn(&url, args);

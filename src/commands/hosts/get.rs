@@ -27,7 +27,7 @@ pub fn hosts_get(client: &Client, args: &HostGetArgs, output: OutputMode) -> any
 
 /// The name of role `id`, or `None` with a stderr note when the lookup fails
 /// (it needs `roles:read`, which a hosts-only key may lack).
-fn role_name(client: &Client, id: &str) -> Option<String> {
+pub(crate) fn role_name(client: &Client, id: &str) -> Option<String> {
     match client.get_role(id) {
         Ok(res) => Some(str_field(&res["data"], "name").to_string()).filter(|n| !n.is_empty()),
         Err(e) => {
