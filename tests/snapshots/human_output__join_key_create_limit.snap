@@ -1,0 +1,9 @@
+---
+source: tests/human_output.rs
+description: "Join key create at the organization's key limit: the API's ERR_LIMIT_EXCEEDED, exit 1."
+---
+$ dn join-key create one-too-many --network network-Z2B7RBHWBP3VSDAPEWFWKMOMZU --no-ipv4
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
+error: Defined API error (HTTP 400)   ERR_LIMIT_EXCEEDED: no more than 10 join keys are allowed
+--- exit 1

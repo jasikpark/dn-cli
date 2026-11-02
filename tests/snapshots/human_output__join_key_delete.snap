@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: Join key delete with --yes names the revoked key.
+---
+$ dn join-key delete dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA --yes
+Deleted join key "ci-runner" (dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA).
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

@@ -1,0 +1,11 @@
+---
+source: tests/human_output.rs
+description: "Join key table: a key with a role, one that never expires, and one already expired."
+---
+$ dn join-key list
+ID                                 NAME       NETWORK                             ROLE                             TAGS                CIDRS                            EXPIRES
+dnjoin-P3RCTXN5LVFGBMJNYF2QHKWDOA  ci-runner  network-Z2B7RBHWBP3VSDAPEWFWKMOMZU  role-MCXBVCRC56AF3ZNM57X7BO5JKE  env:ci              100.100.0.0/22, fd00:c0:c0::/80  2099-01-01T00:00:00Z
+dnjoin-6YQKZ3VNB2XGJ4MEPLRT7WCSAH  lab-boxes  network-2QYEBQUDORPGD7ZIHRIKDZ6O5I  default                                              100.101.0.0/24                   never
+dnjoin-DUF5IO3QXBKZNYV2MJ4RLEHGTA  old-batch  network-Z2B7RBHWBP3VSDAPEWFWKMOMZU  default                          env:ci, batch:2020  fd00:c0:c0::/80                  2020-06-01T00:00:00Z (expired)
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

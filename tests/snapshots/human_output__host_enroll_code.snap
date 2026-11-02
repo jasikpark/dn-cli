@@ -7,7 +7,7 @@ $ dn host enroll-code host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI --code-lifetime 3600
 Enrollment code for host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
 
 On the device, install dnclient and run:
-  dnclient enroll H8NEbm99QvupjqW1PsdVR9DNSiFmoQtJXyGTQxerlSU
+  dnclient enroll -code H8NEbm99QvupjqW1PsdVR9DNSiFmoQtJXyGTQxerlSU
 
 The code expires in 1h.
 --- stderr

@@ -258,6 +258,40 @@ impl Client {
         self.get(&format!("/v1/routes/{id}"))
     }
 
+    /// One page of join keys (`join-keys:list`). Tokens are never listed.
+    pub fn list_join_keys(&self, page: &PageArgs) -> Result<Value> {
+        self.list_page("/v1/join-keys", &[], page)
+    }
+
+    /// One join key without its token (`join-keys:read`).
+    pub fn get_join_key(&self, id: &str) -> Result<Value> {
+        self.get(&format!("/v1/join-keys/{id}"))
+    }
+
+    /// Create a join key (`join-keys:create`): the `POST /v1/join-keys`
+    /// object. The response is the only place the `token` ever appears.
+    pub fn create_join_key(&self, body: &Value) -> Result<Value> {
+        self.post_json("/v1/join-keys", body)
+    }
+
+    /// Change a join key's name or expiry (`join-keys:update`).
+    /// `PATCH /v1/join-keys/{id}` leaves out-of-body fields alone and ignores
+    /// the ones that can't change (network, role, tags, prefixes).
+    pub fn patch_join_key(&self, id: &str, body: &Value) -> Result<Value> {
+        read_json(self.send(&format!("/v1/join-keys/{id}"), |url, auth| {
+            self.agent
+                .patch(url)
+                .header("Authorization", auth)
+                .send_json(body)
+        })?)
+    }
+
+    /// Revoke a join key (`join-keys:delete`): machines can no longer enroll
+    /// with it; hosts it already enrolled stay.
+    pub fn delete_join_key(&self, id: &str) -> Result<()> {
+        self.delete(&format!("/v1/join-keys/{id}"))
+    }
+
     /// One page of networks.
     pub fn list_networks(&self, page: &PageArgs) -> Result<Value> {
         self.list_page("/v2/networks", &[], page)

@@ -95,7 +95,7 @@ fn render_enroll_code(host_id: &str, data: &Value) -> anyhow::Result<String> {
     let code = checked_enroll_code(str_field(data, "code"))?;
     let mut out = format!(
         "Enrollment code for {host_id}\n\n\
-         On the device, install dnclient and run:\n  dnclient enroll {code}\n"
+         On the device, install dnclient and run:\n  dnclient enroll -code {code}\n"
     );
     match data["lifetimeSeconds"].as_u64() {
         Some(0) => bail!("unexpected response: the enrollment code has a lifetime of 0 seconds"),
@@ -207,7 +207,7 @@ mod tests {
             format!(
                 "Enrollment code for {ID}\n\n\
                  On the device, install dnclient and run:\n  \
-                 dnclient enroll H8NEbm99QvupjqW1PsdVR9DNSiFmoQtJXyGTQxerlSU\n\n\
+                 dnclient enroll -code H8NEbm99QvupjqW1PsdVR9DNSiFmoQtJXyGTQxerlSU\n\n\
                  The code expires in 1d.\n"
             )
         );
