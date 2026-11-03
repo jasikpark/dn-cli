@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::time::Duration;
 
@@ -330,35 +331,15 @@ impl Client {
     /// envelope, carrying the last page's `metadata`. For lookups that need
     /// the whole set; user-facing lists fetch one page with [`Self::list_page`].
     fn list_all(&self, path: &str, params: &[(&str, &str)]) -> Result<Value> {
-        let mut data: Vec<Value> = Vec::new();
-        let mut metadata = Value::Null;
-        let mut cursor: Option<String> = None;
         let size = MAX_PAGE_SIZE.to_string();
-
-        loop {
+        walk_pages(|cursor| {
             let mut query: Vec<(&str, &str)> = params.to_vec();
-            if let Some(c) = &cursor {
+            if let Some(c) = cursor {
                 query.push(("cursor", c));
             }
             query.push(("pageSize", &size));
-            let page = self.get_with_query(path, &query)?;
-
-            if let Some(rows) = page.get("data").and_then(Value::as_array) {
-                data.extend(rows.iter().cloned());
-            }
-            if let Some(m) = page.get("metadata") {
-                metadata = m.clone();
-            }
-
-            match next_cursor(page.get("metadata")) {
-                // Guard against a server that reports a next page but never
-                // advances the cursor — better a short result than a spin.
-                Some(next) if Some(&next) != cursor.as_ref() => cursor = Some(next),
-                _ => break,
-            }
-        }
-
-        Ok(json!({ "data": data, "metadata": metadata }))
+            self.get_with_query(path, &query)
+        })
     }
 
     /// Prove a key works without requiring any resource permissions.
@@ -590,6 +571,39 @@ pub fn next_cursor(metadata: Option<&Value>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Fetch pages with `fetch` (given each page's cursor, `None` for the first)
+/// until one reports no next page, and merge them into one `{ data, metadata }`
+/// envelope carrying the last page's `metadata`.
+///
+/// A cursor is never fetched twice: a server that reports a next page but
+/// hands back a cursor already seen (the same one, or one from further back
+/// in a cycle) ends the walk with what was gathered so far. Better a short
+/// result than a spin that never ends and grows without bound.
+fn walk_pages(mut fetch: impl FnMut(Option<&str>) -> Result<Value>) -> Result<Value> {
+    let mut data: Vec<Value> = Vec::new();
+    let mut metadata = Value::Null;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut cursor: Option<String> = None;
+
+    loop {
+        let page = fetch(cursor.as_deref())?;
+
+        if let Some(rows) = page.get("data").and_then(Value::as_array) {
+            data.extend(rows.iter().cloned());
+        }
+        if let Some(m) = page.get("metadata") {
+            metadata = m.clone();
+        }
+
+        match next_cursor(page.get("metadata")) {
+            Some(next) if seen.insert(next.clone()) => cursor = Some(next),
+            _ => break,
+        }
+    }
+
+    Ok(json!({ "data": data, "metadata": metadata }))
+}
+
 /// The largest page the API serves; it clamps a bigger `pageSize` to this.
 pub const MAX_PAGE_SIZE: u32 = 500;
 
@@ -785,5 +799,97 @@ mod tests {
         assert!(next_cursor(Some(&json!({"hasNextPage": true}))).is_none());
         assert!(next_cursor(Some(&json!({"hasNextPage": true, "nextCursor": ""}))).is_none());
         assert!(next_cursor(None).is_none());
+    }
+
+    /// A server whose pages chain through `next`: page `i` points at page
+    /// `next[i]`, or is the last page when that is `None`. Cursor `c{i}`
+    /// names page `i`; the first request (no cursor) gets page 0.
+    fn walk(next: &[Option<usize>]) -> (Value, Vec<Option<String>>) {
+        let mut requests = Vec::new();
+        let merged = walk_pages(|cursor| {
+            // A walk that loops would never return; fail instead of hanging.
+            assert!(requests.len() < 1000, "walk never ended: {requests:?}");
+            requests.push(cursor.map(str::to_owned));
+            let page = match cursor {
+                None => 0,
+                Some(c) => c[1..].parse::<usize>().unwrap(),
+            };
+            let metadata = match next[page] {
+                Some(n) => json!({"hasNextPage": true, "nextCursor": format!("c{n}")}),
+                None => json!({"hasNextPage": false, "nextCursor": ""}),
+            };
+            Ok(json!({"data": [page], "metadata": metadata}))
+        })
+        .unwrap();
+        (merged, requests)
+    }
+
+    #[test]
+    fn walk_pages_follows_the_cursor_to_the_last_page() {
+        let (merged, requests) = walk(&[Some(1), Some(2), None]);
+        assert_eq!(merged["data"], json!([0, 1, 2]));
+        assert_eq!(merged["metadata"]["hasNextPage"], false);
+        assert_eq!(
+            requests,
+            [None, Some("c1".to_string()), Some("c2".to_string())]
+        );
+    }
+
+    #[test]
+    fn walk_pages_stops_when_the_cursor_cycles_back() {
+        // Page 1 points at page 2, which points back at page 1.
+        let (merged, requests) = walk(&[Some(1), Some(2), Some(1)]);
+        assert_eq!(merged["data"], json!([0, 1, 2]));
+        assert_eq!(requests.len(), 3);
+    }
+
+    #[test]
+    fn walk_pages_surfaces_a_failed_page() {
+        let mut calls = 0;
+        let err = walk_pages(|_| {
+            calls += 1;
+            if calls == 2 {
+                anyhow::bail!("page 2 failed");
+            }
+            Ok(json!({"data": [1], "metadata": {"hasNextPage": true, "nextCursor": format!("c{calls}")}}))
+        })
+        .unwrap_err();
+        assert_eq!(err.to_string(), "page 2 failed");
+    }
+
+    mod walk_pages_props {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// Any server-shaped cursor graph: up to 12 pages, each the last or
+        /// pointing at any page (itself and earlier ones included).
+        fn cursor_graph() -> impl Strategy<Value = Vec<Option<usize>>> {
+            (1usize..12)
+                .prop_flat_map(|n| prop::collection::vec(prop::option::weighted(0.8, 0..n), n))
+        }
+
+        proptest! {
+            #[test]
+            fn every_walk_ends_and_fetches_each_cursor_once(next in cursor_graph()) {
+                let (merged, requests) = walk(&next);
+                prop_assert_eq!(requests[0].as_deref(), None);
+                let cursors: Vec<&String> = requests[1..].iter().flatten().collect();
+                let distinct: HashSet<&String> = cursors.iter().copied().collect();
+                prop_assert_eq!(cursors.len(), requests.len() - 1, "only the first request lacks a cursor");
+                prop_assert_eq!(distinct.len(), cursors.len(), "a cursor was fetched twice: {:?}", requests);
+                prop_assert!(requests.len() <= next.len() + 1);
+                prop_assert_eq!(merged["data"].as_array().unwrap().len(), requests.len());
+            }
+
+            #[test]
+            fn a_chain_without_cycles_is_read_in_full(n in 1usize..20) {
+                let next: Vec<Option<usize>> =
+                    (0..n).map(|i| (i + 1 < n).then_some(i + 1)).collect();
+                let (merged, _) = walk(&next);
+                let expected: Vec<usize> = (0..n).collect();
+                prop_assert_eq!(&merged["data"], &json!(expected));
+            }
+        }
     }
 }

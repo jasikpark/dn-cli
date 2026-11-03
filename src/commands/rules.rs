@@ -156,6 +156,7 @@ pub fn rules_match(a: &Value, b: &Value) -> bool {
 }
 
 /// The rule edits `role edit` and `tag edit` take, already parsed.
+#[derive(Debug)]
 pub struct RuleEdits {
     pub clear: bool,
     pub remove: Vec<Value>,
@@ -374,5 +375,224 @@ mod tests {
             },
         );
         assert!(rules.is_empty());
+    }
+
+    mod props {
+        use std::collections::BTreeSet;
+
+        use proptest::prelude::*;
+
+        use super::*;
+        use crate::commands::firewall::compare_firewall_rules;
+
+        /// A rule as the API might store it, including the encodings
+        /// `rules_match` must see through: lower-case protocols, an
+        /// every-port range written as null or `{from: 0, ...}`, ports on an
+        /// ICMP rule, and an empty tag list beside a null one.
+        fn api_rule() -> impl Strategy<Value = Value> {
+            let protocol = prop::sample::select(vec!["ANY", "TCP", "UDP", "ICMP", "tcp", "icmp"]);
+            let ports = prop_oneof![
+                Just(Value::Null),
+                Just(json!({"from": 0, "to": 0})),
+                Just(json!({"from": 0, "to": 65535})),
+                (1u16..4, 1u16..4).prop_map(|(a, b)| json!({"from": a.min(b), "to": a.max(b)})),
+            ];
+            let role = prop::option::of(prop::sample::select(vec!["role-A", "role-B"]));
+            let tags = prop_oneof![
+                Just(Value::Null),
+                Just(json!([])),
+                prop::collection::vec(prop::sample::select(vec!["env:prod", "site:hou"]), 1..3)
+                    .prop_map(|t| json!(t)),
+            ];
+            let description = prop::sample::select(vec!["", "web", "dns"]);
+            (protocol, ports, role, tags, description).prop_map(|(p, ports, role, tags, d)| {
+                json!({"protocol": p, "portRange": ports, "allowedRoleID": role,
+                       "allowedTags": tags, "description": d})
+            })
+        }
+
+        fn edits() -> impl Strategy<Value = RuleEdits> {
+            (
+                any::<bool>(),
+                prop::collection::vec(api_rule(), 0..4),
+                prop::collection::vec(api_rule(), 0..4),
+            )
+                .prop_map(|(clear, remove, add)| RuleEdits { clear, remove, add })
+        }
+
+        /// The rules as a multiset, ignoring order.
+        fn as_set(rules: &[Value]) -> Vec<String> {
+            let mut set: Vec<String> = rules.iter().map(Value::to_string).collect();
+            set.sort();
+            set
+        }
+
+        /// A spec and the rule it should parse to, built from parts the
+        /// grammar allows: any protocol case, a port or range (none on
+        /// ICMP), a role id, tags (repeats collapse) and a description that
+        /// may hold commas and `=`.
+        fn spec_and_rule() -> impl Strategy<Value = (String, Value)> {
+            let protocol = prop::sample::select(vec!["any", "TCP", "Udp", "icmp"]);
+            let ports = prop::option::of((1u16..=65535, 1u16..=65535));
+            let role = prop::option::of("[A-Za-z0-9_-]{1,32}");
+            let tag = ("[^,:\\s\\p{Cc}]{1,20}", "[^,\\s\\p{Cc}]{1,50}")
+                .prop_map(|(k, v)| format!("{k}:{v}"));
+            let tags = prop::collection::vec(tag, 0..4);
+            let description = prop::option::of("[^\\s\\p{Cc}]([^\\p{Cc}]{0,253}[^\\s\\p{Cc}])?");
+            let separator = prop::sample::select(vec![",", ", ", " , "]);
+            (protocol, ports, role, tags, description, any::<bool>(), separator).prop_map(
+                |(protocol, ports, role, tags, description, role_last, sep)| {
+                    let upper = protocol.to_ascii_uppercase();
+                    let ports = ports
+                        .filter(|_| upper != "ICMP")
+                        .map(|(a, b)| (a.min(b), a.max(b)));
+                    let mut head = protocol.to_string();
+                    if let Some((from, to)) = ports {
+                        head += &if from == to { format!("/{from}") } else { format!("/{from}-{to}") };
+                    }
+                    let mut fields: Vec<String> = tags.iter().map(|t| format!("tag={t}")).collect();
+                    if let Some(role) = &role {
+                        let at = if role_last { fields.len() } else { 0 };
+                        fields.insert(at, format!("from={role}"));
+                    }
+                    if let Some(d) = &description {
+                        fields.push(format!("desc={d}"));
+                    }
+                    let spec = std::iter::once(head).chain(fields).collect::<Vec<_>>().join(sep);
+
+                    let mut unique: Vec<&String> = Vec::new();
+                    for t in &tags {
+                        if !unique.contains(&t) {
+                            unique.push(t);
+                        }
+                    }
+                    let rule = json!({
+                        "protocol": upper,
+                        "portRange": ports.map(|(from, to)| json!({"from": from, "to": to})),
+                        "allowedRoleID": role,
+                        "allowedTags": if unique.is_empty() { Value::Null } else { json!(unique) },
+                        "description": description.unwrap_or_default(),
+                    });
+                    (spec, rule)
+                },
+            )
+        }
+
+        proptest! {
+            #[test]
+            fn rules_match_is_an_equivalence(a in api_rule(), b in api_rule(), c in api_rule()) {
+                prop_assert!(rules_match(&a, &a));
+                prop_assert_eq!(rules_match(&a, &b), rules_match(&b, &a));
+                if rules_match(&a, &b) && rules_match(&b, &c) {
+                    prop_assert!(rules_match(&a, &c));
+                }
+            }
+
+            #[test]
+            fn descriptions_never_affect_a_match(a in api_rule(), d in "\\PC{0,8}") {
+                let mut relabelled = a.clone();
+                relabelled["description"] = json!(d);
+                prop_assert!(rules_match(&a, &relabelled));
+            }
+
+            #[test]
+            fn edits_do_what_they_say(current in prop::collection::vec(api_rule(), 0..6), edits in edits()) {
+                let start: Vec<Value> = if edits.clear { Vec::new() } else { current.clone() };
+                let (rules, unmatched) = apply_rule_edits(&current, &edits);
+
+                // Every added rule is there afterwards.
+                for new in &edits.add {
+                    prop_assert!(rules.iter().any(|r| rules_match(r, new)), "lost {}", new);
+                }
+                // A removed rule is gone unless an add brought it back.
+                for gone in &edits.remove {
+                    if !edits.add.iter().any(|a| rules_match(a, gone)) {
+                        prop_assert!(!rules.iter().any(|r| rules_match(r, gone)), "kept {}", gone);
+                    }
+                }
+                // Rules nobody named survive.
+                for kept in start.iter().filter(|r| !edits.remove.iter().any(|g| rules_match(r, g))) {
+                    prop_assert!(rules.iter().any(|r| rules_match(r, kept)), "dropped {}", kept);
+                }
+                // A remove is reported unmatched exactly when nothing was
+                // left for it: it matched no rule to begin with, or an
+                // earlier remove already took the same traffic.
+                for (i, gone) in edits.remove.iter().enumerate() {
+                    let had_match = start.iter().any(|r| rules_match(r, gone));
+                    let taken_earlier = edits.remove[..i].iter().any(|g| rules_match(g, gone));
+                    prop_assert_eq!(unmatched.contains(&i), !had_match || taken_earlier, "remove #{}", i);
+                }
+            }
+
+            #[test]
+            fn running_an_edit_twice_changes_nothing_more(
+                current in prop::collection::vec(api_rule(), 0..6),
+                edits in edits(),
+            ) {
+                let (once, _) = apply_rule_edits(&current, &edits);
+                let (twice, _) = apply_rule_edits(&once, &edits);
+                // A spec both removed and added moves to the end, so compare
+                // as sets: the rules, not their order.
+                prop_assert_eq!(as_set(&once), as_set(&twice));
+            }
+
+            #[test]
+            fn re_adding_existing_rules_writes_nothing(current in prop::collection::vec(api_rule(), 0..6)) {
+                let add: Vec<Value> = current.iter().step_by(2).cloned().collect();
+                let edits = RuleEdits { clear: false, remove: Vec::new(), add };
+                let (rules, unmatched) = apply_rule_edits(&current, &edits);
+                // Only a matching rule's description may change; with the
+                // same rules re-added, nothing does.
+                let unchanged = current.iter().all(|r| {
+                    current.iter().filter(|o| rules_match(o, r)).all(|o| o["description"] == r["description"])
+                });
+                if unchanged {
+                    prop_assert_eq!(rules, current);
+                }
+                prop_assert!(unmatched.is_empty());
+            }
+
+            #[test]
+            fn the_rule_order_is_a_total_order(a in api_rule(), b in api_rule(), c in api_rule()) {
+                use std::cmp::Ordering::Greater;
+                prop_assert_eq!(compare_firewall_rules(&a, &b), compare_firewall_rules(&b, &a).reverse());
+                if compare_firewall_rules(&a, &b) != Greater && compare_firewall_rules(&b, &c) != Greater {
+                    prop_assert_ne!(compare_firewall_rules(&a, &c), Greater);
+                }
+            }
+
+            #[test]
+            fn a_well_formed_spec_parses_to_its_rule((spec, rule) in spec_and_rule()) {
+                prop_assert_eq!(parse_rule_spec(&spec).unwrap(), rule, "spec: {:?}", spec);
+            }
+
+            #[test]
+            fn any_spec_either_fails_or_gives_a_valid_rule(
+                parts in prop::collection::vec(
+                    prop_oneof![
+                        prop::sample::select(vec![
+                            "tcp", "udp", "icmp", "any", "/", "-", ",", "=", "from", "tag", "desc",
+                            ":", "0", "22", "65535", "65536", "role-A", "k:v", " ",
+                        ]).prop_map(str::to_string),
+                        "\\PC{0,3}",
+                    ],
+                    0..12,
+                ),
+            ) {
+                let spec = parts.concat();
+                if let Ok(rule) = parse_rule_spec(&spec) {
+                    let protocol = rule["protocol"].as_str().unwrap();
+                    prop_assert!(["ANY", "TCP", "UDP", "ICMP"].contains(&protocol));
+                    if let Some(range) = rule["portRange"].as_object() {
+                        let (from, to) = (range["from"].as_u64().unwrap(), range["to"].as_u64().unwrap());
+                        prop_assert!(1 <= from && from <= to && to <= 65535, "{}", rule);
+                        prop_assert_ne!(protocol, "ICMP");
+                    }
+                    let tags: Vec<&Value> = rule["allowedTags"].as_array().into_iter().flatten().collect();
+                    let distinct: BTreeSet<String> = tags.iter().map(|t| t.to_string()).collect();
+                    prop_assert_eq!(distinct.len(), tags.len(), "repeated tag in {}", rule);
+                }
+            }
+        }
     }
 }
