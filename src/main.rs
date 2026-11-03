@@ -32,8 +32,9 @@ use crate::commands::{
     },
     hosts::{
         hosts_block, hosts_create, hosts_delete, hosts_edit, hosts_enroll_code, hosts_get,
-        hosts_list, hosts_search, hosts_unblock, parse_tag, validate_create_preflight,
+        hosts_list, hosts_search, hosts_unblock, hosts_wait, parse_tag, validate_create_preflight,
         validate_edit_preflight, validate_list_preflight, validate_search_preflight,
+        validate_wait_preflight,
     },
     join_keys::{
         join_keys_create, join_keys_delete, join_keys_edit, join_keys_get, join_keys_list,
@@ -99,6 +100,7 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
                 validate_id("host", &args.host_id)?;
             }
             HostCommand::EnrollCode(args) => validate_id("host", &args.host_id)?,
+            HostCommand::Wait(args) => validate_wait_preflight(args)?,
             HostCommand::List(args) => validate_list_preflight(args)?,
         },
         Command::Role {
@@ -219,6 +221,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 HostCommand::Block(args) => hosts_block(&client, args, output)?,
                 HostCommand::Unblock(args) => hosts_unblock(&client, args, output)?,
                 HostCommand::EnrollCode(args) => hosts_enroll_code(&client, args, output)?,
+                HostCommand::Wait(args) => hosts_wait(&client, args, output)?,
             }
         }
         Command::Network { command } => match command {

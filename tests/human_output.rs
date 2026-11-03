@@ -488,6 +488,8 @@ human_output! {
         HOST_ROUTES, &[], &["host", "unblock", HOST_ID];
     host_enroll_code: "A new enrollment code: the dnclient command and when it expires.",
         HOST_ROUTES, &[], &["host", "enroll-code", HOST_ID, "--code-lifetime", "3600"];
+    host_wait_seen: "Waiting on a host that has already checked in returns at once and shows its client.",
+        HOST_ROUTES, &[], &["host", "wait", HOST_ID];
 
     network_list: "Network table.",
         NETWORK_ROUTES, &[], &["network", "list"];
