@@ -98,9 +98,10 @@ A call uses `--profile`, else `DN_PROFILE`, else the default profile. Like
 opts out), and logging out of the default makes another profile the default.
 Each of these commands prints the resulting profiles.
 
-Credentials from before profiles are converted the first time any `dn` command
-runs, with a one-line notice on stderr: the old `auth.json` becomes a `default`
-profile, and `config.json`'s `api_url` moves into it.
+An `auth.json` from before profiles (before 0.2.10, with no `version`) is
+no longer read: `dn auth status` reports it as invalid, and `dn auth login`
+replaces it. `config.json` is no longer read either; pass `--api-url` to
+`auth login` instead.
 
 For CI or agents, `DEFINED_API_KEY` in the environment takes precedence over any
 profile's key. It may hold the raw key or an `op://` reference — `dn` resolves

@@ -8,8 +8,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AUTH_VERSION, DEFAULT_PROFILE, KEYRING, PROFILE_NAME_CHARS, auth_path, config_dir, config_path,
-    is_valid_profile_name, normalize_api_url,
+    AUTH_VERSION, KEYRING, PROFILE_NAME_CHARS, auth_path, config_dir, is_valid_profile_name,
 };
 
 /// One named account: which API to talk to and where its key comes from.
@@ -91,29 +90,26 @@ impl fmt::Display for InvalidStoredProfileName {
 
 impl std::error::Error for InvalidStoredProfileName {}
 
-/// An `auth.json` with no `version` that still has a key the profiles layout
-/// writes (`profiles`, `default_profile`): most likely a current file whose
-/// `version` was removed by hand. Converting it as the old layout would write
-/// those keys twice and could drop a profile, so it is refused, like a file
-/// from a newer `dn`, rather than guessed at or replaced.
+/// An `auth.json` with no `version`: the single-reference layout from before
+/// profiles, which this binary no longer reads. Unlike a file from a newer
+/// `dn`, `auth login` may replace it: its one reference is all it held.
 #[derive(Debug)]
-pub struct AmbiguousAuthLayout(&'static str);
+pub struct MissingAuthVersion;
 
-impl fmt::Display for AmbiguousAuthLayout {
+impl fmt::Display for MissingAuthVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "auth.json has \"{}\" but no \"version\"; add \"version\": {AUTH_VERSION} if it \
-             lists profiles, or run `dn auth logout --all` to discard it",
-            self.0
+            "auth.json has no \"version\" (written by a dn from before profiles); \
+             run `dn auth login` to replace it"
         )
     }
 }
 
-impl std::error::Error for AmbiguousAuthLayout {}
+impl std::error::Error for MissingAuthVersion {}
 
 /// An exclusive advisory lock on the credentials, held while a command reads,
-/// changes and writes `auth.json` (and, when migrating, `config.json`), so
+/// changes and writes `auth.json`, so
 /// concurrent `dn` processes can't lose each other's changes. It lives in a
 /// separate `auth.json.lock` because `auth.json` itself is replaced by rename.
 /// Released on drop.
@@ -135,57 +131,18 @@ impl AuthLock {
     }
 }
 
-/// The `auth.json` layout before profiles: one reference, no `version`.
-#[derive(Deserialize)]
-struct LegacyAuthFile {
-    #[serde(default)]
-    api_key_ref: Option<String>,
-    #[serde(flatten)]
-    extra: serde_json::Map<String, serde_json::Value>,
-}
-
-impl From<LegacyAuthFile> for AuthFile {
-    fn from(legacy: LegacyAuthFile) -> Self {
-        let mut auth = AuthFile {
-            extra: legacy.extra,
-            ..AuthFile::default()
-        };
-        if let Some(reference) = legacy.api_key_ref.filter(|r| !r.trim().is_empty()) {
-            let profile = Profile {
-                key: Some(reference),
-                ..Profile::default()
-            };
-            auth.profiles.insert(DEFAULT_PROFILE.to_string(), profile);
-            auth.default_profile = Some(DEFAULT_PROFILE.to_string());
-        }
-        auth
-    }
-}
-
 impl AuthFile {
-    /// Parse either layout. The flag is true for the old single-reference
-    /// layout, which comes back already converted to profiles.
+    /// Parse the profiles layout.
     ///
     /// A hand-edited default that is missing or names no profile is repaired
     /// in memory (see [`AuthFile::ensure_default`]), so callers can rely on a
     /// default whenever there are profiles.
-    fn parse(text: &str) -> Result<(Self, bool)> {
+    fn parse(text: &str) -> Result<Self> {
         let value: serde_json::Value = serde_json::from_str(text)?;
-        let (mut auth, legacy) = match value.get("version") {
-            None => {
-                if let Some(key) = ["profiles", "default_profile"]
-                    .into_iter()
-                    .find(|k| value.get(k).is_some())
-                {
-                    return Err(AmbiguousAuthLayout(key).into());
-                }
-                (
-                    serde_json::from_value::<LegacyAuthFile>(value)?.into(),
-                    true,
-                )
-            }
+        let mut auth = match value.get("version") {
+            None => return Err(MissingAuthVersion.into()),
             Some(version) if version.as_u64() == Some(AUTH_VERSION) => {
-                (serde_json::from_value::<AuthFile>(value)?, false)
+                serde_json::from_value::<AuthFile>(value)?
             }
             Some(version) => return Err(UnsupportedAuthVersion(version.to_string()).into()),
         };
@@ -197,33 +154,31 @@ impl AuthFile {
             return Err(InvalidStoredProfileName(bad.clone()).into());
         }
         auth.ensure_default();
-        Ok((auth, legacy))
+        Ok(auth)
     }
 
-    /// Read the credentials file, treating a missing file as no profiles. An
-    /// old-layout file is converted in memory; see [`migrate_to_profiles`].
+    /// Read the credentials file, treating a missing file as no profiles.
     pub fn load() -> Result<Self> {
         let path = auth_path()?;
         match read_optional(&path)? {
-            Some(text) => Self::parse(&text)
-                .map(|(auth, _)| auth)
-                .with_context(|| format!("failed to parse {}", path.display())),
+            Some(text) => {
+                Self::parse(&text).with_context(|| format!("failed to parse {}", path.display()))
+            }
             None => Ok(Self::default()),
         }
     }
 
     /// Like [`AuthFile::load`], but an unparsable file comes back as no
-    /// profiles plus the error, for `auth login` to replace. A file from a
-    /// newer `dn`, one with a hand-edited bad name, or one missing its
-    /// `version` beside profiles is still an error:
+    /// profiles plus the error, for `auth login` to replace. That includes a
+    /// file from before profiles. A file from a newer `dn` or one with a
+    /// hand-edited bad name is still an error:
     /// replacing it would lose its profiles and orphan their keyring entries.
     pub fn load_or_reset() -> Result<(Self, Option<anyhow::Error>)> {
         match Self::load() {
             Ok(cfg) => Ok((cfg, None)),
             Err(e)
                 if e.downcast_ref::<UnsupportedAuthVersion>().is_some()
-                    || e.downcast_ref::<InvalidStoredProfileName>().is_some()
-                    || e.downcast_ref::<AmbiguousAuthLayout>().is_some() =>
+                    || e.downcast_ref::<InvalidStoredProfileName>().is_some() =>
             {
                 Err(e)
             }
@@ -252,152 +207,6 @@ impl AuthFile {
         self.default_profile = self.profiles.keys().next().cloned();
         self.default_profile.clone()
     }
-}
-
-/// What [`migrate_to_profiles`] did, for stderr: notices of what moved, and
-/// warnings for what couldn't be done.
-#[derive(Debug, Default)]
-pub struct Migration {
-    pub notes: Vec<String>,
-    pub warnings: Vec<String>,
-}
-
-/// The parsed pieces migration looks at: the credentials (converted in
-/// memory if old), whether they were in the old layout, and `config.json`
-/// as a JSON object if it parses.
-struct MigrationInputs {
-    auth: AuthFile,
-    legacy: bool,
-    config: Option<serde_json::Map<String, serde_json::Value>>,
-}
-
-impl MigrationInputs {
-    /// `None` when `auth.json` can't be read or parsed; the command itself
-    /// reports that.
-    fn read(auth_path: &Path, config_path: &Path) -> Option<Self> {
-        let (auth, legacy) = match read_optional(auth_path).ok()? {
-            None => (AuthFile::default(), false),
-            Some(text) => AuthFile::parse(&text).ok()?,
-        };
-        let config = read_optional(config_path)
-            .ok()
-            .flatten()
-            .and_then(|text| serde_json::from_str(&text).ok());
-        Some(Self {
-            auth,
-            legacy,
-            config,
-        })
-    }
-
-    fn needed(&self) -> bool {
-        self.legacy
-            || self
-                .config
-                .as_ref()
-                .is_some_and(|c| c.contains_key("api_url"))
-    }
-}
-
-/// Bring credentials into the profiles layout. Every `dn` call runs this
-/// first, so old layouts disappear on first contact:
-///
-/// - an `auth.json` from before profiles (one `api_key_ref`, no `version`)
-///   becomes a `default` profile;
-/// - `config.json`'s `api_url` moves into the default profile (unless that
-///   profile already has one) and is removed from `config.json`, which is
-///   deleted once empty.
-///
-/// It never fails the command. The common case, nothing to migrate, reads
-/// without locking; otherwise the work is redone under [`AuthLock`], so
-/// parallel calls migrate once and can't lose a concurrent `auth login`.
-/// `auth.json` is written before `config.json` is stripped, so a failure in
-/// between leaves the URL in both places, never in neither.
-pub fn migrate_to_profiles() -> Migration {
-    let mut migration = Migration::default();
-    let (Ok(auth_path), Ok(config_path)) = (auth_path(), config_path()) else {
-        return migration;
-    };
-    if !MigrationInputs::read(&auth_path, &config_path).is_some_and(|m| m.needed()) {
-        return migration;
-    }
-    let _lock = match AuthLock::acquire() {
-        Ok(lock) => lock,
-        Err(e) => {
-            migration.warnings.push(format!(
-                "could not migrate credentials ({e:#}); using them as-is and retrying next time"
-            ));
-            return migration;
-        }
-    };
-    let Some(MigrationInputs {
-        mut auth,
-        legacy,
-        mut config,
-    }) = MigrationInputs::read(&auth_path, &config_path)
-    else {
-        return migration;
-    };
-
-    let mut auth_changed = legacy;
-    if legacy {
-        migration
-            .notes
-            .push(format!("converted {} to profiles", auth_path.display()));
-    }
-    let config_url = config.as_mut().and_then(|c| c.remove("api_url"));
-    if let Some(url) = config_url
-        .as_ref()
-        .and_then(|u| u.as_str())
-        .map(normalize_api_url)
-        .filter(|u| !u.is_empty())
-    {
-        let target = auth
-            .default_profile
-            .clone()
-            .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
-        let profile = auth.profiles.entry(target.clone()).or_default();
-        match profile.api_url.as_deref().map(normalize_api_url) {
-            None => {
-                profile.api_url = Some(url);
-                auth_changed = true;
-                migration.notes.push(format!(
-                    "moved api_url from {} into profile {target:?}",
-                    config_path.display()
-                ));
-            }
-            Some(existing) if existing != url => migration.notes.push(format!(
-                "dropped api_url {url} from {}: profile {target:?} already uses {existing}",
-                config_path.display()
-            )),
-            Some(_) => {}
-        }
-        auth.ensure_default();
-    }
-
-    if auth_changed && let Err(e) = auth.save() {
-        migration.notes.clear();
-        migration.warnings.push(format!(
-            "could not migrate {} ({e:#}); using it as-is and retrying next time",
-            auth_path.display()
-        ));
-        return migration;
-    }
-    if config_url.is_some() {
-        let stripped = match &config {
-            Some(rest) if rest.is_empty() => remove_file_if_present(&config_path).map(drop),
-            Some(rest) => pretty_text(rest).and_then(|text| write_private(&config_path, &text)),
-            None => Ok(()),
-        };
-        if let Err(e) = stripped {
-            migration.warnings.push(format!(
-                "api_url in {} is no longer used, but it couldn't be removed ({e:#}); \
-                 remove it by hand",
-                config_path.display()
-            ));
-        }
-    }
-    migration
 }
 
 fn create_parent(path: &Path) -> Result<()> {
@@ -503,8 +312,7 @@ mod tests {
     #[test]
     fn auth_file_roundtrips_profiles_and_unknown_keys() {
         let text = r#"{"version":2,"default_profile":"prod","profiles":{"prod":{"key":"op://v/i/f","future":1}},"later":true}"#;
-        let (auth, legacy) = AuthFile::parse(text).unwrap();
-        assert!(!legacy);
+        let auth = AuthFile::parse(text).unwrap();
         assert_eq!(auth.default_profile.as_deref(), Some("prod"));
         assert_eq!(auth.profiles["prod"].key.as_deref(), Some("op://v/i/f"));
         assert_eq!(auth.profiles["prod"].api_url, None);
@@ -516,28 +324,18 @@ mod tests {
     }
 
     #[test]
-    fn legacy_auth_file_becomes_a_default_profile() {
-        let (auth, legacy) =
-            AuthFile::parse(r#"{"api_key_ref":"op://v/i/f","other":"kept"}"#).unwrap();
-        assert!(legacy);
-        assert_eq!(
-            serde_json::to_value(&auth).unwrap(),
-            serde_json::json!({
-                "version": 2,
-                "default_profile": "default",
-                "profiles": { "default": { "key": "op://v/i/f" } },
-                "other": "kept",
-            })
-        );
-    }
-
-    #[test]
-    fn legacy_auth_file_without_a_reference_has_no_profiles() {
-        for text in ["{}", r#"{"api_key_ref":"  "}"#] {
-            let (auth, legacy) = AuthFile::parse(text).unwrap();
-            assert!(legacy, "{text}");
-            assert!(auth.profiles.is_empty(), "{text}");
-            assert_eq!(auth.default_profile, None, "{text}");
+    fn a_file_without_a_version_is_refused() {
+        for text in [
+            "{}",
+            r#"{"api_key_ref":"op://v/i/f","other":"kept"}"#,
+            r#"{"profiles":{"work":{"key":"keyring"}},"default_profile":"work"}"#,
+        ] {
+            let err = AuthFile::parse(text).unwrap_err();
+            assert!(
+                err.downcast_ref::<MissingAuthVersion>().is_some(),
+                "{text}: {err:#}"
+            );
+            assert!(err.to_string().contains("run `dn auth login`"), "{err}");
         }
     }
 
@@ -633,35 +431,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn a_versionless_file_with_profiles_is_refused_not_converted() {
-        for (text, key) in [
-            (
-                r#"{"api_key_ref":"op://v/i/f","profiles":{"work":{"key":"keyring"}}}"#,
-                "profiles",
-            ),
-            (
-                r#"{"profiles":{"work":{"key":"keyring"}},"default_profile":"work"}"#,
-                "profiles",
-            ),
-            (
-                r#"{"api_key_ref":"op://v/i/f","default_profile":"work"}"#,
-                "default_profile",
-            ),
-        ] {
-            let err = AuthFile::parse(text).unwrap_err();
-            assert!(
-                err.downcast_ref::<AmbiguousAuthLayout>().is_some(),
-                "{text}: {err:#}"
-            );
-            assert!(
-                err.to_string()
-                    .contains(&format!("has \"{key}\" but no \"version\"")),
-                "{err}"
-            );
-        }
-    }
-
     mod props {
         use proptest::prelude::*;
         use serde_json::{Value, json};
@@ -704,9 +473,9 @@ mod tests {
                 })
         }
 
-        /// An `auth.json` as it might be found on disk: either layout, an
-        /// unknown or missing version, any mix of the keys both layouts
-        /// use, bad profile names, and keys from a later `dn`.
+        /// An `auth.json` as it might be found on disk: an unknown or
+        /// missing version, the old layout's `api_key_ref`, bad profile
+        /// names, and keys from a later `dn`.
         fn auth_text() -> impl Strategy<Value = String> {
             let version =
                 prop::option::of(prop::sample::select(vec![json!(2), json!(3), json!("2")]));
@@ -740,14 +509,12 @@ mod tests {
 
         proptest! {
             /// Whatever is read, saving it and reading it back changes
-            /// nothing: no key written twice, no profile lost, and the
-            /// result is in the current layout.
+            /// nothing: no key written twice and no profile lost.
             #[test]
             fn saving_what_was_read_is_a_fixpoint(text in auth_text()) {
-                if let Ok((auth, _)) = AuthFile::parse(&text) {
+                if let Ok(auth) = AuthFile::parse(&text) {
                     let saved = pretty_text(&auth).unwrap();
-                    let (again, legacy) = AuthFile::parse(&saved).unwrap();
-                    prop_assert!(!legacy, "saved as the old layout: {}", saved);
+                    let again = AuthFile::parse(&saved).unwrap();
                     prop_assert_eq!(&again, &auth, "saved: {}", saved);
                     prop_assert_eq!(pretty_text(&again).unwrap(), saved);
                 }
@@ -757,11 +524,25 @@ mod tests {
             /// the default names one of them.
             #[test]
             fn a_read_file_has_a_real_default(text in auth_text()) {
-                if let Ok((auth, _)) = AuthFile::parse(&text) {
+                if let Ok(auth) = AuthFile::parse(&text) {
                     match &auth.default_profile {
                         Some(name) => prop_assert!(auth.profiles.contains_key(name)),
                         None => prop_assert!(auth.profiles.is_empty()),
                     }
+                }
+            }
+
+            /// Only the current version reads; a file without one is the
+            /// pre-profiles layout, which `auth login` may replace.
+            #[test]
+            fn only_version_2_reads(text in auth_text()) {
+                let version = serde_json::from_str::<Value>(&text).unwrap()["version"].clone();
+                match AuthFile::parse(&text) {
+                    Ok(_) => prop_assert_eq!(version, json!(2)),
+                    Err(e) if version.is_null() => {
+                        prop_assert!(e.downcast_ref::<MissingAuthVersion>().is_some(), "{:#}", e)
+                    }
+                    Err(_) => {}
                 }
             }
         }

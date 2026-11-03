@@ -2,8 +2,7 @@ mod auth_file;
 mod key_source;
 
 pub use auth_file::{
-    AuthFile, AuthLock, InvalidStoredProfileName, Migration, Profile, migrate_to_profiles,
-    remove_file_if_present,
+    AuthFile, AuthLock, InvalidStoredProfileName, Profile, remove_file_if_present,
 };
 use key_source::keyring_key;
 pub use key_source::{
@@ -22,12 +21,11 @@ const API_KEY_ENV: &str = "DEFINED_API_KEY";
 
 const PROFILE_ENV: &str = "DN_PROFILE";
 
-/// The `auth.json` layout this binary writes. Files without a `version` are
-/// the single-reference layout that came before profiles.
+/// The `auth.json` layout this binary reads and writes. Files without a
+/// `version` came from before profiles and are no longer read.
 const AUTH_VERSION: u64 = 2;
 
-/// The profile an old single-reference `auth.json` migrates into, and the one
-/// `auth login` creates when nothing else is named.
+/// The profile `auth login` creates when nothing else is named.
 pub const DEFAULT_PROFILE: &str = "default";
 
 /// A profile `key` meaning "the OS keyring holds it, under the profile name".
@@ -41,15 +39,9 @@ pub struct Config {
     pub profile: Option<String>,
 }
 
-/// `$DN_CONFIG_DIR/config.json`, else the platform config dir. Only read to
-/// migrate its `api_url` into a profile; see [`migrate_to_profiles`]. Same
-/// directory rules as [`auth_path`]:
+/// `$DN_CONFIG_DIR/auth.json`, else the platform config dir:
 /// `$XDG_CONFIG_HOME/dn` → `~/.config/dn` on unix (macOS included — CLI
 /// convention, not `~/Library`), `%APPDATA%\dn` on Windows.
-pub fn config_path() -> Result<PathBuf> {
-    Ok(config_dir()?.join("config.json"))
-}
-
 pub fn auth_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("auth.json"))
 }

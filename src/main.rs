@@ -43,10 +43,7 @@ use crate::commands::{
     networks::{networks_delete, networks_get, networks_list},
     routes::{routes_get, routes_list},
 };
-use crate::config::{
-    Config, Migration, migrate_to_profiles, normalize_op_ref, validate_op_ref,
-    validate_profile_name,
-};
+use crate::config::{Config, normalize_op_ref, validate_op_ref, validate_profile_name};
 use crate::error::{InvalidArgument, json_requested, report_error, report_usage_error};
 use crate::ids::validate_id;
 use crate::output::OutputMode;
@@ -65,17 +62,6 @@ fn main() -> ExitCode {
             report_error(&err, cli.output_mode());
             ExitCode::FAILURE
         }
-    }
-}
-
-/// Say once what [`migrate_to_profiles`] did, on stderr only so `--json`
-/// output never changes. A failed rewrite is a warning, never an error.
-fn report_migration(migration: Migration) {
-    if !migration.notes.is_empty() {
-        eprintln!("migrated credentials: {}", migration.notes.join("; "));
-    }
-    for warning in migration.warnings {
-        eprintln!("warning: {warning}");
     }
 }
 
@@ -198,7 +184,6 @@ fn preflight_delete(yes: bool, output: OutputMode) -> anyhow::Result<()> {
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
     let output = cli.output_mode();
-    report_migration(migrate_to_profiles());
     preflight(cli).map_err(InvalidArgument)?;
 
     match &cli.command {
