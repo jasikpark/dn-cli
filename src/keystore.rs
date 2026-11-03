@@ -147,9 +147,31 @@ mod test_store {
             }
         }
 
+        /// Write the whole file by rename, so a concurrent reader sees the
+        /// old entries or the new ones, never a half-written file.
         fn save(&self, entries: &Map<String, Value>) -> Result<()> {
-            fs::write(self.path()?, serde_json::to_string_pretty(entries)?)?;
+            let path = self.path()?;
+            let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+            fs::write(&tmp, serde_json::to_string_pretty(entries)?)?;
+            fs::rename(&tmp, path)?;
             Ok(())
+        }
+
+        /// Read, change and save the entries under an exclusive lock on a
+        /// sibling `.lock` file. A real keyring updates one entry at a time,
+        /// so parallel `dn` calls never lose each other's entries; this
+        /// stand-in rewrites the whole file and needs the lock to match.
+        fn update<T>(&self, change: impl FnOnce(&mut Map<String, Value>) -> T) -> Result<T> {
+            let lock = fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(self.path()?.with_extension("lock"))?;
+            lock.lock()?;
+            let mut entries = self.load()?;
+            let result = change(&mut entries);
+            self.save(&entries)?;
+            Ok(result)
         }
 
         pub fn get(&self, profile: &str) -> Result<String> {
@@ -161,16 +183,13 @@ mod test_store {
         }
 
         pub fn set(&self, profile: &str, key: &str) -> Result<()> {
-            let mut entries = self.load()?;
-            entries.insert(profile.to_string(), Value::String(key.to_string()));
-            self.save(&entries)
+            self.update(|entries| {
+                entries.insert(profile.to_string(), Value::String(key.to_string()));
+            })
         }
 
         pub fn delete(&self, profile: &str) -> Result<bool> {
-            let mut entries = self.load()?;
-            let removed = entries.remove(profile).is_some();
-            self.save(&entries)?;
-            Ok(removed)
+            self.update(|entries| entries.remove(profile).is_some())
         }
     }
 }

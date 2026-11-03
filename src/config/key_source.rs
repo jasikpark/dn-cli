@@ -54,7 +54,7 @@ impl KeySource {
 
 /// Where a stored profile's key comes from, without resolving it: the OS
 /// keyring, or its `op://` reference. `None` for a profile saved with only a
-/// URL (e.g. migrated from `config.json`), which needs `DEFINED_API_KEY`.
+/// URL, which needs `DEFINED_API_KEY`.
 pub fn profile_key_source(name: &str, profile: &Profile) -> Result<Option<KeySource>> {
     if profile.uses_keyring() {
         return Ok(Some(KeySource::Keyring(name.to_string())));

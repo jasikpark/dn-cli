@@ -24,7 +24,7 @@ pub fn auth_login(
 ) -> anyhow::Result<()> {
     // Verify against the URL the profile will be saved with, before taking
     // the lock: `op read` may wait on a 1Password prompt, and every other
-    // `dn` call that migrates or edits credentials would wait with it.
+    // `dn` call that edits credentials would wait with it.
     let (planned, _) = AuthFile::load_or_reset()?;
     let name = requested_profile(profile_flag)?
         .or_else(|| planned.default_profile.clone())
@@ -125,7 +125,7 @@ pub fn auth_login(
 }
 
 /// Record a login in auth.json under the lock: re-read it and apply only this
-/// login's change, so a concurrent login or migration isn't overwritten.
+/// login's change, so a concurrent login isn't overwritten.
 /// Returns the saved file, the previous default and its path.
 fn save_login(
     args: &AuthLoginArgs,
