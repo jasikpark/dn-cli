@@ -1,6 +1,32 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.4.7 (2026-11-03)
+
+### Features
+
+#### Wait for a host to check in with `dn host wait`
+
+`dn host wait <host id>` polls a host until it has checked in with Defined
+Networking, then shows it: the end of setting up a device with `dn host create`
+and `dnclient enroll`. `--timeout` (default 10m) and `--interval` (default 5s)
+take durations like `90s` or `1h`; `--since now` waits for a fresh check-in
+when re-enrolling a host that was seen before. A wait that runs out of time
+exits 1 with `ERR_TIMEOUT` under `--json`.
+
+### Fixes
+
+- stop list walks that loop between cursors (#172)
+
+#### Credentials from before profiles are no longer converted
+
+`dn` used to convert an `auth.json` without a `version` (the single-reference
+layout from before 0.2.10) into a `default` profile on every call, and move
+`config.json`'s `api_url` into it. Both conversions are gone. Such an
+`auth.json` now reads as invalid, with a message to run `dn auth login`, which
+replaces it; `config.json` is ignored. If you still have either file, log in
+again, passing `--api-url` if you used a non-production API.
+
 ## 0.4.6 (2026-11-02)
 
 ### Features
