@@ -455,42 +455,87 @@ mod tests {
 
     mod sanitize {
         use proptest::prelude::*;
+        use proptest::strategy::ValueTree;
+        use proptest::test_runner::TestRunner;
 
         use super::*;
 
+        /// Text the way an API response can deliver it: any character, with
+        /// C0/C1 controls, wide glyphs, a variation selector and a combining
+        /// mark weighted in so every run meets them. (`"\\PC*"` alone never
+        /// generates a control character: `\PC` means "not in category C".)
+        fn api_text() -> impl Strategy<Value = String> {
+            let ch = prop_oneof![
+                4 => any::<char>(),
+                2 => prop::char::range('\0', '\x1f'),
+                1 => prop::char::range('\x7f', '\u{9f}'),
+                1 => prop::sample::select(vec!['💻', '中', '\u{2601}', '\u{fe0f}', '\u{301}']),
+            ];
+            prop::collection::vec(ch, 0..24).prop_map(String::from_iter)
+        }
+
+        #[test]
+        fn the_generator_reaches_control_characters() {
+            let mut runner = TestRunner::deterministic();
+            let strategy = api_text();
+            let with_control = (0..1000)
+                .map(|_| strategy.new_tree(&mut runner).unwrap().current())
+                .filter(|s| s.chars().any(char::is_control))
+                .count();
+            assert!(
+                with_control > 500,
+                "only {with_control}/1000 had a control character"
+            );
+        }
+
         proptest! {
             #[test]
-            fn no_control_chars_survive(s in "\\PC*") {
+            fn no_control_chars_survive(s in api_text()) {
                 let out = sanitize_for_display(&s);
-                assert!(
+                prop_assert!(
                     !out.chars().any(|c| c.is_control()),
-                    "control character in output: {out:?}"
+                    "control character in output: {:?}", out
                 );
             }
 
             #[test]
             fn non_control_chars_are_preserved(s in "[^\\p{Cc}]*") {
-                assert_eq!(sanitize_for_display(&s), s);
+                prop_assert_eq!(sanitize_for_display(&s), s);
             }
 
             #[test]
-            fn length_is_preserved(s in "\\PC*") {
-                assert_eq!(
-                    sanitize_for_display(&s).chars().count(),
-                    s.chars().count(),
-                );
+            fn only_control_chars_change(s in api_text()) {
+                let out = sanitize_for_display(&s);
+                prop_assert_eq!(out.chars().count(), s.chars().count());
+                for (before, after) in s.chars().zip(out.chars()) {
+                    let expected = if before.is_control() { ' ' } else { before };
+                    prop_assert_eq!(after, expected);
+                }
             }
 
             #[test]
             fn table_rows_stay_aligned(
-                cells in prop::collection::vec("[\\x00-\\x1f\\x20-\\x7e]*", 1..5),
+                (headers, rows) in (1usize..5).prop_flat_map(|cols| (
+                    prop::collection::vec("[A-Z ]{1,8}", cols),
+                    prop::collection::vec(prop::collection::vec(api_text(), cols), 1..6),
+                )),
             ) {
-                let rows = vec![cells];
-                let headers: Vec<&str> = (0..rows[0].len()).map(|_| "H").collect();
-                let out = render_table(&headers, &rows);
-                assert!(
-                    !out.lines().any(|l| l.contains('\n') || l.contains('\r')),
-                    "embedded newline broke table row: {out:?}"
+                let header_refs: Vec<&str> = headers.iter().map(String::as_str).collect();
+                let out = render_table(&header_refs, &rows);
+                let lines: Vec<&str> = out.lines().collect();
+                prop_assert_eq!(lines.len(), rows.len() + 1, "a cell broke a row: {:?}", out);
+
+                // The last column starts at the same display column on every line.
+                let last_cells = std::iter::once(headers.last().unwrap().clone())
+                    .chain(rows.iter().map(|r| sanitize_for_display(r.last().unwrap())));
+                let starts: Vec<usize> = lines
+                    .iter()
+                    .zip(last_cells)
+                    .map(|(line, last)| display_width(line) - display_width(&last))
+                    .collect();
+                prop_assert!(
+                    starts.windows(2).all(|w| w[0] == w[1]),
+                    "last column starts at {:?} in {:?}", starts, out
                 );
             }
         }
