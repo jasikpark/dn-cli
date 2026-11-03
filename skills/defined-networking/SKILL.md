@@ -232,6 +232,10 @@ or one of its `--tags` allows it (`dn tag get`). What the new host can reach
 depends on the other hosts' rules — run the reachability check under
 `role get` rather than assuming either way.
 
+Once the user says they've run the command, `dn host wait <host id> --json`
+confirms the device came up (see below) instead of asking them whether it
+worked.
+
 ### Edit a host — `dn host edit`
 
 ```bash
@@ -335,6 +339,33 @@ through an endpoint OIDC provider (`ERR_NO_ENROLLMENT_CODE_FOR_ENDPOINT_HOST`).
 On `ERR_HOST_BLOCKED`, don't unblock it yourself: ask the user why it was
 blocked, and if the device was compromised, replace the host as described
 under `host block`.
+
+### Wait for a host to check in — `dn host wait`
+
+```bash
+dn host wait <HOST_ID> --json
+dn host wait <HOST_ID> --since now --timeout 15m --json   # after host enroll-code
+```
+
+Polls the host until it has checked in with Defined Networking — that is,
+until `metadata.lastSeenAt` is set — then returns it as `host get` does
+(`{ "data": host, "metadata": {} }`, exit 0). Use it after `host create` or
+`host enroll-code`, once the user has run `dnclient enroll` on the device, to
+confirm the device came up.
+
+| flag | effect |
+|------|--------|
+| `--timeout <DURATION>` | give up after this long (default `10m`); `90s`, `10m`, `1h`, … |
+| `--interval <DURATION>` | how often to ask the API (default `5s`, at least `1s`) |
+| `--since <TIMESTAMP\|now>` | only count a check-in at or after this time. A host that was ever seen counts at once without it, so pass `--since now` when re-enrolling an existing host |
+
+If the time runs out first, it exits 1 with `ERR_TIMEOUT` (`status: null`):
+the device hasn't reached Defined Networking yet. Tell the user, and suggest
+they check that `dnclient enroll` finished and the device is online, rather
+than retrying in a loop. Any other error ends the wait at once: a 404 means the
+host id is wrong or the host was deleted. A dropped connection or a 5xx after
+the first check is retried, with a note on stderr. Key permission:
+`hosts:read`.
 
 ### List routes — `dn route list`
 
@@ -738,7 +769,7 @@ One id per call.
 
 | operation | gate |
 |-----------|------|
-| `host list`, `host get`, `host search`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get`, `route list`, `route get`, `join-key list`, `join-key get`, `audit-log list` | free — reads change nothing |
+| `host list`, `host get`, `host search`, `host wait`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get`, `route list`, `route get`, `join-key list`, `join-key get`, `audit-log list` | free — reads change nothing |
 | `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
 | `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
 | `host block` | a reversible write: the host is cut off from every other host until unblocked. Confirm the host by name with the user first, and say so if it is a lighthouse or relay (the whole network is affected). |

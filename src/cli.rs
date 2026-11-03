@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use clap::{Args, Parser, Subcommand};
 
 use crate::api::MAX_PAGE_SIZE;
@@ -543,6 +545,50 @@ pub enum HostCommand {
     /// Issue a new enrollment code for an existing host, e.g. to re-enroll
     /// it after a reinstall. Prints the code to give to `dnclient enroll -code`.
     EnrollCode(HostEnrollCodeArgs),
+    /// Wait for a host to check in with Defined Networking, e.g. after
+    /// running `dnclient enroll` on a new device. Exits 0 once it has, or
+    /// fails with ERR_TIMEOUT when --timeout runs out first.
+    Wait(HostWaitArgs),
+}
+
+#[derive(Args)]
+pub struct HostWaitArgs {
+    /// Host id (host-…). Find ids with `dn host list` or `dn host search`.
+    pub host_id: String,
+    /// How long to wait before giving up, e.g. 90s, 10m, 1h
+    #[arg(long, value_name = "DURATION", default_value = "10m", value_parser = wait_duration)]
+    pub timeout: Duration,
+    /// How often to ask the API, e.g. 5s or 30s. At least 1s.
+    #[arg(long, value_name = "DURATION", default_value = "5s", value_parser = poll_interval)]
+    pub interval: Duration,
+    /// Only count a check-in after this time: an RFC 3339 timestamp, or `now`.
+    /// Without it, any check-in counts, so a host that was ever seen returns
+    /// at once; pass `--since now` when re-enrolling one.
+    #[arg(long, value_name = "TIMESTAMP|now", value_parser = non_blank)]
+    pub since: Option<String>,
+}
+
+/// A positive duration in jiff's friendly form (`90s`, `10m`, `1h 30m`) or
+/// ISO 8601 (`PT10M`). Days and longer are refused: a wait is measured on
+/// the clock, not the calendar.
+fn wait_duration(s: &str) -> Result<Duration, String> {
+    let d: jiff::SignedDuration = s
+        .trim()
+        .parse()
+        .map_err(|_| "expected a duration such as 90s, 10m, or 1h".to_string())?;
+    if d <= jiff::SignedDuration::ZERO {
+        return Err("must be longer than 0 seconds".to_string());
+    }
+    Duration::try_from(d).map_err(|e| e.to_string())
+}
+
+/// A [`wait_duration`] of at least a second, so a wait can't hammer the API.
+fn poll_interval(s: &str) -> Result<Duration, String> {
+    let d = wait_duration(s)?;
+    if d < Duration::from_secs(1) {
+        return Err("must be at least 1s".to_string());
+    }
+    Ok(d)
 }
 
 #[derive(Args)]

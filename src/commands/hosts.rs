@@ -3,6 +3,7 @@ mod delete;
 mod edit;
 mod get;
 mod lifecycle;
+mod wait;
 
 pub use create::{hosts_create, validate_create_preflight};
 pub(crate) use create::{network_ipv4_cidr, pick_network};
@@ -11,6 +12,7 @@ pub use edit::{hosts_edit, validate_edit_preflight};
 pub use get::hosts_get;
 pub(crate) use get::role_name;
 pub use lifecycle::{hosts_block, hosts_enroll_code, hosts_unblock};
+pub use wait::{hosts_wait, validate_wait_preflight};
 
 use anyhow::{anyhow, bail};
 use serde_json::Value;

@@ -1,0 +1,11 @@
+---
+source: tests/human_output.rs
+description: Waiting on a host that has already checked in returns at once and shows its client.
+---
+$ dn host wait host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI
+"Build Server" (host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI) checked in.
+Last seen:     2026-10-09T18:27:45Z
+Client:        dnclient-desktop 0.9.9 on windows
+IP addresses:  100.100.0.12, fd00:c0:c0:2966:d3bf:a55d:49a0:6f18
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

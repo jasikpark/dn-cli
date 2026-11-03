@@ -12,6 +12,8 @@ const ERR_INVALID_ARGUMENT: &str = "ERR_INVALID_ARGUMENT";
 
 const ERR_LOCAL: &str = "ERR_LOCAL";
 
+const ERR_TIMEOUT: &str = "ERR_TIMEOUT";
+
 /// A client-side validation failure, tagged so `--json` reports it as
 /// [`ERR_INVALID_ARGUMENT`] rather than the catch-all [`ERR_LOCAL`].
 #[derive(Debug)]
@@ -24,6 +26,20 @@ impl std::fmt::Display for InvalidArgument {
 }
 
 impl std::error::Error for InvalidArgument {}
+
+/// A wait that ran out of time before what it waited for happened, tagged so
+/// `--json` reports it as [`ERR_TIMEOUT`] and a caller can tell "not yet"
+/// from a failure.
+#[derive(Debug)]
+pub struct TimedOut(pub String);
+
+impl std::fmt::Display for TimedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for TimedOut {}
 
 /// An error whose `--json` envelope the command already printed inside its own
 /// output, so [`report_error`] only adds the stderr hint.
@@ -92,6 +108,8 @@ pub fn error_envelope(err: &anyhow::Error) -> Value {
     }
     let code = if err.downcast_ref::<InvalidArgument>().is_some() {
         ERR_INVALID_ARGUMENT
+    } else if err.downcast_ref::<TimedOut>().is_some() {
+        ERR_TIMEOUT
     } else {
         ERR_LOCAL
     };
@@ -141,6 +159,17 @@ fn usage_message(err: &clap::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_timeout_has_its_own_local_code() {
+        let err = anyhow::Error::new(TimedOut("gave up".to_string()));
+        let envelope = error_envelope(&err);
+        assert_eq!(envelope["status"], Value::Null);
+        assert_eq!(envelope["errors"][0]["code"], ERR_TIMEOUT);
+        assert_eq!(envelope["errors"][0]["message"], "gave up");
+        let other = error_envelope(&anyhow::anyhow!("boom"));
+        assert_eq!(other["errors"][0]["code"], ERR_LOCAL);
+    }
 
     #[test]
     fn json_requested_scans_flags_before_double_dash() {

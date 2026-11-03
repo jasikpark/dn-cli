@@ -140,7 +140,9 @@ Neither installs `dn` itself; see [Install](#install). The skill names the
 
 For local development, `claude --plugin-dir /path/to/dn-cli` loads the checkout
 for one session. The longer-term goal: *"I have this device, set it up on my
-network"* — conversational device enrollment.
+network"* — conversational device enrollment. `dn host create` issues the
+enrollment code, and `dn host wait` tells the agent when the device has
+checked in.
 
 ## Prior art
 
