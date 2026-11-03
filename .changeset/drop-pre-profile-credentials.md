@@ -1,5 +1,5 @@
 ---
-default: major
+default: patch
 ---
 
 # Credentials from before profiles are no longer converted
