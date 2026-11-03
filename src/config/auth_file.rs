@@ -91,6 +91,27 @@ impl fmt::Display for InvalidStoredProfileName {
 
 impl std::error::Error for InvalidStoredProfileName {}
 
+/// An `auth.json` with no `version` that still has a key the profiles layout
+/// writes (`profiles`, `default_profile`): most likely a current file whose
+/// `version` was removed by hand. Converting it as the old layout would write
+/// those keys twice and could drop a profile, so it is refused, like a file
+/// from a newer `dn`, rather than guessed at or replaced.
+#[derive(Debug)]
+pub struct AmbiguousAuthLayout(&'static str);
+
+impl fmt::Display for AmbiguousAuthLayout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "auth.json has \"{}\" but no \"version\"; add \"version\": {AUTH_VERSION} if it \
+             lists profiles, or run `dn auth logout --all` to discard it",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for AmbiguousAuthLayout {}
+
 /// An exclusive advisory lock on the credentials, held while a command reads,
 /// changes and writes `auth.json` (and, when migrating, `config.json`), so
 /// concurrent `dn` processes can't lose each other's changes. It lives in a
@@ -151,10 +172,18 @@ impl AuthFile {
     fn parse(text: &str) -> Result<(Self, bool)> {
         let value: serde_json::Value = serde_json::from_str(text)?;
         let (mut auth, legacy) = match value.get("version") {
-            None => (
-                serde_json::from_value::<LegacyAuthFile>(value)?.into(),
-                true,
-            ),
+            None => {
+                if let Some(key) = ["profiles", "default_profile"]
+                    .into_iter()
+                    .find(|k| value.get(k).is_some())
+                {
+                    return Err(AmbiguousAuthLayout(key).into());
+                }
+                (
+                    serde_json::from_value::<LegacyAuthFile>(value)?.into(),
+                    true,
+                )
+            }
             Some(version) if version.as_u64() == Some(AUTH_VERSION) => {
                 (serde_json::from_value::<AuthFile>(value)?, false)
             }
@@ -185,14 +214,16 @@ impl AuthFile {
 
     /// Like [`AuthFile::load`], but an unparsable file comes back as no
     /// profiles plus the error, for `auth login` to replace. A file from a
-    /// newer `dn`, or one with a hand-edited bad name, is still an error:
+    /// newer `dn`, one with a hand-edited bad name, or one missing its
+    /// `version` beside profiles is still an error:
     /// replacing it would lose its profiles and orphan their keyring entries.
     pub fn load_or_reset() -> Result<(Self, Option<anyhow::Error>)> {
         match Self::load() {
             Ok(cfg) => Ok((cfg, None)),
             Err(e)
                 if e.downcast_ref::<UnsupportedAuthVersion>().is_some()
-                    || e.downcast_ref::<InvalidStoredProfileName>().is_some() =>
+                    || e.downcast_ref::<InvalidStoredProfileName>().is_some()
+                    || e.downcast_ref::<AmbiguousAuthLayout>().is_some() =>
             {
                 Err(e)
             }
@@ -600,5 +631,139 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&real).unwrap(), "new\n");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_versionless_file_with_profiles_is_refused_not_converted() {
+        for (text, key) in [
+            (
+                r#"{"api_key_ref":"op://v/i/f","profiles":{"work":{"key":"keyring"}}}"#,
+                "profiles",
+            ),
+            (
+                r#"{"profiles":{"work":{"key":"keyring"}},"default_profile":"work"}"#,
+                "profiles",
+            ),
+            (
+                r#"{"api_key_ref":"op://v/i/f","default_profile":"work"}"#,
+                "default_profile",
+            ),
+        ] {
+            let err = AuthFile::parse(text).unwrap_err();
+            assert!(
+                err.downcast_ref::<AmbiguousAuthLayout>().is_some(),
+                "{text}: {err:#}"
+            );
+            assert!(
+                err.to_string()
+                    .contains(&format!("has \"{key}\" but no \"version\"")),
+                "{err}"
+            );
+        }
+    }
+
+    mod props {
+        use proptest::prelude::*;
+        use serde_json::{Value, json};
+
+        use super::*;
+
+        fn profile_name() -> impl Strategy<Value = String> {
+            prop_oneof![
+                4 => "[a-z0-9._-]{1,12}",
+                1 => Just("Work".to_string()),
+                1 => Just(String::new()),
+            ]
+        }
+
+        fn profile() -> impl Strategy<Value = Value> {
+            (
+                prop::option::of(prop::sample::select(vec![
+                    "https://api.defined.net",
+                    " https://x.test/ ",
+                ])),
+                prop::option::of(prop::sample::select(vec!["keyring", "op://v/i/f", " "])),
+                prop::option::of(prop::sample::select(vec![
+                    json!(1),
+                    json!("kept"),
+                    json!(null),
+                ])),
+            )
+                .prop_map(|(url, key, extra)| {
+                    let mut p = serde_json::Map::new();
+                    if let Some(url) = url {
+                        p.insert("api_url".into(), json!(url));
+                    }
+                    if let Some(key) = key {
+                        p.insert("key".into(), json!(key));
+                    }
+                    if let Some(extra) = extra {
+                        p.insert("future".into(), extra);
+                    }
+                    Value::Object(p)
+                })
+        }
+
+        /// An `auth.json` as it might be found on disk: either layout, an
+        /// unknown or missing version, any mix of the keys both layouts
+        /// use, bad profile names, and keys from a later `dn`.
+        fn auth_text() -> impl Strategy<Value = String> {
+            let version =
+                prop::option::of(prop::sample::select(vec![json!(2), json!(3), json!("2")]));
+            let default = prop::option::of(profile_name());
+            let profiles =
+                prop::option::of(prop::collection::btree_map(profile_name(), profile(), 0..4));
+            let api_key_ref = prop::option::of(prop::sample::select(vec!["op://v/i/f", "  "]));
+            let later = prop::option::of(prop::sample::select(vec![json!(true), json!({"x": 1})]));
+            (version, default, profiles, api_key_ref, later).prop_map(
+                |(version, default, profiles, api_key_ref, later)| {
+                    let mut root = serde_json::Map::new();
+                    if let Some(v) = version {
+                        root.insert("version".into(), v);
+                    }
+                    if let Some(d) = default {
+                        root.insert("default_profile".into(), json!(d));
+                    }
+                    if let Some(p) = profiles {
+                        root.insert("profiles".into(), json!(p));
+                    }
+                    if let Some(r) = api_key_ref {
+                        root.insert("api_key_ref".into(), json!(r));
+                    }
+                    if let Some(l) = later {
+                        root.insert("later".into(), l);
+                    }
+                    Value::Object(root).to_string()
+                },
+            )
+        }
+
+        proptest! {
+            /// Whatever is read, saving it and reading it back changes
+            /// nothing: no key written twice, no profile lost, and the
+            /// result is in the current layout.
+            #[test]
+            fn saving_what_was_read_is_a_fixpoint(text in auth_text()) {
+                if let Ok((auth, _)) = AuthFile::parse(&text) {
+                    let saved = pretty_text(&auth).unwrap();
+                    let (again, legacy) = AuthFile::parse(&saved).unwrap();
+                    prop_assert!(!legacy, "saved as the old layout: {}", saved);
+                    prop_assert_eq!(&again, &auth, "saved: {}", saved);
+                    prop_assert_eq!(pretty_text(&again).unwrap(), saved);
+                }
+            }
+
+            /// A file that reads has a default whenever it has profiles, and
+            /// the default names one of them.
+            #[test]
+            fn a_read_file_has_a_real_default(text in auth_text()) {
+                if let Ok((auth, _)) = AuthFile::parse(&text) {
+                    match &auth.default_profile {
+                        Some(name) => prop_assert!(auth.profiles.contains_key(name)),
+                        None => prop_assert!(auth.profiles.is_empty()),
+                    }
+                }
+            }
+        }
     }
 }

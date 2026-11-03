@@ -645,3 +645,49 @@ fn a_failed_save_restores_the_key_an_existing_profile_uses() {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(env.keyring_entries(), json!({ "default": "old-key" }));
 }
+
+#[test]
+fn parallel_logins_to_different_profiles_all_land() {
+    // Each login writes the keyring before taking the auth.json lock, so the
+    // logins overlap there; auth.json itself is read, changed and written
+    // under the lock. Neither may lose another login's profile or key.
+    let env = Arc::new(Env::new());
+    let names: Vec<String> = (0..8).map(|i| format!("p{i}")).collect();
+    let logins: Vec<_> = names
+        .iter()
+        .map(|name| {
+            let env = Arc::clone(&env);
+            let name = name.clone();
+            thread::spawn(move || {
+                let key = format!("key-{name}");
+                env.run(
+                    &[
+                        "auth",
+                        "login",
+                        "--profile",
+                        &name,
+                        "--key-stdin",
+                        "--no-verify",
+                        "--json",
+                    ],
+                    &key,
+                    &[],
+                )
+            })
+        })
+        .collect();
+    for (name, login) in names.iter().zip(logins) {
+        let output = login.join().unwrap();
+        assert!(output.status.success(), "{name}: {output:?}");
+    }
+
+    let auth = env.auth_json();
+    let keyring = env.keyring_entries();
+    for name in &names {
+        assert!(
+            auth["profiles"].get(name).is_some(),
+            "{name} missing from {auth}"
+        );
+        assert_eq!(keyring[name], format!("key-{name}"), "{name} in {keyring}");
+    }
+}
