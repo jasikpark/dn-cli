@@ -336,35 +336,39 @@ fn is_timeout(e: &io::Error) -> bool {
         )
 }
 
-/// Print what one line of the response carries. The docs promise NDJSON, a
-/// log entry per line, but their example is one `{"data": "<entries>"}`
-/// document, so both are taken.
+/// Print what one line of the response carries. The API sends a line per log
+/// entry, each under `data`, and an empty `data` as the stream opens and
+/// closes. The spec's example is instead one document with every entry
+/// folded into a `data` string, and its prose promises bare entries, so all
+/// three are taken.
 fn write_line(line: &str, out: &mut impl Write, output: OutputMode) -> io::Result<()> {
     if line.trim().is_empty() {
         return Ok(());
     }
     match serde_json::from_str::<Value>(line) {
-        Ok(Value::Object(o)) => match folded_entries(&o) {
-            Some(data) => {
-                for inner in data.lines() {
+        Ok(Value::Object(o)) => match wrapped(&o) {
+            Some(Value::Object(entry)) if entry.is_empty() => {}
+            Some(Value::Object(entry)) => write_entry(entry, out, output)?,
+            Some(Value::String(folded)) => {
+                for inner in folded.lines() {
                     write_folded(inner, out, output)?;
                 }
             }
-            None => write_entry(&o, out, output)?,
+            _ => write_entry(&o, out, output)?,
         },
         _ => write_raw(line.trim_end_matches(['\r', '\n']), out, output)?,
     }
     out.flush()
 }
 
-/// The `data` string of a document that folds the entries into one answer.
+/// The `data` of a line that wraps its entries instead of being one.
 /// dnclient's own entries always have a `msg` and a `level`; the API's
 /// envelope has neither, whatever else (`metadata`) it carries.
-fn folded_entries(o: &Map<String, Value>) -> Option<&str> {
+fn wrapped(o: &Map<String, Value>) -> Option<&Value> {
     if o.contains_key("msg") || o.contains_key("level") {
         return None;
     }
-    o.get("data")?.as_str()
+    o.get("data")
 }
 
 /// Print the entries on one line of a folded `data` string. The docs' example
@@ -555,6 +559,23 @@ mod tests {
             streamed(format!("{wrapped}\n").as_bytes(), OutputMode::Json),
             bare
         );
+    }
+
+    /// The API as it runs: an entry per line under `data`, and an empty
+    /// `data` when the stream opens and when it closes.
+    #[test]
+    fn an_entry_under_data_on_each_line_is_the_entry() {
+        let live = format!(
+            "{{\"data\":{{}}}}\n{{\"data\":{STARTED}}}\n{{\"data\":{HANDSHAKE}}}\n{{\"data\":{{}}}}\n"
+        );
+        let bare = format!("{STARTED}\n{HANDSHAKE}\n");
+        for mode in [OutputMode::Json, OutputMode::Human] {
+            assert_eq!(
+                streamed(live.as_bytes(), mode),
+                streamed(bare.as_bytes(), mode)
+            );
+        }
+        assert_eq!(streamed(live.as_bytes(), OutputMode::Json), bare);
     }
 
     #[test]

@@ -399,7 +399,9 @@ Use these when the user asks why two hosts can't reach each other:
 - `logs` streams the dnclient's logs for `--duration` (default `1m`, at most
   `10m`, whole seconds) at `--level` (`panic`, `fatal`, `error`, `warning`,
   `info` (default) or `debug`). It blocks for the whole duration, so pick a
-  short one and tell the user what you're waiting for. Under `--json` it prints
+  short one and tell the user what you're waiting for. Each session makes the
+  host reload its Nebula config as it starts (the first lines are that
+  reload), so don't run it in a loop. Under `--json` it prints
   **NDJSON**, one log object per line as each arrives, not one document: parse
   it line by line. Handshake lines (`msg` `Handshake message sent` /
   `received`, with `vpnIp`) show whether the host is reaching a peer. A line

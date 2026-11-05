@@ -458,7 +458,12 @@ const HANDSHAKE: &str = r#"{"handshake":{"stage":1,"style":"ix_psk0"},"level":"i
 fn logs_print_each_line_as_it_arrives() {
     use std::sync::atomic::Ordering;
     let host = mock_id("host", "laptop");
-    let (url, seen, go, sent_rest) = serve_stream(format!("{STARTED}\n"), format!("{HANDSHAKE}\n"));
+    // The API's own framing: each entry under `data`, and an empty `data`
+    // as the stream opens and closes.
+    let (url, seen, go, sent_rest) = serve_stream(
+        format!("{{\"data\":{{}}}}\n{{\"data\":{STARTED}}}\n"),
+        format!("{{\"data\":{HANDSHAKE}}}\n{{\"data\":{{}}}}\n"),
+    );
     let dir = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_dn"))
         .args([
