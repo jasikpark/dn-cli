@@ -4,7 +4,9 @@
 //! Defined's database, so every string is sanitized before it reaches a
 //! terminal.
 
+use std::io::{BufRead, BufReader, Write};
 use std::net::IpAddr;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -14,6 +16,10 @@ use crate::output::{
     OutputMode, joined_field, render_details, render_table, sanitize_for_display, str_field,
 };
 
+/// Extra time the stream gets past `--duration`, for the request to reach
+/// the host and the last lines to come back.
+const STREAM_SLACK: Duration = Duration::from_secs(30);
+
 impl HostDebugCommand {
     /// The host whose dnclient runs the command.
     pub fn host_id(&self) -> &str {
@@ -21,6 +27,7 @@ impl HostDebugCommand {
             Self::Cert(a) | Self::Tunnel(a) | Self::CreateTunnel(a) => &a.host_id,
             Self::Lighthouse(a) => &a.host_id,
             Self::Stack(a) => &a.host_id,
+            Self::Logs(a) => &a.host_id,
         }
     }
 }
@@ -35,6 +42,13 @@ pub(crate) fn command_body(command: &HostDebugCommand) -> Value {
         HostDebugCommand::CreateTunnel(a) => ("CreateTunnel", target(&a.target)),
         HostDebugCommand::Lighthouse(a) => ("QueryLighthouse", target(&a.target)),
         HostDebugCommand::Stack(_) => ("DebugStack", json!({})),
+        HostDebugCommand::Logs(a) => (
+            "StreamLogs",
+            json!({
+                "durationSeconds": a.duration.as_secs(),
+                "level": a.level.as_api(),
+            }),
+        ),
     };
     json!({ "command": name, "args": args })
 }
@@ -46,6 +60,11 @@ pub fn hosts_debug(
 ) -> anyhow::Result<()> {
     let host = command.host_id();
     let body = command_body(command);
+    if let HostDebugCommand::Logs(args) = command {
+        let res = client.host_command_stream(host, &body, args.duration + STREAM_SLACK)?;
+        let reader = BufReader::new(res.into_body().into_reader());
+        return stream_logs(reader, &mut std::io::stdout().lock(), output);
+    }
     let res = client.host_command(host, &body)?;
     output.emit(&res, |res| {
         let data = res.get("data").unwrap_or(&Value::Null);
@@ -70,6 +89,7 @@ fn render(command: &HostDebugCommand, data: &Value) -> String {
             )
         }),
         HostDebugCommand::Stack(_) => data.as_str().map(sanitize_lines),
+        HostDebugCommand::Logs(_) => None,
     };
     rendered.unwrap_or_else(|| {
         let mut s = serde_json::to_string_pretty(data).unwrap_or_default();
@@ -186,10 +206,75 @@ fn sanitize_lines(s: &str) -> String {
     out
 }
 
+/// Copy StreamLogs to `out` as it arrives. The docs promise NDJSON, but their
+/// example is one `{"data": "<ndjson>"}` document, so both are taken: a line
+/// that is a lone `data` string is opened up into the lines it carries.
+pub(crate) fn stream_logs(
+    reader: impl BufRead,
+    out: &mut impl Write,
+    output: OutputMode,
+) -> anyhow::Result<()> {
+    for line in reader.lines() {
+        let line = line?;
+        match serde_json::from_str::<Value>(&line) {
+            Ok(Value::Object(o)) if o.len() == 1 && o.get("data").is_some_and(Value::is_string) => {
+                for inner in o["data"].as_str().unwrap_or_default().lines() {
+                    emit_log_line(inner, out, output)?;
+                }
+            }
+            _ => emit_log_line(&line, out, output)?,
+        }
+        out.flush()?;
+    }
+    Ok(())
+}
+
+fn emit_log_line(line: &str, out: &mut impl Write, output: OutputMode) -> anyhow::Result<()> {
+    if line.trim().is_empty() {
+        return Ok(());
+    }
+    let entry = serde_json::from_str::<Value>(line)
+        .ok()
+        .filter(Value::is_object);
+    match (output, entry) {
+        // Re-serialize rather than echo, so `--json` stays one object per
+        // line even if the host sent something odd.
+        (OutputMode::Json, Some(entry)) => writeln!(out, "{}", serde_json::to_string(&entry)?)?,
+        (OutputMode::Json, None) => writeln!(out, "{}", json!({ "raw": line }))?,
+        (OutputMode::Human, Some(entry)) => writeln!(out, "{}", render_log(&entry))?,
+        (OutputMode::Human, None) => writeln!(out, "{}", sanitize_for_display(line))?,
+    }
+    Ok(())
+}
+
+/// `time level msg key=value…`, the way logfmt reads.
+fn render_log(entry: &Value) -> String {
+    let mut parts = vec![
+        str_field(entry, "time").to_string(),
+        str_field(entry, "level").to_uppercase(),
+        str_field(entry, "msg").to_string(),
+    ];
+    if let Some(o) = entry.as_object() {
+        for (k, v) in o {
+            if matches!(k.as_str(), "time" | "level" | "msg") {
+                continue;
+            }
+            let v = match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            parts.push(format!("{k}={v}"));
+        }
+    }
+    sanitize_for_display(&parts.join(" "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{HostDebugLighthouseArgs, HostDebugTargetArgs, HostGetArgs};
+    use crate::cli::{
+        HostDebugLighthouseArgs, HostDebugLogsArgs, HostDebugTargetArgs, HostGetArgs, LogLevel,
+    };
     use proptest::prelude::*;
 
     const HOST: &str = "host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI";
@@ -229,11 +314,33 @@ mod tests {
                 }),
                 json!({"command": "DebugStack", "args": {}}),
             ),
+            (
+                HostDebugCommand::Logs(HostDebugLogsArgs {
+                    host_id: HOST.into(),
+                    duration: Duration::from_secs(300),
+                    level: LogLevel::Warning,
+                }),
+                json!({"command": "StreamLogs", "args": {"durationSeconds": 300, "level": "warning"}}),
+            ),
         ];
         for (command, want) in cases {
             assert_eq!(command_body(&command), want);
             assert_eq!(command.host_id(), HOST);
         }
+    }
+
+    #[test]
+    fn wrapped_and_bare_ndjson_print_the_same_lines() {
+        let a = r#"{"level":"info","msg":"started","time":"t1"}"#;
+        let b = r#"{"level":"info","msg":"Handshake message sent","time":"t2","vpnIp":"10.0.0.2"}"#;
+        let bare = format!("{a}\n{b}\n");
+        let wrapped = format!("{}\n", json!({ "data": format!("{a}\n{b}") }));
+        let mut x = Vec::new();
+        let mut y = Vec::new();
+        stream_logs(bare.as_bytes(), &mut x, OutputMode::Json).unwrap();
+        stream_logs(wrapped.as_bytes(), &mut y, OutputMode::Json).unwrap();
+        assert_eq!(x, y);
+        assert_eq!(String::from_utf8(x).unwrap().lines().count(), 2);
     }
 
     #[test]
@@ -254,6 +361,40 @@ mod tests {
     }
 
     proptest! {
+        /// Whatever a host sends, a log line in human mode is one terminal
+        /// line with no control characters, and `--json` is one object.
+        #[test]
+        fn any_log_line_stays_one_safe_line(line in "\\PC*|[\\x00-\\x1f\\x7f\\u{80}-\\u{9f}a-z{}\":,]*") {
+            let mut human = Vec::new();
+            emit_log_line(&line, &mut human, OutputMode::Human).unwrap();
+            let human = String::from_utf8(human).unwrap();
+            prop_assert!(human.is_empty() || human.ends_with('\n'));
+            prop_assert!(human.trim_end_matches('\n').chars().all(|c| !c.is_control()));
+
+            let mut json = Vec::new();
+            emit_log_line(&line, &mut json, OutputMode::Json).unwrap();
+            for l in String::from_utf8(json).unwrap().lines() {
+                prop_assert!(serde_json::from_str::<Value>(l).unwrap().is_object());
+            }
+        }
+
+        /// However the host's lines arrive (bare NDJSON or folded into one
+        /// `{"data": "..."}` document), the same lines come out.
+        #[test]
+        fn wrapped_and_bare_agree(entries in prop::collection::vec(
+            prop::collection::btree_map("[a-z]{1,8}", "\\PC{0,12}", 0..4), 0..6)
+        ) {
+            let lines: Vec<String> = entries.iter().map(|e| serde_json::to_string(e).unwrap()).collect();
+            let bare = lines.iter().map(|l| format!("{l}\n")).collect::<String>();
+            let wrapped = format!("{}\n", json!({ "data": lines.join("\n") }));
+            for mode in [OutputMode::Json, OutputMode::Human] {
+                let (mut x, mut y) = (Vec::new(), Vec::new());
+                stream_logs(bare.as_bytes(), &mut x, mode).unwrap();
+                stream_logs(wrapped.as_bytes(), &mut y, mode).unwrap();
+                prop_assert_eq!(&x, &y);
+            }
+        }
+
         /// The target goes on the wire as the address clap parsed, in its
         /// canonical spelling, so the API never sees `010.0.0.1` or `::FFFF:…`.
         #[test]

@@ -271,3 +271,147 @@ fn bad_arguments_never_reach_the_api() {
     }
     assert!(requests(&seen).is_empty());
 }
+
+/// What [`serve_stream`] hands back: the url, the request log, the signal
+/// that lets the rest of the body go, and whether it has gone yet.
+type StreamMock = (
+    String,
+    Arc<Mutex<Vec<Request>>>,
+    std::sync::mpsc::Sender<()>,
+    Arc<std::sync::atomic::AtomicBool>,
+);
+
+/// Serve one StreamLogs response with no length, so the body runs until the
+/// connection closes: `first`, then (once `go` fires, or after 10s) `rest`.
+fn serve_stream(first: &'static str, rest: &'static str) -> StreamMock {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    let sent_rest = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&sent_rest);
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        let mut content_length = 0;
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap() > 2 {
+            if let Some((name, value)) = line.split_once(':')
+                && name.eq_ignore_ascii_case("content-length")
+            {
+                content_length = value.trim().parse().unwrap();
+            }
+            line.clear();
+        }
+        let mut raw = vec![0; content_length];
+        reader.read_exact(&mut raw).unwrap();
+        let mut parts = request_line.split(' ');
+        log.lock().unwrap().push((
+            parts.next().unwrap_or_default().to_string(),
+            parts.next().unwrap_or_default().to_string(),
+            serde_json::from_slice(&raw).unwrap(),
+        ));
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n{first}"
+        )
+        .unwrap();
+        stream.flush().unwrap();
+        let _ = wait.recv_timeout(std::time::Duration::from_secs(10));
+        flag.store(true, Ordering::SeqCst);
+        let _ = write!(stream, "{rest}");
+    });
+    (url, seen, go, sent_rest)
+}
+
+const STARTED: &str = r#"{"durationSeconds":30,"level":"info","msg":"Log streaming session started","time":"2026-11-05T10:00:00-06:00"}"#;
+const HANDSHAKE: &str = r#"{"handshake":{"stage":1,"style":"ix_psk0"},"level":"info","msg":"Handshake message sent","time":"2026-11-05T10:00:05-06:00","vpnIp":"10.255.0.11"}"#;
+
+#[test]
+fn logs_print_each_line_as_it_arrives() {
+    use std::sync::atomic::Ordering;
+    let host = mock_id("host", "laptop");
+    let first: &'static str = Box::leak(format!("{STARTED}\n").into_boxed_str());
+    let rest: &'static str = Box::leak(format!("{HANDSHAKE}\n").into_boxed_str());
+    let (url, seen, go, sent_rest) = serve_stream(first, rest);
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_dn"))
+        .args([
+            "--json",
+            "host",
+            "debug",
+            "logs",
+            &host,
+            "--duration",
+            "30s",
+        ])
+        .env("DN_CONFIG_DIR", dir.path())
+        .env("DEFINED_API_URL", &url)
+        .env("DEFINED_API_KEY", "fake-test-key")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+
+    let line = lines.next().unwrap().unwrap();
+    assert!(
+        !sent_rest.load(Ordering::SeqCst),
+        "the first line only showed up once the host had sent everything"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["msg"],
+        "Log streaming session started"
+    );
+
+    go.send(()).unwrap();
+    let line = lines.next().unwrap().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["vpnIp"],
+        "10.255.0.11"
+    );
+    assert!(lines.next().is_none());
+    assert!(child.wait().unwrap().success());
+
+    assert_eq!(
+        requests(&seen),
+        [(
+            "POST".to_string(),
+            format!("/v1/hosts/{host}/command"),
+            json!({"command": "StreamLogs", "args": {"durationSeconds": 30, "level": "info"}})
+        )]
+    );
+}
+
+#[test]
+fn logs_read_the_documented_example_shape_too() {
+    let host = mock_id("host", "laptop");
+    let wrapped: &'static str = Box::leak(
+        format!("{}\n", json!({"data": format!("{STARTED}\n{HANDSHAKE}")})).into_boxed_str(),
+    );
+    let (url, _, go, _) = serve_stream(wrapped, "");
+    go.send(()).unwrap();
+    let out = stdout(&dn(
+        &url,
+        &["host", "debug", "logs", &host, "--level", "debug"],
+    ));
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn logs_refuse_more_than_ten_minutes_before_any_request() {
+    let host = mock_id("host", "laptop");
+    let (url, seen) = serve(json!({"data": ""}).to_string());
+    for duration in ["11m", "1.5s", "0s"] {
+        let out = dn(
+            &url,
+            &["host", "debug", "logs", &host, "--duration", duration],
+        );
+        assert_eq!(out.status.code(), Some(2), "{duration}: {out:?}");
+    }
+    assert!(requests(&seen).is_empty());
+}

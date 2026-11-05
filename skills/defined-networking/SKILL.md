@@ -375,6 +375,7 @@ dn host debug cert <HOST_ID> <PEER_IP> --json            # PrintCert
 dn host debug lighthouse <HOST_ID> <LIGHTHOUSE_IP> --json # QueryLighthouse
 dn host debug create-tunnel <HOST_ID> <PEER_IP> --json   # CreateTunnel
 dn host debug stack <HOST_ID> --json                     # DebugStack
+dn host debug logs <HOST_ID> --duration 2m --level debug --json  # StreamLogs
 ```
 
 Each runs one command on the dnclient of `HOST_ID` through
@@ -392,6 +393,13 @@ Use these when the user asks why two hosts can't reach each other:
   also asks the lighthouse for an update, so run it twice for current data.
 - `create-tunnel` makes `HOST_ID` start a handshake with the peer now.
 - `stack` dumps the dnclient process's goroutines, for a hung client.
+- `logs` streams the dnclient's logs for `--duration` (default `1m`, at most
+  `10m`, whole seconds) at `--level` (`panic`, `fatal`, `error`, `warning`,
+  `info` (default) or `debug`). It blocks for the whole duration, so pick a
+  short one and tell the user what you're waiting for. Under `--json` it prints
+  **NDJSON**, one log object per line as each arrives, not one document: parse
+  it line by line. Handshake lines (`msg` `Handshake message sent` /
+  `received`, with `vpnIp`) show whether the host is reaching a peer.
 
 The host has to be online and connected for any of these to answer; check
 `metadata.lastSeenAt` with `dn host get` if a command fails. Key permission:
@@ -800,7 +808,7 @@ One id per call.
 
 | operation | gate |
 |-----------|------|
-| `host list`, `host get`, `host search`, `host wait`, `host debug cert`, `host debug tunnel`, `host debug lighthouse`, `host debug stack`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get`, `route list`, `route get`, `join-key list`, `join-key get`, `audit-log list` | free — reads change nothing |
+| `host list`, `host get`, `host search`, `host wait`, `host debug cert`, `host debug tunnel`, `host debug lighthouse`, `host debug stack`, `host debug logs`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get`, `route list`, `route get`, `join-key list`, `join-key get`, `audit-log list` | free — reads change nothing |
 | `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
 | `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
 | `host debug create-tunnel` | a small write on the device: it starts a handshake, as traffic to that peer would. Run it when the user is debugging that pair of hosts; say which peer. |
