@@ -159,6 +159,34 @@ fn cert_shows_who_the_peer_is_and_when_its_cert_runs_out() {
     insta::assert_snapshot!(stdout(&out));
 }
 
+/// The shape dnclient 0.9.10 prints a version 2 certificate in: `curve` and
+/// `publicKey` beside `details`, and `networks` / `unsafeNetworks` in place
+/// of `ips` / `subnets`.
+#[test]
+fn cert_reads_a_version_2_certificate() {
+    let host = mock_id("host", "laptop");
+    let cert = json!({
+        "curve": "CURVE25519",
+        "details": {
+            "groups": ["role:Lighthouse"],
+            "isCa": false,
+            "issuer": "88c0b40ed02f298553c84156a26bd45af430617867c8079e41b3f3d20464472a",
+            "name": "lighthouse-1",
+            "networks": ["100.100.0.230/22", "fdef:c0:c0:2966:d3bf:55c:e10d:3356/80"],
+            "notAfter": "2026-12-08T14:20:31-06:00",
+            "notBefore": "2026-10-09T15:15:31-05:00",
+            "unsafeNetworks": null
+        },
+        "fingerprint": "b9ab3236f104ee2d5eeb639d3f0877342b1e2f8aa2669bfb7393ec2c4c0ea076",
+        "publicKey": "6aed5dc9",
+        "signature": "ced4b41e",
+        "version": 2
+    });
+    let (url, _) = serve(json!({"data": cert}).to_string());
+    let out = dn(&url, &["host", "debug", "cert", &host, "100.100.0.230"]);
+    insta::assert_snapshot!(stdout(&out));
+}
+
 #[test]
 fn tunnel_shows_the_address_in_use_and_the_others() {
     let host = mock_id("host", "laptop");
@@ -199,11 +227,14 @@ fn lighthouse_lists_each_host_it_knows() {
 }
 
 #[test]
-fn an_empty_lighthouse_map_says_to_ask_again() {
+fn an_empty_lighthouse_answer_says_to_ask_again() {
     let host = mock_id("host", "laptop");
-    let (url, _) = serve(json!({"data": {}}).to_string());
-    let out = dn(&url, &["host", "debug", "lighthouse", &host, "10.255.0.1"]);
-    assert!(stdout(&out).contains("Run it again"));
+    // dnclient logs `cache=null` for a lighthouse with nothing cached yet.
+    for empty in [json!({}), Value::Null] {
+        let (url, _) = serve(json!({"data": empty}).to_string());
+        let out = dn(&url, &["host", "debug", "lighthouse", &host, "10.255.0.1"]);
+        assert!(stdout(&out).contains("Run it again"), "{empty}");
+    }
 }
 
 #[test]

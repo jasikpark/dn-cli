@@ -3,7 +3,7 @@ source: tests/host_debug.rs
 expression: stdout(&out)
 ---
 Name:         build-server
-IPs:          10.255.0.5/9
+Networks:     10.255.0.5/9
 Groups:       role:ops
 Valid:        2026-04-22T11:21:52-04:00 to 2027-04-22T11:22:52-04:00
 Fingerprint:  7a8d0a73c93aaddae1589e53cf6d5bd160a9d8cb79a0c0c6d6d33ff7de24acb1
