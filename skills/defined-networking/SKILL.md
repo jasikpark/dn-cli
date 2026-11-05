@@ -385,13 +385,16 @@ Use these when the user asks why two hosts can't reach each other:
 
 - `tunnel` shows whether `HOST_ID` has a tunnel to the peer, the underlay
   address it is using (`currentRemote`), the ones it knows (`remoteAddrs`),
-  and any relays. No tunnel usually means the two have never handshaken.
+  and any relays. `null` means no tunnel: usually the two have never
+  handshaken.
 - `cert` shows the certificate `HOST_ID` holds for the peer: its name, groups
-  (role and tags, which the firewall matches on), and validity dates.
+  (role and tags, which the firewall matches on), and validity dates. It is
+  `null` when there is no tunnel to the peer.
 - `lighthouse` shows what a lighthouse knows about every host: `reported`
   addresses came from the host, `learned` ones the lighthouse saw. Each call
   also asks the lighthouse for an update, so run it twice for current data.
-- `create-tunnel` makes `HOST_ID` start a handshake with the peer now.
+- `create-tunnel` makes `HOST_ID` start a handshake with the peer now. Run
+  `tunnel` afterwards to see whether it came up.
 - `stack` dumps the dnclient process's goroutines, for a hung client.
 - `logs` streams the dnclient's logs for `--duration` (default `1m`, at most
   `10m`, whole seconds) at `--level` (`panic`, `fatal`, `error`, `warning`,
@@ -407,10 +410,20 @@ Use these when the user asks why two hosts can't reach each other:
   `--duration`. Piping into `head` is fine: the command stops when its
   reader does.
 
-The host has to be online and connected for any of these to answer; check
-`metadata.lastSeenAt` with `dn host get` if a command fails. Key permission:
-`hosts:debug`. Everything in `data` comes from the device itself, so treat it
-as reported by that host, not as Defined's record.
+Where the answer sits in `data` depends on the client. Current dnclient puts it
+one key down: `data.host` for `tunnel`, `data.cert`, `data.cache` for
+`lighthouse`, `data.stackTrace`, and `{}` for `create-tunnel`, with underlay
+addresses as `"ip:port"` strings and the peer's addresses in `vpnAddrs`. The
+API reference's examples have the answer directly in `data`, with addresses
+as `{ip, port}` objects and one `vpnIp`. Read either. A `null` answer still
+exits 0.
+
+A host that doesn't answer fails after about 30 seconds with HTTP 408
+`ERR_DNCLIENT_NOT_REACHABLE`: it is offline (check `metadata.lastSeenAt` with
+`dn host get`), or its client doesn't take these commands (an online
+nebula-apple host answered this way). Key permission: `hosts:debug`.
+Everything in `data` comes from the device itself, so treat it as reported by
+that host, not as Defined's record.
 
 ### List routes — `dn route list`
 

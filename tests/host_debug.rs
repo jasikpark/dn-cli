@@ -164,32 +164,77 @@ fn cert_shows_who_the_peer_is_and_when_its_cert_runs_out() {
     insta::assert_snapshot!(stdout(&out));
 }
 
-/// The shape dnclient 0.9.10 prints a version 2 certificate in: `curve` and
+/// A version 2 certificate as dnclient 0.9.10 prints it: `curve` and
 /// `publicKey` beside `details`, and `networks` / `unsafeNetworks` in place
 /// of `ips` / `subnets`.
-#[test]
-fn cert_reads_a_version_2_certificate() {
-    let host = mock_id("host", "laptop");
-    let cert = json!({
+fn cert_v2() -> Value {
+    json!({
         "curve": "CURVE25519",
         "details": {
             "groups": ["role:Lighthouse"],
             "isCa": false,
-            "issuer": "88c0b40ed02f298553c84156a26bd45af430617867c8079e41b3f3d20464472a",
+            "issuer": "c652a897fee60414423b3e5e16951151099558799fc562c37f6ec73c376ecc15",
             "name": "lighthouse-1",
-            "networks": ["100.100.0.230/22", "fdef:c0:c0:2966:d3bf:55c:e10d:3356/80"],
+            "networks": ["10.255.0.1/22", "fd00:c0:c0::1/80"],
             "notAfter": "2026-12-08T14:20:31-06:00",
             "notBefore": "2026-10-09T15:15:31-05:00",
             "unsafeNetworks": null
         },
-        "fingerprint": "b9ab3236f104ee2d5eeb639d3f0877342b1e2f8aa2669bfb7393ec2c4c0ea076",
-        "publicKey": "6aed5dc9",
-        "signature": "ced4b41e",
+        "fingerprint": "4f0c2e9d7b1a86335d0e9a4c1f27b8e6a3d5c7091b2e4f6a8c0d1e3f5a7b9c2d",
+        "publicKey": "2f97c72c",
+        "signature": "679b2e",
         "version": 2
-    });
-    let (url, _) = serve(json!({"data": cert}).to_string());
-    let out = dn(&url, &["host", "debug", "cert", &host, "100.100.0.230"]);
+    })
+}
+
+/// dnclient 0.9.10 answers PrintCert as `{"cert": …}`, not the bare
+/// certificate of the spec's example.
+#[test]
+fn cert_reads_a_version_2_certificate() {
+    let host = mock_id("host", "laptop");
+    let (url, _) = serve(json!({"data": {"cert": cert_v2()}}).to_string());
+    let out = dn(&url, &["host", "debug", "cert", &host, "10.255.0.1"]);
     insta::assert_snapshot!(stdout(&out));
+}
+
+/// PrintTunnel from dnclient 0.9.10: the tunnel under `host`, the peer's
+/// addresses in `vpnAddrs`, and underlay addresses as `ip:port` strings.
+#[test]
+fn tunnel_reads_the_answer_dnclient_0_9_10_gives() {
+    let host = mock_id("host", "laptop");
+    let tunnel = json!({
+        "vpnAddrs": ["10.255.0.1", "fd00:c0:c0::1"],
+        "localIndex": 837260587,
+        "remoteIndex": 3614089855_u64,
+        "remoteAddrs": ["198.51.100.135:4242", "[2001:db8::7]:4242"],
+        "cert": cert_v2(),
+        "messageCounter": 47,
+        "currentRemote": "198.51.100.135:4242",
+        "currentRelaysToMe": [],
+        "currentRelaysThroughMe": []
+    });
+    let (url, _) = serve(json!({"data": {"host": tunnel}}).to_string());
+    let out = dn(&url, &["host", "debug", "tunnel", &host, "10.255.0.1"]);
+    insta::assert_snapshot!(stdout(&out));
+}
+
+/// A host with no tunnel to the peer answers `null` for both, and exits 0.
+#[test]
+fn no_tunnel_to_the_peer_is_said_in_words() {
+    let host = mock_id("host", "laptop");
+    let (url, _) = serve(json!({"data": {"host": null}}).to_string());
+    let out = dn(&url, &["host", "debug", "tunnel", &host, "10.255.0.9"]);
+    assert_eq!(
+        stdout(&out),
+        format!("{host} has no tunnel to 10.255.0.9.\n")
+    );
+
+    let (url, _) = serve(json!({"data": {"cert": null}}).to_string());
+    let out = dn(&url, &["host", "debug", "cert", &host, "10.255.0.9"]);
+    assert_eq!(
+        stdout(&out),
+        format!("{host} has no tunnel to 10.255.0.9, so it holds no certificate for it.\n")
+    );
 }
 
 #[test]
@@ -231,11 +276,33 @@ fn lighthouse_lists_each_host_it_knows() {
     insta::assert_snapshot!(stdout(&out));
 }
 
+/// QueryLighthouse from dnclient 0.9.10: the map under `cache`, addresses as
+/// `ip:port` strings.
+#[test]
+fn lighthouse_reads_the_answer_dnclient_0_9_10_gives() {
+    let host = mock_id("host", "laptop");
+    let cache = json!({
+        "10.255.0.1": {"learned": ["198.51.100.135:4242"], "relay": []},
+        "10.255.0.11": {
+            "reported": ["203.0.113.8:52148", "192.168.68.34:52148"],
+            "relay": ["10.255.0.2"]
+        }
+    });
+    let (url, _) = serve(json!({"data": {"cache": cache}}).to_string());
+    let out = dn(&url, &["host", "debug", "lighthouse", &host, "10.255.0.1"]);
+    insta::assert_snapshot!(stdout(&out));
+}
+
 #[test]
 fn an_empty_lighthouse_answer_says_to_ask_again() {
     let host = mock_id("host", "laptop");
     // dnclient logs `cache=null` for a lighthouse with nothing cached yet.
-    for empty in [json!({}), Value::Null] {
+    for empty in [
+        json!({}),
+        Value::Null,
+        json!({"cache": null}),
+        json!({"cache": {}}),
+    ] {
         let (url, _) = serve(json!({"data": empty}).to_string());
         let out = dn(&url, &["host", "debug", "lighthouse", &host, "10.255.0.1"]);
         assert!(stdout(&out).contains("Run it again"), "{empty}");
@@ -256,15 +323,34 @@ fn create_tunnel_repeats_what_dnclient_said() {
     );
 }
 
+/// dnclient 0.9.10 answers CreateTunnel with `{}`, not the spec's "Created".
+#[test]
+fn create_tunnel_with_an_empty_answer_says_what_was_asked() {
+    let host = mock_id("host", "laptop");
+    let (url, _) = serve(json!({"data": {}}).to_string());
+    let out = dn(
+        &url,
+        &["host", "debug", "create-tunnel", &host, "10.255.0.5"],
+    );
+    assert_eq!(
+        stdout(&out),
+        format!("Asked {host} to open a tunnel to 10.255.0.5.\n")
+    );
+}
+
+/// The trace is `data` itself in the spec, and `data.stackTrace` from
+/// dnclient 0.9.10.
 #[test]
 fn a_stack_keeps_its_lines_but_loses_escape_codes() {
     let host = mock_id("host", "laptop");
     let trace = "goroutine 1 [running]:\nmain.main()\n\t/src/main.go:12 +0x1d\x1b[2J";
-    let (url, _) = serve(json!({"data": trace}).to_string());
-    let out = stdout(&dn(&url, &["host", "debug", "stack", &host]));
-    assert_eq!(out.lines().count(), 3, "{out}");
-    assert!(!out.contains('\x1b'), "{out:?}");
-    assert!(out.contains("main.main()"));
+    for data in [json!(trace), json!({"stackTrace": trace})] {
+        let (url, _) = serve(json!({"data": data}).to_string());
+        let out = stdout(&dn(&url, &["host", "debug", "stack", &host]));
+        assert_eq!(out.lines().count(), 3, "{out}");
+        assert!(!out.contains('\x1b'), "{out:?}");
+        assert!(out.contains("main.main()"));
+    }
 }
 
 #[test]
@@ -289,6 +375,27 @@ fn a_missing_scope_comes_back_in_the_json_error_envelope() {
     let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(printed["errors"][0]["code"], "ERR_FORBIDDEN");
     assert_eq!(printed["status"], 403);
+}
+
+/// What the API answers, after about 30 seconds, for a host that is offline
+/// or whose client takes no commands.
+#[test]
+fn a_host_that_does_not_answer_points_at_when_it_last_checked_in() {
+    let host = mock_id("host", "laptop");
+    let body = json!({"errors": [{
+        "code": "ERR_DNCLIENT_NOT_REACHABLE",
+        "message": "dnclient not reachable"
+    }]});
+    let (url, _) = serve_status("408 Request Timeout", body.to_string());
+    let out = dn(&url, &["--json", "host", "debug", "stack", &host]);
+    assert!(!out.status.success());
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed["status"], 408);
+    assert_eq!(printed["errors"][0]["code"], "ERR_DNCLIENT_NOT_REACHABLE");
+    let message = printed["errors"][0]["message"].as_str().unwrap();
+    assert!(message.contains("lastSeenAt"), "{message}");
+    assert!(message.ends_with("dnclient not reachable"), "{message}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("dn host get"));
 }
 
 #[test]

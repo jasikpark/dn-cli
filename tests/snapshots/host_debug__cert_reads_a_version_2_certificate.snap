@@ -3,8 +3,8 @@ source: tests/host_debug.rs
 expression: stdout(&out)
 ---
 Name:         lighthouse-1
-Networks:     100.100.0.230/22, fdef:c0:c0:2966:d3bf:55c:e10d:3356/80
+Networks:     10.255.0.1/22, fd00:c0:c0::1/80
 Groups:       role:Lighthouse
 Valid:        2026-10-09T15:15:31-05:00 to 2026-12-08T14:20:31-06:00
-Fingerprint:  b9ab3236f104ee2d5eeb639d3f0877342b1e2f8aa2669bfb7393ec2c4c0ea076
-Issuer:       88c0b40ed02f298553c84156a26bd45af430617867c8079e41b3f3d20464472a
+Fingerprint:  4f0c2e9d7b1a86335d0e9a4c1f27b8e6a3d5c7091b2e4f6a8c0d1e3f5a7b9c2d
+Issuer:       c652a897fee60414423b3e5e16951151099558799fc562c37f6ec73c376ecc15
