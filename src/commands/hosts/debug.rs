@@ -79,7 +79,11 @@ fn render(command: &HostDebugCommand, data: &Value) -> String {
     let rendered = match command {
         HostDebugCommand::Cert(_) => data.is_object().then(|| render_cert(data)),
         HostDebugCommand::Tunnel(_) => data.is_object().then(|| render_tunnel(data)),
-        HostDebugCommand::Lighthouse(_) => data.as_object().map(|_| render_lighthouse(data)),
+        // A lighthouse with nothing cached answers `null`, not `{}`.
+        HostDebugCommand::Lighthouse(_) => match data {
+            Value::Null | Value::Object(_) => Some(render_lighthouse(data)),
+            _ => None,
+        },
         HostDebugCommand::CreateTunnel(a) => data.as_str().map(|s| {
             format!(
                 "Asked {} to open a tunnel to {}; dnclient said \"{}\".\n",
@@ -98,12 +102,23 @@ fn render(command: &HostDebugCommand, data: &Value) -> String {
     })
 }
 
+/// A Nebula certificate as dnclient prints it. Version 1 lists `ips` and
+/// `subnets`; version 2 (dnclient 0.9.10 and later) calls them `networks` and
+/// `unsafeNetworks`, so either spelling is read.
 fn render_cert(cert: &Value) -> String {
     let d = cert.get("details").unwrap_or(&Value::Null);
+    let either = |v1: &str, v2: &str| {
+        let shown = joined_field(d, v1);
+        if shown.is_empty() {
+            joined_field(d, v2)
+        } else {
+            shown
+        }
+    };
     render_details(&[
         ("Name", str_field(d, "name").to_string()),
-        ("IPs", joined_field(d, "ips")),
-        ("Subnets", joined_field(d, "subnets")),
+        ("Networks", either("ips", "networks")),
+        ("Unsafe networks", either("subnets", "unsafeNetworks")),
         ("Groups", joined_field(d, "groups")),
         (
             "Valid",
@@ -137,13 +152,11 @@ fn render_tunnel(t: &Value) -> String {
 /// One row per VPN IP in the lighthouse's map, with where its addresses came
 /// from: `reported` by the host itself, or `learned` by the lighthouse.
 fn render_lighthouse(map: &Value) -> String {
-    let Some(entries) = map.as_object() else {
-        return String::new();
-    };
-    if entries.is_empty() {
+    let entries = map.as_object().filter(|e| !e.is_empty());
+    let Some(entries) = entries else {
         return "The lighthouse knows no hosts yet. Run it again: each call also asks for an update.\n"
             .to_string();
-    }
+    };
     let rows: Vec<Vec<String>> = entries
         .iter()
         .map(|(ip, e)| {
