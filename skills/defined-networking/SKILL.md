@@ -375,6 +375,7 @@ dn host debug cert <HOST_ID> <PEER_IP> --json            # PrintCert
 dn host debug lighthouse <HOST_ID> <LIGHTHOUSE_IP> --json # QueryLighthouse
 dn host debug create-tunnel <HOST_ID> <PEER_IP> --json   # CreateTunnel
 dn host debug stack <HOST_ID> --json                     # DebugStack
+dn host debug logs <HOST_ID> --duration 2m --level debug --json  # StreamLogs
 ```
 
 Each runs one command on the dnclient of `HOST_ID` through
@@ -395,6 +396,23 @@ Use these when the user asks why two hosts can't reach each other:
 - `create-tunnel` makes `HOST_ID` start a handshake with the peer now. Run
   `tunnel` afterwards to see whether it came up.
 - `stack` dumps the dnclient process's goroutines, for a hung client.
+- `logs` streams the dnclient's logs for `--duration` (default `1m`, at most
+  `10m`, whole seconds) at `--level` (`panic`, `fatal`, `error`, `warning`,
+  `info` (default) or `debug`). It blocks for the whole duration, so pick a
+  short one and tell the user what you're waiting for. Each session makes the
+  host reload its Nebula config when it starts and again when it ends (the
+  first lines are that reload), and the host streams for the whole
+  `--duration` even if `dn` is stopped early, so don't run it in a loop or
+  ask for longer than you need. Under `--json` it prints
+  **NDJSON**, one log object per line as each arrives, not one document: parse
+  it line by line. Handshake lines (`msg` `Handshake message sent` /
+  `received`, with `vpnIp`) show whether the host is reaching a peer. A line
+  the host sent that isn't a JSON object comes out as `{"raw": "…"}`. If the
+  stream breaks off partway, the lines so far stand, the last line is the
+  error envelope (it has `errors`, which a log line doesn't) and the exit
+  code is 1; `ERR_TIMEOUT` there means the API kept the stream open past
+  `--duration`. Piping into `head` or pressing Ctrl-C stops `dn` without an
+  error, but not the host's session.
 
 Where the answer sits in `data` depends on the client. Current dnclient puts it
 one key down: `data.host` for `tunnel`, `data.cert`, `data.cache` for
@@ -817,6 +835,7 @@ One id per call.
 | `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
 | `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
 | `host debug create-tunnel` | a small write on the device: it starts a handshake, as traffic to that peer would. Run it when the user is debugging that pair of hosts; say which peer. |
+| `host debug logs` | a small write on the device: the host reloads its Nebula config when the session starts and again when it ends, and it streams for the whole `--duration` even if `dn` stops early. Run it when the user is debugging that host; keep `--duration` short and don't loop it. |
 | `host block` | a reversible write: the host is cut off from every other host until unblocked. Confirm the host by name with the user first, and say so if it is a lighthouse or relay (the whole network is affected). |
 | `host unblock` | a write: it lets whatever device holds the host's credentials back onto the network. Confirm the host with the user, and never unblock one that was blocked because it was compromised. |
 | `host enroll-code` | issues a credential: whoever holds the code can join as that host. Confirm the host by name with the user first, never infer it from context, and give the code only to the user. |

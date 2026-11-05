@@ -436,10 +436,31 @@ impl Client {
         self.post_json(&format!("/v1/hosts/{id}/enrollment-code"), &body)
     }
 
-    /// Run one debug command on a host's dnclient (`hosts:debug`). The answer
-    /// is a single `{data}` once the host has replied.
+    /// Run one debug command on a host's dnclient (`hosts:debug`). Every
+    /// command but StreamLogs answers a single `{data}` once the host has.
     pub fn host_command(&self, id: &str, body: &Value) -> Result<Value> {
         self.post_json(&format!("/v1/hosts/{id}/command"), body)
+    }
+
+    /// StreamLogs: the same POST, but the response stays open while the host
+    /// sends log lines, so it gets `limit` instead of the client's 60s, and
+    /// the body comes back unread for the caller to take a line at a time.
+    pub fn host_command_stream(
+        &self,
+        id: &str,
+        body: &Value,
+        limit: Duration,
+    ) -> Result<impl std::io::Read + use<>> {
+        let res = self.send(&format!("/v1/hosts/{id}/command"), |url, auth| {
+            self.agent
+                .post(url)
+                .config()
+                .timeout_global(Some(limit))
+                .build()
+                .header("Authorization", auth)
+                .send_json(body)
+        })?;
+        Ok(res.into_body().into_reader())
     }
 
     fn post_json(&self, path: &str, body: &Value) -> Result<Value> {

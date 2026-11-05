@@ -1,0 +1,6 @@
+---
+source: tests/host_debug.rs
+expression: out
+---
+2026-11-05T10:00:00-06:00 INFO Log streaming session started durationSeconds=30
+2026-11-05T10:00:05-06:00 INFO Handshake message sent handshake={"stage":1,"style":"ix_psk0"} vpnIp=10.255.0.11

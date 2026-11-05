@@ -550,8 +550,8 @@ pub enum HostCommand {
     /// fails with ERR_TIMEOUT when --timeout runs out first.
     Wait(HostWaitArgs),
     /// Ask a host's dnclient about its Nebula state: a peer's certificate or
-    /// tunnel, a lighthouse's view, or its stack. The host has to be online,
-    /// and the API key needs the `hosts:debug` scope.
+    /// tunnel, a lighthouse's view, its stack, or its logs. The host has to
+    /// be online, and the API key needs the `hosts:debug` scope.
     #[command(subcommand)]
     Debug(HostDebugCommand),
 }
@@ -575,6 +575,9 @@ pub enum HostDebugCommand {
     Lighthouse(HostDebugLighthouseArgs),
     /// Print a stack trace of HOST's dnclient process (DebugStack)
     Stack(HostGetArgs),
+    /// Stream HOST's dnclient logs for a while, up to 10 minutes (StreamLogs).
+    /// `--json` prints one JSON object per line as each arrives.
+    Logs(HostDebugLogsArgs),
 }
 
 #[derive(Args)]
@@ -592,6 +595,55 @@ pub struct HostDebugLighthouseArgs {
     /// The lighthouse's Nebula IP address
     #[arg(value_name = "LIGHTHOUSE_IP")]
     pub target: std::net::IpAddr,
+}
+
+#[derive(Args)]
+pub struct HostDebugLogsArgs {
+    /// Host id (host-…) whose logs to stream
+    pub host_id: String,
+    /// How long to stream, e.g. 30s or 5m. At most 10m. The host streams
+    /// for all of it, even if dn is stopped early.
+    #[arg(long, value_name = "DURATION", default_value = "1m", value_parser = log_duration)]
+    pub duration: Duration,
+    /// The least severe level to include
+    #[arg(long, value_enum, default_value_t = LogLevel::Info)]
+    pub level: LogLevel,
+}
+
+/// dnclient's log levels, most severe first, spelled as StreamLogs takes them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum LogLevel {
+    Panic,
+    Fatal,
+    Error,
+    Warning,
+    Info,
+    Debug,
+}
+
+impl LogLevel {
+    pub fn as_api(self) -> &'static str {
+        match self {
+            Self::Panic => "panic",
+            Self::Fatal => "fatal",
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Info => "info",
+            Self::Debug => "debug",
+        }
+    }
+}
+
+/// A [`wait_duration`] in whole seconds, no longer than StreamLogs' 600.
+pub(crate) fn log_duration(s: &str) -> Result<Duration, String> {
+    let d = wait_duration(s)?;
+    if d.subsec_nanos() != 0 {
+        return Err("must be a whole number of seconds".to_string());
+    }
+    if d > Duration::from_secs(600) {
+        return Err("must be 10m or less".to_string());
+    }
+    Ok(d)
 }
 
 #[derive(Args)]
@@ -1351,5 +1403,14 @@ mod tests {
             help.contains("https://www.defined.net/docs/openapi.yaml"),
             "{help}"
         );
+    }
+
+    #[test]
+    fn log_duration_takes_whole_seconds_up_to_ten_minutes() {
+        assert_eq!(log_duration("90s"), Ok(Duration::from_secs(90)));
+        assert_eq!(log_duration("10m"), Ok(Duration::from_secs(600)));
+        assert!(log_duration("10m 1s").is_err());
+        assert!(log_duration("1.5s").is_err());
+        assert!(log_duration("0s").is_err());
     }
 }
