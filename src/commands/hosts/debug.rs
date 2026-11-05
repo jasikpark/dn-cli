@@ -8,7 +8,7 @@ use std::net::IpAddr;
 
 use serde_json::{Value, json};
 
-use crate::api::Client;
+use crate::api::{ApiError, Client};
 use crate::cli::HostDebugCommand;
 use crate::output::{
     OutputMode, joined_field, render_details, render_table, sanitize_for_display, str_field,
@@ -45,8 +45,9 @@ pub fn hosts_debug(
     output: OutputMode,
 ) -> anyhow::Result<()> {
     let host = command.host_id();
-    let body = command_body(command);
-    let res = client.host_command(host, &body)?;
+    let res = client
+        .host_command(host, &command_body(command))
+        .map_err(explain_unreachable)?;
     output.emit(&res, |res| {
         let data = res.get("data").unwrap_or(&Value::Null);
         print!("{}", render(command, data));
@@ -54,26 +55,69 @@ pub fn hosts_debug(
     })
 }
 
+/// The API waits about 30 seconds for the host's dnclient, then answers 408
+/// `ERR_DNCLIENT_NOT_REACHABLE`. Say what to check.
+fn explain_unreachable(err: anyhow::Error) -> anyhow::Error {
+    let unreachable = err.downcast_ref::<ApiError>().is_some_and(|api| {
+        api.errors
+            .iter()
+            .any(|e| e.code == "ERR_DNCLIENT_NOT_REACHABLE")
+    });
+    if unreachable {
+        err.context(
+            "the host's dnclient did not answer; `dn host get` shows when it last checked in \
+             (metadata.lastSeenAt)",
+        )
+    } else {
+        err
+    }
+}
+
+/// dnclient 0.9.10 puts each answer under a key of its own (`{"cert": …}`,
+/// `{"host": …}`, `{"cache": …}`, `{"stackTrace": …}`), where the spec's
+/// examples have the answer bare. Either is read.
+fn answer<'a>(data: &'a Value, key: &str) -> &'a Value {
+    data.get(key).unwrap_or(data)
+}
+
 /// The human view of one answer. A shape the renderer doesn't know falls back
 /// to the JSON, so a newer dnclient never makes the command useless.
 fn render(command: &HostDebugCommand, data: &Value) -> String {
     let rendered = match command {
-        HostDebugCommand::Cert(_) => data.is_object().then(|| render_cert(data)),
-        HostDebugCommand::Tunnel(_) => data.is_object().then(|| render_tunnel(data)),
-        // A lighthouse with nothing cached answers `null`, not `{}`.
-        HostDebugCommand::Lighthouse(_) => match data {
-            Value::Null | Value::Object(_) => Some(render_lighthouse(data)),
+        // A host answers `null` for a peer it has no tunnel to.
+        HostDebugCommand::Cert(a) => match answer(data, "cert") {
+            Value::Null => Some(format!(
+                "{} has no tunnel to {}, so it holds no certificate for it.\n",
+                a.host_id, a.target
+            )),
+            cert @ Value::Object(_) => Some(render_cert(cert)),
             _ => None,
         },
-        HostDebugCommand::CreateTunnel(a) => data.as_str().map(|s| {
-            format!(
+        HostDebugCommand::Tunnel(a) => match answer(data, "host") {
+            Value::Null => Some(format!("{} has no tunnel to {}.\n", a.host_id, a.target)),
+            tunnel @ Value::Object(_) => Some(render_tunnel(tunnel)),
+            _ => None,
+        },
+        // A lighthouse with nothing cached answers `null`, not `{}`.
+        HostDebugCommand::Lighthouse(_) => match answer(data, "cache") {
+            map @ (Value::Null | Value::Object(_)) => Some(render_lighthouse(map)),
+            _ => None,
+        },
+        // The spec's example answers "Created"; dnclient 0.9.10 answers `{}`.
+        HostDebugCommand::CreateTunnel(a) => match data {
+            Value::String(s) => Some(format!(
                 "Asked {} to open a tunnel to {}; dnclient said \"{}\".\n",
                 a.host_id,
                 a.target,
                 sanitize_for_display(s)
-            )
-        }),
-        HostDebugCommand::Stack(_) => data.as_str().map(sanitize_lines),
+            )),
+            Value::Object(o) if o.is_empty() => Some(format!(
+                "Asked {} to open a tunnel to {}.\n",
+                a.host_id, a.target
+            )),
+            _ => None,
+        },
+        HostDebugCommand::Stack(_) => answer(data, "stackTrace").as_str().map(sanitize_lines),
     };
     rendered.unwrap_or_else(|| {
         let mut s = serde_json::to_string_pretty(data).unwrap_or_default();
@@ -118,7 +162,7 @@ fn render_tunnel(t: &Value) -> String {
     let peer = str_field(cert.get("details").unwrap_or(&Value::Null), "name");
     render_details(&[
         ("Peer", peer.to_string()),
-        ("Nebula IP", str_field(t, "vpnIp").to_string()),
+        ("Nebula IP", nebula_ips(t)),
         ("Using", addr(t.get("currentRemote"))),
         ("Known addresses", addrs(t.get("remoteAddrs"))),
         ("Relays to me", addrs(t.get("currentRelaysToMe"))),
@@ -127,6 +171,17 @@ fn render_tunnel(t: &Value) -> String {
         ("Cached packets", count(t, "cachedPackets")),
         ("Fingerprint", str_field(cert, "fingerprint").to_string()),
     ])
+}
+
+/// The peer's overlay addresses: `vpnAddrs` since dnclient 0.9.10, one
+/// `vpnIp` before it.
+fn nebula_ips(t: &Value) -> String {
+    let addrs = joined_field(t, "vpnAddrs");
+    if addrs.is_empty() {
+        str_field(t, "vpnIp").to_string()
+    } else {
+        addrs
+    }
 }
 
 /// One row per VPN IP in the lighthouse's map, with where its addresses came
