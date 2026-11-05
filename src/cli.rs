@@ -601,7 +601,8 @@ pub struct HostDebugLighthouseArgs {
 pub struct HostDebugLogsArgs {
     /// Host id (host-…) whose logs to stream
     pub host_id: String,
-    /// How long to stream, e.g. 30s or 5m. At most 10m.
+    /// How long to stream, e.g. 30s or 5m. At most 10m. The host streams
+    /// for all of it, even if dn is stopped early.
     #[arg(long, value_name = "DURATION", default_value = "1m", value_parser = log_duration)]
     pub duration: Duration,
     /// The least severe level to include
