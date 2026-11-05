@@ -1,6 +1,28 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.4.8 (2026-11-05)
+
+### Features
+
+#### Debug a host's tunnels with dn host debug
+
+`dn host debug` runs dnclient's debug commands on an online host through the
+API's host command operation: `tunnel` and `cert` show what a host knows about
+a peer, `lighthouse` shows a lighthouse's host map as the host sees it,
+`create-tunnel` starts a handshake, and `stack` prints a stack trace. Each takes
+the host's id and, except `stack`, a Nebula IP. The API key needs the
+`hosts:debug` permission.
+
+#### Stream a host's logs with dn host debug logs
+
+`dn host debug logs <host id>` streams the host's dnclient logs for
+`--duration` (default 1m, at most 10m) at `--level` (default `info`), printing
+each line as it arrives. Under `--json` it prints one JSON object per line
+(NDJSON) rather than a single document. The host streams for the whole
+duration even if `dn` is stopped early, and reloads its Nebula config when the
+session starts and ends. The API key needs the `hosts:debug` permission.
+
 ## 0.4.7 (2026-11-03)
 
 ### Features
