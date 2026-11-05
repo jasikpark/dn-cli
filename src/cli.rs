@@ -549,6 +549,49 @@ pub enum HostCommand {
     /// running `dnclient enroll` on a new device. Exits 0 once it has, or
     /// fails with ERR_TIMEOUT when --timeout runs out first.
     Wait(HostWaitArgs),
+    /// Ask a host's dnclient about its Nebula state: a peer's certificate or
+    /// tunnel, a lighthouse's view, or its stack. The host has to be online,
+    /// and the API key needs the `hosts:debug` scope.
+    #[command(subcommand)]
+    Debug(HostDebugCommand),
+}
+
+/// `dn host debug …`: one subcommand per command of
+/// `POST /v1/hosts/{hostID}/command`.
+#[derive(Subcommand)]
+pub enum HostDebugCommand {
+    /// Print the certificate HOST holds for a peer, from its host map
+    /// (PrintCert)
+    Cert(HostDebugTargetArgs),
+    /// Print HOST's tunnel to a peer: the address it is using, the ones it
+    /// knows, and any relays (PrintTunnel)
+    Tunnel(HostDebugTargetArgs),
+    /// Make HOST start a handshake with a peer, so a tunnel exists before
+    /// any traffic needs it (CreateTunnel)
+    CreateTunnel(HostDebugTargetArgs),
+    /// Print a lighthouse's host map as HOST sees it. Each call also asks the
+    /// lighthouse for an update, so run it twice for the latest view
+    /// (QueryLighthouse)
+    Lighthouse(HostDebugLighthouseArgs),
+    /// Print a stack trace of HOST's dnclient process (DebugStack)
+    Stack(HostGetArgs),
+}
+
+#[derive(Args)]
+pub struct HostDebugTargetArgs {
+    /// Host id (host-…) whose dnclient runs the command
+    pub host_id: String,
+    /// The peer's Nebula IP address, as `dn host get` shows it
+    pub target: std::net::IpAddr,
+}
+
+#[derive(Args)]
+pub struct HostDebugLighthouseArgs {
+    /// Host id (host-…) whose dnclient runs the command
+    pub host_id: String,
+    /// The lighthouse's Nebula IP address
+    #[arg(value_name = "LIGHTHOUSE_IP")]
+    pub target: std::net::IpAddr,
 }
 
 #[derive(Args)]

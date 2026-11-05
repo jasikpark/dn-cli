@@ -1,4 +1,5 @@
 mod create;
+mod debug;
 mod delete;
 mod edit;
 mod get;
@@ -7,6 +8,7 @@ mod wait;
 
 pub use create::{hosts_create, validate_create_preflight};
 pub(crate) use create::{network_ipv4_cidr, pick_network};
+pub use debug::hosts_debug;
 pub use delete::hosts_delete;
 pub use edit::{hosts_edit, validate_edit_preflight};
 pub use get::hosts_get;

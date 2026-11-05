@@ -1,0 +1,11 @@
+---
+source: tests/host_debug.rs
+expression: stdout(&out)
+---
+Peer:             build-server
+Nebula IP:        10.255.0.11
+Using:            198.51.100.135:57304
+Known addresses:  100.64.1.2:57304, 198.51.100.135:57304, [2001:db8::7]:57304
+Messages:         4
+Cached packets:   0
+Fingerprint:      7a8d0a73c93aaddae1589e53cf6d5bd160a9d8cb79a0c0c6d6d33ff7de24acb1
