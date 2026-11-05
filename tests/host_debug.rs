@@ -5,7 +5,7 @@
 mod common;
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -20,6 +20,34 @@ fn serve(body: String) -> (String, Arc<Mutex<Vec<Request>>>) {
     serve_status("200 OK", body)
 }
 
+/// Read one request off `stream`: its method, target and JSON body.
+fn read_request(stream: &TcpStream) -> Request {
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).unwrap();
+    let mut content_length = 0;
+    let mut line = String::new();
+    while reader.read_line(&mut line).unwrap() > 2 {
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            content_length = value.trim().parse().unwrap();
+        }
+        line.clear();
+    }
+    let mut raw = vec![0; content_length];
+    reader.read_exact(&mut raw).unwrap();
+    let sent = if raw.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&raw).unwrap()
+    };
+    let mut parts = request_line.split(' ');
+    let method = parts.next().unwrap_or_default().to_string();
+    let target = parts.next().unwrap_or_default().to_string();
+    (method, target, sent)
+}
+
 /// Like [`serve`], answering every request with `status`.
 fn serve_status(status: &'static str, body: String) -> (String, Arc<Mutex<Vec<Request>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -29,30 +57,7 @@ fn serve_status(status: &'static str, body: String) -> (String, Arc<Mutex<Vec<Re
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut request_line = String::new();
-            reader.read_line(&mut request_line).unwrap();
-            let mut content_length = 0;
-            let mut line = String::new();
-            while reader.read_line(&mut line).unwrap() > 2 {
-                if let Some((name, value)) = line.split_once(':')
-                    && name.eq_ignore_ascii_case("content-length")
-                {
-                    content_length = value.trim().parse().unwrap();
-                }
-                line.clear();
-            }
-            let mut raw = vec![0; content_length];
-            reader.read_exact(&mut raw).unwrap();
-            let sent = if raw.is_empty() {
-                Value::Null
-            } else {
-                serde_json::from_slice(&raw).unwrap()
-            };
-            let mut parts = request_line.split(' ');
-            let method = parts.next().unwrap_or_default().to_string();
-            let target = parts.next().unwrap_or_default().to_string();
-            log.lock().unwrap().push((method, target, sent));
+            log.lock().unwrap().push(read_request(&stream));
             write!(
                 stream,
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
@@ -314,7 +319,7 @@ type StreamMock = (
 
 /// Serve one StreamLogs response with no length, so the body runs until the
 /// connection closes: `first`, then (once `go` fires, or after 10s) `rest`.
-fn serve_stream(first: &'static str, rest: &'static str) -> StreamMock {
+fn serve_stream(first: String, rest: String) -> StreamMock {
     use std::sync::atomic::{AtomicBool, Ordering};
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -325,27 +330,7 @@ fn serve_stream(first: &'static str, rest: &'static str) -> StreamMock {
     let (go, wait) = std::sync::mpsc::channel::<()>();
     thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut request_line = String::new();
-        reader.read_line(&mut request_line).unwrap();
-        let mut content_length = 0;
-        let mut line = String::new();
-        while reader.read_line(&mut line).unwrap() > 2 {
-            if let Some((name, value)) = line.split_once(':')
-                && name.eq_ignore_ascii_case("content-length")
-            {
-                content_length = value.trim().parse().unwrap();
-            }
-            line.clear();
-        }
-        let mut raw = vec![0; content_length];
-        reader.read_exact(&mut raw).unwrap();
-        let mut parts = request_line.split(' ');
-        log.lock().unwrap().push((
-            parts.next().unwrap_or_default().to_string(),
-            parts.next().unwrap_or_default().to_string(),
-            serde_json::from_slice(&raw).unwrap(),
-        ));
+        log.lock().unwrap().push(read_request(&stream));
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n{first}"
@@ -366,9 +351,7 @@ const HANDSHAKE: &str = r#"{"handshake":{"stage":1,"style":"ix_psk0"},"level":"i
 fn logs_print_each_line_as_it_arrives() {
     use std::sync::atomic::Ordering;
     let host = mock_id("host", "laptop");
-    let first: &'static str = Box::leak(format!("{STARTED}\n").into_boxed_str());
-    let rest: &'static str = Box::leak(format!("{HANDSHAKE}\n").into_boxed_str());
-    let (url, seen, go, sent_rest) = serve_stream(first, rest);
+    let (url, seen, go, sent_rest) = serve_stream(format!("{STARTED}\n"), format!("{HANDSHAKE}\n"));
     let dir = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_dn"))
         .args([
@@ -418,19 +401,53 @@ fn logs_print_each_line_as_it_arrives() {
     );
 }
 
+/// The spec's StreamLogs example is one document, its entries in a `data`
+/// string with a backslash and an `n` between them, not a newline.
 #[test]
 fn logs_read_the_documented_example_shape_too() {
     let host = mock_id("host", "laptop");
-    let wrapped: &'static str = Box::leak(
-        format!("{}\n", json!({"data": format!("{STARTED}\n{HANDSHAKE}")})).into_boxed_str(),
-    );
-    let (url, _, go, _) = serve_stream(wrapped, "");
+    let wrapped = json!({"data": format!("{STARTED}\\n{HANDSHAKE}\\n")});
+    let (url, _, go, _) = serve_stream(format!("{wrapped}\n"), String::new());
     go.send(()).unwrap();
     let out = stdout(&dn(
         &url,
         &["host", "debug", "logs", &host, "--level", "debug"],
     ));
     insta::assert_snapshot!(out);
+}
+
+/// `dn … logs | head -1`: once nobody reads stdout the command is done, not
+/// failed, in either output mode.
+#[test]
+fn logs_stop_without_an_error_when_stdout_closes() {
+    let host = mock_id("host", "laptop");
+    for json in [true, false] {
+        let rest = format!("{HANDSHAKE}\n").repeat(1000);
+        let (url, _, go, _) = serve_stream(format!("{STARTED}\n"), rest);
+        let dir = tempfile::tempdir().unwrap();
+        let mut args = vec!["host", "debug", "logs", &host];
+        if json {
+            args.insert(0, "--json");
+        }
+        let mut child = Command::new(env!("CARGO_BIN_EXE_dn"))
+            .args(&args)
+            .env("DN_CONFIG_DIR", dir.path())
+            .env("DEFINED_API_URL", &url)
+            .env("DEFINED_API_KEY", "fake-test-key")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        assert!(lines.next().unwrap().unwrap().contains("session started"));
+        drop(lines);
+        go.send(()).unwrap();
+
+        let out = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "json={json}: {stderr}");
+        assert!(!stderr.contains("error"), "json={json}: {stderr}");
+    }
 }
 
 #[test]

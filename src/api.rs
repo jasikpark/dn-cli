@@ -450,8 +450,8 @@ impl Client {
         id: &str,
         body: &Value,
         limit: Duration,
-    ) -> Result<Response<Body>> {
-        self.send(&format!("/v1/hosts/{id}/command"), |url, auth| {
+    ) -> Result<impl std::io::Read + use<>> {
+        let res = self.send(&format!("/v1/hosts/{id}/command"), |url, auth| {
             self.agent
                 .post(url)
                 .config()
@@ -459,7 +459,8 @@ impl Client {
                 .build()
                 .header("Authorization", auth)
                 .send_json(body)
-        })
+        })?;
+        Ok(res.into_body().into_reader())
     }
 
     fn post_json(&self, path: &str, body: &Value) -> Result<Value> {

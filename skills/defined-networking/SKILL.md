@@ -399,7 +399,13 @@ Use these when the user asks why two hosts can't reach each other:
   short one and tell the user what you're waiting for. Under `--json` it prints
   **NDJSON**, one log object per line as each arrives, not one document: parse
   it line by line. Handshake lines (`msg` `Handshake message sent` /
-  `received`, with `vpnIp`) show whether the host is reaching a peer.
+  `received`, with `vpnIp`) show whether the host is reaching a peer. A line
+  the host sent that isn't a JSON object comes out as `{"raw": "…"}`. If the
+  stream breaks off partway, the lines so far stand, the last line is the
+  error envelope (it has `errors`, which a log line doesn't) and the exit
+  code is 1; `ERR_TIMEOUT` there means the API kept the stream open past
+  `--duration`. Piping into `head` is fine: the command stops when its
+  reader does.
 
 The host has to be online and connected for any of these to answer; check
 `metadata.lastSeenAt` with `dn host get` if a command fails. Key permission:
