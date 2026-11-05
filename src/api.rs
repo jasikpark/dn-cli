@@ -436,6 +436,12 @@ impl Client {
         self.post_json(&format!("/v1/hosts/{id}/enrollment-code"), &body)
     }
 
+    /// Run one debug command on a host's dnclient (`hosts:debug`). The answer
+    /// is a single `{data}` once the host has replied.
+    pub fn host_command(&self, id: &str, body: &Value) -> Result<Value> {
+        self.post_json(&format!("/v1/hosts/{id}/command"), body)
+    }
+
     fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
         read_json(self.send(path, |url, auth| {
             self.agent

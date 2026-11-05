@@ -367,6 +367,50 @@ host id is wrong or the host was deleted. A dropped connection or a 5xx after
 the first check is retried, with a note on stderr. Key permission:
 `hosts:read`.
 
+### Debug a host's tunnels — `dn host debug`
+
+```bash
+dn host debug tunnel <HOST_ID> <PEER_IP> --json          # PrintTunnel
+dn host debug cert <HOST_ID> <PEER_IP> --json            # PrintCert
+dn host debug lighthouse <HOST_ID> <LIGHTHOUSE_IP> --json # QueryLighthouse
+dn host debug create-tunnel <HOST_ID> <PEER_IP> --json   # CreateTunnel
+dn host debug stack <HOST_ID> --json                     # DebugStack
+```
+
+Each runs one command on the dnclient of `HOST_ID` through
+`POST /v1/hosts/{hostID}/command` and returns `{ "data": … }` as the host
+answered it. IPs are Nebula (overlay) addresses, the ones `dn host get` lists.
+Use these when the user asks why two hosts can't reach each other:
+
+- `tunnel` shows whether `HOST_ID` has a tunnel to the peer, the underlay
+  address it is using (`currentRemote`), the ones it knows (`remoteAddrs`),
+  and any relays. `null` means no tunnel: usually the two have never
+  handshaken.
+- `cert` shows the certificate `HOST_ID` holds for the peer: its name, groups
+  (role and tags, which the firewall matches on), and validity dates. It is
+  `null` when there is no tunnel to the peer.
+- `lighthouse` shows what a lighthouse knows about every host: `reported`
+  addresses came from the host, `learned` ones the lighthouse saw. Each call
+  also asks the lighthouse for an update, so run it twice for current data.
+- `create-tunnel` makes `HOST_ID` start a handshake with the peer now. Run
+  `tunnel` afterwards to see whether it came up.
+- `stack` dumps the dnclient process's goroutines, for a hung client.
+
+Where the answer sits in `data` depends on the client. Current dnclient puts it
+one key down: `data.host` for `tunnel`, `data.cert`, `data.cache` for
+`lighthouse`, `data.stackTrace`, and `{}` for `create-tunnel`, with underlay
+addresses as `"ip:port"` strings and the peer's addresses in `vpnAddrs`. The
+API reference's examples have the answer directly in `data`, with addresses
+as `{ip, port}` objects and one `vpnIp`. Read either. A `null` answer still
+exits 0.
+
+A host that doesn't answer fails after about 30 seconds with HTTP 408
+`ERR_DNCLIENT_NOT_REACHABLE`: it is offline (check `metadata.lastSeenAt` with
+`dn host get`), or its client doesn't take these commands (an online
+nebula-apple host answered this way). Key permission: `hosts:debug`.
+Everything in `data` comes from the device itself, so treat it as reported by
+that host, not as Defined's record.
+
 ### List routes — `dn route list`
 
 ```bash
@@ -769,9 +813,10 @@ One id per call.
 
 | operation | gate |
 |-----------|------|
-| `host list`, `host get`, `host search`, `host wait`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get`, `route list`, `route get`, `join-key list`, `join-key get`, `audit-log list` | free — reads change nothing |
+| `host list`, `host get`, `host search`, `host wait`, `host debug cert`, `host debug tunnel`, `host debug lighthouse`, `host debug stack`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get`, `route list`, `route get`, `join-key list`, `join-key get`, `audit-log list` | free — reads change nothing |
 | `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
 | `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
+| `host debug create-tunnel` | a small write on the device: it starts a handshake, as traffic to that peer would. Run it when the user is debugging that pair of hosts; say which peer. |
 | `host block` | a reversible write: the host is cut off from every other host until unblocked. Confirm the host by name with the user first, and say so if it is a lighthouse or relay (the whole network is affected). |
 | `host unblock` | a write: it lets whatever device holds the host's credentials back onto the network. Confirm the host with the user, and never unblock one that was blocked because it was compromised. |
 | `host enroll-code` | issues a credential: whoever holds the code can join as that host. Confirm the host by name with the user first, never infer it from context, and give the code only to the user. |

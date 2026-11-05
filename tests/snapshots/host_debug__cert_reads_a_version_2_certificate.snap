@@ -1,0 +1,10 @@
+---
+source: tests/host_debug.rs
+expression: stdout(&out)
+---
+Name:         lighthouse-1
+Networks:     10.255.0.1/22, fd00:c0:c0::1/80
+Groups:       role:Lighthouse
+Valid:        2026-10-09T15:15:31-05:00 to 2026-12-08T14:20:31-06:00
+Fingerprint:  4f0c2e9d7b1a86335d0e9a4c1f27b8e6a3d5c7091b2e4f6a8c0d1e3f5a7b9c2d
+Issuer:       c652a897fee60414423b3e5e16951151099558799fc562c37f6ec73c376ecc15
