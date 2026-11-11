@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: host list --name with no such host.
+---
+$ dn host list --name gw-1
+No hosts found.
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

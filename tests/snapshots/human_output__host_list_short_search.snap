@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: A one-character --search fails before any request.
+---
+$ dn host list --search a
+--- stderr
+error: --search: search query must be at least 2 characters
+--- exit 1

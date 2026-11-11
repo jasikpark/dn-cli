@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: "An --ip that isn't an address fails before any request."
+---
+$ dn host list --ip 10.0.0
+--- stderr
+error: --ip: "10.0.0" is not an IPv4 or IPv6 address
+--- exit 1

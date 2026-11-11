@@ -236,3 +236,67 @@ fn an_empty_page_with_more_after_it_does_not_claim_there_are_none() {
         "{stderr}"
     );
 }
+
+/// What each host filter puts on the wire: the command, then the request it
+/// makes. A flag that stops reaching the API, or reaches it under another
+/// parameter name, changes this snapshot.
+#[test]
+fn host_filter_requests() {
+    let (url, seen) = serve();
+    let commands: &[&[&str]] = &[
+        &["host", "list"],
+        &["host", "list", "--search", "web"],
+        &["host", "search", "web"],
+        &["host", "search", "web", "server"],
+        &["host", "list", "--name", "gw-1"],
+        &[
+            "host",
+            "list",
+            "--name",
+            "Build Server",
+            "--network",
+            "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
+        ],
+        &["host", "list", "--ip", "10.0.0.5"],
+        &["host", "list", "--ip", "fd00::5"],
+        &["host", "search", "web", "--ip", "10.0.0.5"],
+        &["host", "list", "--search", "web", "--name", "web-1"],
+        &["host", "list", "--role", "role-MCXBVCRC56AF3ZNM57X7BO5JKE"],
+        &["host", "list", "--role", "null"],
+        &["host", "list", "--tag", "env:prod", "--tag", "site:hou"],
+        &["host", "list", "--lighthouse"],
+        &["host", "list", "--lighthouse=false", "--relay"],
+        &["host", "list", "--blocked"],
+        &[
+            "host",
+            "list",
+            "--update-available",
+            "--platform",
+            "dnclient",
+        ],
+        &["host", "list", "--never-seen"],
+        &["host", "list", "--oidc-user", "any"],
+        &[
+            "host", "list", "--search", "web", "--limit", "50", "--cursor", "n1",
+        ],
+    ];
+    let mut shown = String::new();
+    for args in commands {
+        let before = seen.lock().unwrap().len();
+        let out = dn(&url, args);
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), before + 1, "{args:?} made one request");
+        shown.push_str(&format!(
+            "$ dn {}\nGET {}\n\n",
+            args.join(" "),
+            seen[before]
+        ));
+    }
+    insta::with_settings!({
+        description => "Each host filter flag and the GET /v2/hosts request it makes.",
+        omit_expression => true,
+    }, {
+        insta::assert_snapshot!(shown);
+    });
+}

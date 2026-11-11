@@ -119,6 +119,13 @@ const HOSTS: &str = r#"{"data":[
      "ipAddresses":["100.100.0.39"]}
   ],"metadata":{"hasNextPage":true,"nextCursor":"page-2"}}"#;
 
+const ONE_HOST: &str = r#"{"data":[
+    {"id":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI","name":"Build Server",
+     "ipAddresses":["100.100.0.12","fd00:c0:c0:2966:d3bf:a55d:49a0:6f18"]}
+  ],"metadata":{"hasNextPage":false}}"#;
+
+const ONE_HOST_ROUTES: &[Route] = &[("GET", "/v2/hosts", OK, ONE_HOST)];
+
 const HOST: &str = r#"{"data":{"id":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
     "networkID":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","roleID":"role-MCXBVCRC56AF3ZNM57X7BO5JKE","name":"Build Server",
     "ipAddresses":["100.100.0.12","fd00:c0:c0:2966:d3bf:a55d:49a0:6f18"],
@@ -470,6 +477,12 @@ human_output! {
         HOST_ROUTES, &[], &["host", "list"];
     host_search: "Host search shares the host list table.",
         HOST_ROUTES, &[], &["host", "search", "build"];
+    host_list_search: "host list --search is host search: same table, and the next-page hint keeps the flag.",
+        HOST_ROUTES, &[], &["host", "list", "--search", "build", "--lighthouse=false"];
+    host_list_by_name: "host list --name, with a network, finds at most one host.",
+        ONE_HOST_ROUTES, &[], &["host", "list", "--name", "Build Server", "--network", "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU"];
+    host_list_by_ip: "host list --ip finds the host that holds an overlay address.",
+        ONE_HOST_ROUTES, &[], &["host", "list", "--ip", "fd00:c0:c0:2966:d3bf:a55d:49a0:6f18"];
     host_get: "Host detail view, with the role named and an available client update flagged.",
         HOST_ROUTES, &[], &["host", "get", HOST_ID];
     host_create: "Created host, its enrollment command, and the default-role firewall note.",
@@ -544,6 +557,14 @@ human_output! {
         EMPTY_ROUTES, &[], &["host", "list"];
     host_search_empty: "Host search with no matches names the query.",
         EMPTY_ROUTES, &[], &["host", "search", "nothing"];
+    host_list_search_empty: "host list --search with no matches names the query, as host search does.",
+        EMPTY_ROUTES, &[], &["host", "list", "--search", "nothing"];
+    host_list_by_name_empty: "host list --name with no such host.",
+        EMPTY_ROUTES, &[], &["host", "list", "--name", "gw-1"];
+    host_list_bad_ip: "An --ip that isn't an address fails before any request.",
+        EMPTY_ROUTES, &[], &["host", "list", "--ip", "10.0.0"];
+    host_list_short_search: "A one-character --search fails before any request.",
+        EMPTY_ROUTES, &[], &["host", "list", "--search", "a"];
     network_list_empty: "Network list with no rows.",
         EMPTY_ROUTES, &[], &["network", "list"];
     route_list_empty: "Route list with no rows.",
