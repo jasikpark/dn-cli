@@ -192,30 +192,11 @@ impl Client {
 
     /// One page of hosts (v2 endpoint — dual-stack `ipAddresses`), narrowed
     /// by `filters`: `filter.*` query parameters from `GET /v2/hosts`, such
-    /// as `filter.roleID` or a repeated `filter.tag`.
+    /// as `filter.roleID`, a repeated `filter.tag`, or `filter.search` (a
+    /// case-insensitive substring match across name, IP addresses, role
+    /// name, and tags). Needs the `hosts:list` scope.
     pub fn list_hosts(&self, filters: &[(&str, &str)], page: &PageArgs) -> Result<Value> {
         self.list_page("/v2/hosts", filters, page)
-    }
-
-    /// One page of hosts matching a free-text query. Wraps
-    /// `GET /v2/hosts?filter.search=<q>` — a server-side
-    /// case-insensitive LIKE across a host's name, IP addresses, assigned
-    /// role name, and tags (the same surface the admin panel's host search
-    /// box drives). The API rejects a query shorter than two characters with
-    /// a 400 (`ERR_TOO_SHORT`); callers should preflight to spare the round
-    /// trip. Needs the `hosts:list` scope, same as `list_hosts`. `filters`
-    /// are the same `filter.*` parameters `list_hosts` takes; they AND with
-    /// the search.
-    pub fn search_hosts(
-        &self,
-        query: &str,
-        filters: &[(&str, &str)],
-        page: &PageArgs,
-    ) -> Result<Value> {
-        let mut params = Vec::with_capacity(filters.len() + 1);
-        params.push(("filter.search", query));
-        params.extend_from_slice(filters);
-        self.list_page("/v2/hosts", &params, page)
     }
 
     /// One page of roles.
