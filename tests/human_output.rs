@@ -8,7 +8,9 @@ use std::net::TcpListener;
 use std::process::Command;
 use std::thread;
 
-/// One canned answer: method, path (query string ignored), status line, body.
+/// One canned answer: method, path, status line, body. A path with a `?` must
+/// match the request's query string exactly, so a filtered answer only comes
+/// back when the filter was sent; a path without one ignores the query.
 type Route = (&'static str, &'static str, &'static str, &'static str);
 
 /// Serve `routes`, answering anything unrouted with a 404 that names the
@@ -41,11 +43,17 @@ fn serve(routes: &'static [Route]) -> String {
             let target = parts.next().unwrap_or_default();
             let path = target.split('?').next().unwrap_or_default();
             let unrouted = format!(
-                r#"{{"errors":[{{"code":"ERR_NOT_FOUND","message":"unrouted {method} {path}"}}]}}"#
+                r#"{{"errors":[{{"code":"ERR_NOT_FOUND","message":"unrouted {method} {target}"}}]}}"#
             );
+            // Exact query routes first, so one can sit beside a catch-all.
             let (status, body) = routes
                 .iter()
-                .find(|(m, p, _, _)| *m == method && *p == path)
+                .find(|(m, p, _, _)| *m == method && p.contains('?') && *p == target)
+                .or_else(|| {
+                    routes
+                        .iter()
+                        .find(|(m, p, _, _)| *m == method && *p == path)
+                })
                 .map_or(("404 Not Found", unrouted.as_str()), |(_, _, s, b)| (s, b));
             write!(
                 stream,
@@ -124,7 +132,35 @@ const ONE_HOST: &str = r#"{"data":[
      "ipAddresses":["100.100.0.12","fd00:c0:c0:2966:d3bf:a55d:49a0:6f18"]}
   ],"metadata":{"hasNextPage":false}}"#;
 
-const ONE_HOST_ROUTES: &[Route] = &[("GET", "/v2/hosts", OK, ONE_HOST)];
+const ONE_HOST_MORE: &str = r#"{"data":[
+    {"id":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI","name":"Build Server",
+     "ipAddresses":["100.100.0.12","fd00:c0:c0:2966:d3bf:a55d:49a0:6f18"]}
+  ],"metadata":{"hasNextPage":true,"nextCursor":"page-2"}}"#;
+
+/// The whole account for an unfiltered list, one host for the filters that
+/// single it out, and nothing for any other query.
+const FILTERED_HOST_ROUTES: &[Route] = &[
+    (
+        "GET",
+        "/v2/hosts?filter.name=Build%20Server&filter.networkID=network-Z2B7RBHWBP3VSDAPEWFWKMOMZU&pageSize=500",
+        OK,
+        ONE_HOST,
+    ),
+    (
+        "GET",
+        "/v2/hosts?filter.ipAddress=fd00%3Ac0%3Ac0%3A2966%3Ad3bf%3Aa55d%3A49a0%3A6f18&pageSize=500",
+        OK,
+        ONE_HOST,
+    ),
+    (
+        "GET",
+        "/v2/hosts?filter.search=build&filter.isLighthouse=false&pageSize=500",
+        OK,
+        ONE_HOST_MORE,
+    ),
+    ("GET", "/v2/hosts?pageSize=500", OK, HOSTS),
+    ("GET", "/v2/hosts", OK, EMPTY_PAGE),
+];
 
 const HOST: &str = r#"{"data":{"id":"host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI",
     "networkID":"network-Z2B7RBHWBP3VSDAPEWFWKMOMZU","roleID":"role-MCXBVCRC56AF3ZNM57X7BO5JKE","name":"Build Server",
@@ -478,11 +514,15 @@ human_output! {
     host_search: "Host search shares the host list table.",
         HOST_ROUTES, &[], &["host", "search", "build"];
     host_list_search: "host list --search is host search: same table, and the next-page hint keeps the flag.",
-        HOST_ROUTES, &[], &["host", "list", "--search", "build", "--lighthouse=false"];
+        FILTERED_HOST_ROUTES, &[], &["host", "list", "--search", "build", "--lighthouse=false"];
+    host_search_filtered: "host search with the same filter gets the same answer.",
+        FILTERED_HOST_ROUTES, &[], &["host", "search", "build", "--lighthouse=false"];
+    host_list_unfiltered: "The same account with no filter: every host.",
+        FILTERED_HOST_ROUTES, &[], &["host", "list"];
     host_list_by_name: "host list --name, with a network, finds at most one host.",
-        ONE_HOST_ROUTES, &[], &["host", "list", "--name", "Build Server", "--network", "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU"];
+        FILTERED_HOST_ROUTES, &[], &["host", "list", "--name", "Build Server", "--network", "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU"];
     host_list_by_ip: "host list --ip finds the host that holds an overlay address.",
-        ONE_HOST_ROUTES, &[], &["host", "list", "--ip", "fd00:c0:c0:2966:d3bf:a55d:49a0:6f18"];
+        FILTERED_HOST_ROUTES, &[], &["host", "list", "--ip", "fd00:c0:c0:2966:d3bf:a55d:49a0:6f18"];
     host_get: "Host detail view, with the role named and an available client update flagged.",
         HOST_ROUTES, &[], &["host", "get", HOST_ID];
     host_create: "Created host, its enrollment command, and the default-role firewall note.",
@@ -560,7 +600,7 @@ human_output! {
     host_list_search_empty: "host list --search with no matches names the query, as host search does.",
         EMPTY_ROUTES, &[], &["host", "list", "--search", "nothing"];
     host_list_by_name_empty: "host list --name with no such host.",
-        EMPTY_ROUTES, &[], &["host", "list", "--name", "gw-1"];
+        FILTERED_HOST_ROUTES, &[], &["host", "list", "--name", "gw-1"];
     host_list_bad_ip: "An --ip that isn't an address fails before any request.",
         EMPTY_ROUTES, &[], &["host", "list", "--ip", "10.0.0"];
     host_list_short_search: "A one-character --search fails before any request.",
