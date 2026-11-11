@@ -595,42 +595,38 @@ fn profile_names_must_be_lowercase() {
     assert_eq!(env.keyring_entries(), json!({}));
 }
 
-/// A login whose keyring write succeeds but whose auth.json save fails, in
-/// a config dir made read-only after `setup` runs.
-#[cfg(unix)]
+/// A login whose keyring write succeeds but whose auth.json save fails,
+/// because a directory sits where `auth.json.lock` goes once `setup` has run.
+/// Opening a directory for writing fails for every user, root included; a
+/// read-only config dir would not stop root, which is what containers and
+/// some CI runners run tests as.
 fn login_with_unwritable_config(env: &Env, setup: impl FnOnce(&Env)) -> Output {
-    use std::os::unix::fs::PermissionsExt;
-
     let config = env.dir.path().join("config");
     fs::create_dir(&config).unwrap();
     let config_env = Env {
         dir: tempfile::tempdir_in(&config).unwrap(),
     };
     setup(&config_env);
-    let mut readonly = fs::metadata(config_env.dir.path()).unwrap().permissions();
-    readonly.set_mode(0o555);
-    fs::set_permissions(config_env.dir.path(), readonly).unwrap();
-    let output = env.run(
+    fs::create_dir(config_env.dir.path().join("auth.json.lock")).unwrap();
+    env.run(
         &["auth", "login", "--key-stdin", "--no-verify", "--json"],
         "new-key",
         &[("DN_CONFIG_DIR", config_env.dir.path().to_str().unwrap())],
-    );
-    let mut writable = fs::metadata(config_env.dir.path()).unwrap().permissions();
-    writable.set_mode(0o755);
-    fs::set_permissions(config_env.dir.path(), writable).unwrap();
-    output
+    )
 }
 
-#[cfg(unix)]
 #[test]
 fn a_failed_save_removes_a_new_keyring_entry() {
     let env = Env::new();
     let output = login_with_unwritable_config(&env, |_| {});
     assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        error_message(&output).contains("auth.json.lock"),
+        "{output:?}"
+    );
     assert_eq!(env.keyring_entries(), json!({}));
 }
 
-#[cfg(unix)]
 #[test]
 fn a_failed_save_restores_the_key_an_existing_profile_uses() {
     let env = Env::new();
