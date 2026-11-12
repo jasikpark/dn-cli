@@ -1,6 +1,6 @@
 ---
 name: defined-networking
-description: View and manage a Defined Networking (Nebula mesh VPN) network with the `dn` CLI. Use when the user asks about their Defined Networking or Nebula hosts, lighthouses, relays, network, or roles/tags — e.g. "list my hosts", "what's on my mesh network", "is my laptop online" — or wants to add/set up/enroll a new device on their network, re-enroll, block, or unblock one, remove one from it, enroll many machines with one reusable token (a join key / join token, e.g. for CI runners or containers), delete a role, tag, or network, or find out who changed something and when (the audit log).
+description: View and manage a Defined Networking (Nebula mesh VPN) network with the `dn` CLI. Use when the user asks about their Defined Networking or Nebula hosts, lighthouses, relays, network, or roles/tags — e.g. "list my hosts", "what's on my mesh network", "is my laptop online", "find the host called web-1", "which host has 10.0.0.5", "search my hosts for prod" — or wants to add/set up/enroll a new device on their network, re-enroll, block, or unblock one, remove one from it, enroll many machines with one reusable token (a join key / join token, e.g. for CI runners or containers), delete a role, tag, or network, or find out who changed something and when (the audit log).
 ---
 
 # Defined Networking (`dn`) CLI
@@ -148,6 +148,15 @@ Use this to answer questions like "what hosts do I have", "is <device> online"
 (check `metadata.lastSeenAt`), "which hosts need an update"
 (`metadata.updateAvailable`), or "which are lighthouses".
 
+To **find** a host, don't fetch the list and sift it; ask the API:
+
+| you have | run |
+|----------|-----|
+| part of a name, IP, role name, or tag | `dn host list --search <QUERY>` (or `dn host search <QUERY>`, the same thing) |
+| the exact name | `dn host list --name <NAME>` |
+| the exact overlay IP | `dn host list --ip <ADDRESS>` |
+| the host id | `dn host get <HOST_ID>` |
+
 #### Filters
 
 Every filter is applied server-side (the `filter.*` parameters of
@@ -156,6 +165,9 @@ JSON yourself. Flags combine with AND.
 
 | flag | keeps |
 |------|-------|
+| `--search <QUERY>` | hosts whose name, an IP, role name, or a tag contains the text (case-insensitive, at least two characters); see `dn host search` below |
+| `--name <NAME>` | the host with exactly that name (case-sensitive); names are unique per network, so with `--network` at most one host |
+| `--ip <ADDRESS>` | the host with that overlay IP, IPv4 or IPv6 in any standard form; with `--network` at most one host |
 | `--role <ROLE_ID>` | hosts assigned that role; `--role any` hosts with any role, `--role null` hosts with none |
 | `--network <NETWORK_ID>` | hosts on that network |
 | `--tag key:value` | hosts carrying that tag; repeat it to require several |
@@ -166,6 +178,9 @@ JSON yourself. Flags combine with AND.
 | `--oidc-user <USER_ID>` | hosts enrolled by that endpoint OIDC user; `any` / `null` as for `--role` |
 
 ```bash
+dn host list --search web --json                     # anything mentioning "web"
+dn host list --name gw-1 --json                      # the host named exactly gw-1
+dn host list --ip 10.0.0.5 --json                    # whose address is this?
 dn host list --role null --json                      # hosts still on the default role
 dn host list --tag env:prod --tag region:us-east-1   # both tags
 dn host list --update-available --platform dnclient  # what needs upgrading
@@ -174,7 +189,8 @@ dn host list --lighthouse=false --never-seen         # enrolled but never came u
 
 Ids are checked for shape locally (`--role notarole` fails before any
 request, naming the shape expected); whether they exist is up to the API.
-`--tag` must be `key:value`.
+`--tag` must be `key:value`, and `--ip` must parse as an IP address. An empty
+`data` array from `--name` or `--ip` means no host has it.
 
 ### Show one host — `dn host get`
 
@@ -192,16 +208,18 @@ instead. Key permission: `hosts:read`.
 
 ```bash
 dn host search <QUERY> --json
+dn host list --search <QUERY> --json    # identical
 ```
 
-Returns the same `{ "data": [ host… ], "metadata": { … } }` shape as
+`host search` is `host list` with `--search` as a positional argument; both
+send the same request. Returns the same `{ "data": [ host… ], "metadata": { … } }` shape as
 `host list`, but only the hosts matching `<QUERY>`. The match is server-side
 (`GET /v2/hosts?filter.search=`): a case-insensitive substring across each
 host's `name`, `ipAddresses`, assigned role name, and `tags`. The query must be
 at least two characters — a shorter one fails locally before any request. Prefer
 this over pulling the full list and filtering yourself when the user names a
 specific host, IP, role, or tag. It takes the same filter flags as `host list`
-(`--role`, `--tag`, `--lighthouse`, …), ANDed with the query. Key permission:
+(`--name`, `--ip`, `--role`, `--tag`, `--lighthouse`, …), ANDed with the query. Key permission:
 `hosts:list`.
 
 ### Create a host — `dn host create`

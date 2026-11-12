@@ -1,0 +1,63 @@
+---
+source: tests/lists.rs
+description: Each host filter flag and the GET /v2/hosts request it makes.
+---
+$ dn host list
+GET /v2/hosts?pageSize=500
+
+$ dn host list --search web
+GET /v2/hosts?filter.search=web&pageSize=500
+
+$ dn host search web
+GET /v2/hosts?filter.search=web&pageSize=500
+
+$ dn host search web server
+GET /v2/hosts?filter.search=web%20server&pageSize=500
+
+$ dn host list --name gw-1
+GET /v2/hosts?filter.name=gw-1&pageSize=500
+
+$ dn host list --name Build Server --network network-Z2B7RBHWBP3VSDAPEWFWKMOMZU
+GET /v2/hosts?filter.name=Build%20Server&filter.networkID=network-Z2B7RBHWBP3VSDAPEWFWKMOMZU&pageSize=500
+
+$ dn host list --ip 10.0.0.5
+GET /v2/hosts?filter.ipAddress=10.0.0.5&pageSize=500
+
+$ dn host list --ip fd00::5
+GET /v2/hosts?filter.ipAddress=fd00%3A%3A5&pageSize=500
+
+$ dn host search web --ip 10.0.0.5
+GET /v2/hosts?filter.search=web&filter.ipAddress=10.0.0.5&pageSize=500
+
+$ dn host list --search web --name web-1
+GET /v2/hosts?filter.search=web&filter.name=web-1&pageSize=500
+
+$ dn host list --role role-MCXBVCRC56AF3ZNM57X7BO5JKE
+GET /v2/hosts?filter.roleID=role-MCXBVCRC56AF3ZNM57X7BO5JKE&pageSize=500
+
+$ dn host list --role null
+GET /v2/hosts?filter.roleID=null&pageSize=500
+
+$ dn host list --tag env:prod --tag site:hou
+GET /v2/hosts?filter.tag=env%3Aprod&filter.tag=site%3Ahou&pageSize=500
+
+$ dn host list --lighthouse
+GET /v2/hosts?filter.isLighthouse=true&pageSize=500
+
+$ dn host list --lighthouse=false --relay
+GET /v2/hosts?filter.isLighthouse=false&filter.isRelay=true&pageSize=500
+
+$ dn host list --blocked
+GET /v2/hosts?filter.isBlocked=true&pageSize=500
+
+$ dn host list --update-available --platform dnclient
+GET /v2/hosts?filter.metadata.updateAvailable=true&filter.metadata.platform=dnclient&pageSize=500
+
+$ dn host list --never-seen
+GET /v2/hosts?filter.metadata.lastSeenAt=null&pageSize=500
+
+$ dn host list --oidc-user any
+GET /v2/hosts?filter.endpointOIDCUserID=any&pageSize=500
+
+$ dn host list --search web --limit 50 --cursor n1
+GET /v2/hosts?filter.search=web&cursor=n1&pageSize=50

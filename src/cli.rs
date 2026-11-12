@@ -12,6 +12,11 @@ const API_DOCS_HELP: &str = "\
 API reference: https://www.defined.net/docs/api/
 OpenAPI spec:  https://www.defined.net/docs/openapi.yaml";
 
+/// Help heading for the flags every command takes. Without their own
+/// heading clap sorts them in among a command's own options (`--profile`
+/// landed between `--name` and `--ip` in `dn host list --help`).
+const GLOBAL_OPTIONS: &str = "Global options";
+
 #[derive(Parser)]
 #[command(
     name = "dn",
@@ -21,11 +26,11 @@ OpenAPI spec:  https://www.defined.net/docs/openapi.yaml";
 )]
 pub struct Cli {
     /// Output machine-readable JSON (including errors) instead of human tables
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = GLOBAL_OPTIONS)]
     pub json: bool,
     /// Profile to run as (see `dn auth list`); defaults to `DN_PROFILE`, then
     /// the default profile
-    #[arg(long, global = true, value_name = "NAME")]
+    #[arg(long, global = true, value_name = "NAME", help_heading = GLOBAL_OPTIONS)]
     pub profile: Option<String>,
     #[command(subcommand)]
     pub command: Command,
@@ -522,13 +527,16 @@ pub struct AuthLoginArgs {
 
 #[derive(Subcommand)]
 pub enum HostCommand {
-    /// List hosts, optionally narrowed by role, network, tag, kind, or
-    /// client state. Every filter is applied server-side.
+    /// List hosts, optionally narrowed by exact name or IP, a search term,
+    /// role, network, tag, kind, or client state. Every filter is applied
+    /// server-side.
     List(HostListArgs),
     /// Show one host: its addresses, role, tags, and when it was last seen
     Get(HostGetArgs),
     /// Search hosts by name, IP, role name, or tag (server-side, whole
-    /// account). The query must be at least two characters.
+    /// account). The query must be at least two characters. Takes the same
+    /// filters as `host list`; `dn host list --search <QUERY>` is the same
+    /// search.
     Search(HostSearchArgs),
     /// Create a host (or lighthouse / relay) and an enrollment code in one
     /// transaction. Prints the OTP to give to `dnclient enroll -code`.
@@ -697,9 +705,16 @@ pub struct HostEnrollCodeArgs {
 }
 
 /// Arguments for `dn host list`: the `filter.*` query parameters of
-/// `GET /v2/hosts` plus paging.
+/// `GET /v2/hosts` plus paging. `--search` is here as well as on
+/// `dn host search` so it shows up next to the other filters in
+/// `dn host list --help`.
 #[derive(Args, Default)]
 pub struct HostListArgs {
+    /// Only hosts whose name, IP address, role name, or a tag contains
+    /// this text (case-insensitive, at least two characters). The same
+    /// search as `dn host search <QUERY>`.
+    #[arg(long, value_name = "QUERY", value_parser = non_blank)]
+    pub search: Option<String>,
     #[command(flatten)]
     pub filters: HostFilterArgs,
     #[command(flatten)]
@@ -715,6 +730,14 @@ pub struct HostListArgs {
 /// flag off means "don't filter on it".
 #[derive(Args, Clone, Debug, Default)]
 pub struct HostFilterArgs {
+    /// Only the host with exactly this name (case-sensitive). Names are
+    /// unique per network, so add `--network` to get at most one host.
+    #[arg(long, value_name = "NAME", value_parser = non_blank)]
+    pub name: Option<String>,
+    /// Only the host with this overlay IP address (IPv4 or IPv6, in any
+    /// standard form). Add `--network` to get at most one host.
+    #[arg(long, value_name = "ADDRESS", value_parser = non_blank)]
+    pub ip: Option<String>,
     /// Only hosts assigned this role (role-…). `any` keeps hosts that have
     /// a role, `null` hosts that have none.
     #[arg(long, value_name = "ROLE_ID|any|null", value_parser = non_blank)]

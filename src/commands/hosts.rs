@@ -16,17 +16,74 @@ pub(crate) use get::role_name;
 pub use lifecycle::{hosts_block, hosts_enroll_code, hosts_unblock};
 pub use wait::{hosts_wait, validate_wait_preflight};
 
+use std::net::IpAddr;
+
 use anyhow::{anyhow, bail};
 use serde_json::Value;
 
 use crate::api::Client;
-use crate::cli::{HostFilterArgs, HostListArgs, HostSearchArgs};
+use crate::cli::{HostFilterArgs, HostListArgs, HostSearchArgs, PageArgs};
 use crate::ids::validate_id_shape;
 use crate::output::{OutputMode, joined_field, print_list, sanitize_for_display, str_field};
 
 pub fn hosts_list(client: &Client, args: &HostListArgs, output: OutputMode) -> anyhow::Result<()> {
-    let res = client.list_hosts(&host_filters(&args.filters), &args.page)?;
-    render_hosts(&res, output, "No hosts found.")
+    list_hosts(
+        client,
+        args.search.as_deref(),
+        &args.filters,
+        &args.page,
+        output,
+    )
+}
+
+/// `dn host search <QUERY>` is `dn host list --search <QUERY>` with the
+/// query as a positional: the same request, the same rendering.
+pub fn hosts_search(
+    client: &Client,
+    args: &HostSearchArgs,
+    output: OutputMode,
+) -> anyhow::Result<()> {
+    list_hosts(
+        client,
+        Some(&search_query(args)),
+        &args.filters,
+        &args.page,
+        output,
+    )
+}
+
+/// One page of `GET /v2/hosts`, narrowed by `filter.search` when there is a
+/// search term and by every other filter given.
+fn list_hosts(
+    client: &Client,
+    search: Option<&str>,
+    filters: &HostFilterArgs,
+    page: &PageArgs,
+    output: OutputMode,
+) -> anyhow::Result<()> {
+    let res = client.list_hosts(&host_filters(search, filters), page)?;
+    let empty = empty_message(search, filters);
+    print_list(&res, output, &empty, &HOST_HEADERS, host_rows)
+}
+
+/// What an empty page prints. It names what was asked for when the request
+/// named something specific (a search term, a name, an address), so a miss
+/// reads as "nothing has that" and not as "you have no hosts".
+fn empty_message(search: Option<&str>, filters: &HostFilterArgs) -> String {
+    let quoted = |s: &str| format!("\"{}\"", sanitize_for_display(s));
+    match (search, &filters.name, &filters.ip) {
+        (Some(query), _, _) => format!("No hosts match {}.", quoted(query)),
+        (None, Some(name), Some(ip)) => format!(
+            "No host is named {} with the address {}.",
+            quoted(name),
+            sanitize_for_display(ip)
+        ),
+        (None, Some(name), None) => format!("No host is named {}.", quoted(name)),
+        (None, None, Some(ip)) => {
+            format!("No host has the address {}.", sanitize_for_display(ip))
+        }
+        (None, None, None) => "No hosts found.".to_string(),
+    }
 }
 
 /// Reject filter values the API would reject anyway, before credentials are
@@ -34,7 +91,20 @@ pub fn hosts_list(client: &Client, args: &HostListArgs, output: OutputMode) -> a
 /// (`filter.roleID` and friends also accept `any` / `null`); tags must be
 /// `key:value`. The API stays the authority on whether an id exists.
 pub fn validate_list_preflight(args: &HostListArgs) -> anyhow::Result<()> {
+    if let Some(query) = &args.search {
+        validate_search_length(query).map_err(|e| anyhow!("--search: {e}"))?;
+    }
     validate_filters(&args.filters)
+}
+
+/// The API answers a `filter.search` shorter than two characters with 400
+/// `ERR_TOO_SHORT`. Counted in `char`s, not bytes, so a two-emoji query
+/// passes.
+fn validate_search_length(query: &str) -> anyhow::Result<()> {
+    if query.chars().count() < 2 {
+        bail!("search query must be at least 2 characters");
+    }
+    Ok(())
 }
 
 fn validate_filters(filters: &HostFilterArgs) -> anyhow::Result<()> {
@@ -57,17 +127,38 @@ fn validate_filters(filters: &HostFilterArgs) -> anyhow::Result<()> {
     for tag in &filters.tag {
         parse_tag(tag).map_err(|e| anyhow!("--tag: {e}"))?;
     }
+    if let Some(ip) = &filters.ip
+        && ip.parse::<IpAddr>().is_err()
+    {
+        bail!(
+            "--ip: \"{}\" is not an IPv4 or IPv6 address",
+            sanitize_for_display(ip)
+        );
+    }
     Ok(())
 }
 
-/// The `filter.*` query parameters for a set of host filters, in flag order.
+/// The `filter.*` query parameters for a search term and a set of host
+/// filters: `filter.search` first, then the rest in flag order.
 /// Booleans serialise as `true` / `false`; `--never-seen` is the API's
 /// `filter.metadata.lastSeenAt=null`; `--tag` repeats, one parameter per tag.
-fn host_filters(filters: &HostFilterArgs) -> Vec<(&'static str, &str)> {
+fn host_filters<'a>(
+    search: Option<&'a str>,
+    filters: &'a HostFilterArgs,
+) -> Vec<(&'static str, &'a str)> {
     fn flag(b: bool) -> &'static str {
         if b { "true" } else { "false" }
     }
     let mut params: Vec<(&'static str, &str)> = Vec::new();
+    if let Some(search) = search {
+        params.push(("filter.search", search));
+    }
+    if let Some(name) = &filters.name {
+        params.push(("filter.name", name));
+    }
+    if let Some(ip) = &filters.ip {
+        params.push(("filter.ipAddress", ip));
+    }
     if let Some(role) = &filters.role {
         params.push(("filter.roleID", role));
     }
@@ -110,34 +201,10 @@ fn search_query(args: &HostSearchArgs) -> String {
 
 /// Reject a query the API would reject anyway (fewer than two characters →
 /// 400 `ERR_TOO_SHORT`), before credentials are resolved or the wire is
-/// touched — the same preflight contract as create/edit. Two chars is counted
-/// in `char`s, not bytes, so a two-emoji query passes.
+/// touched — the same preflight contract as create/edit.
 pub fn validate_search_preflight(args: &HostSearchArgs) -> anyhow::Result<()> {
-    let query = search_query(args);
-    if query.chars().count() < 2 {
-        bail!("search query must be at least 2 characters");
-    }
+    validate_search_length(&search_query(args))?;
     validate_filters(&args.filters)
-}
-
-pub fn hosts_search(
-    client: &Client,
-    args: &HostSearchArgs,
-    output: OutputMode,
-) -> anyhow::Result<()> {
-    let query = search_query(args);
-    let res = client.search_hosts(&query, &host_filters(&args.filters), &args.page)?;
-    render_hosts(
-        &res,
-        output,
-        &format!("No hosts match \"{}\".", sanitize_for_display(&query)),
-    )
-}
-
-/// Render a hosts envelope. Shared by `host list` and `host search` so the
-/// two can't drift on columns.
-fn render_hosts(res: &Value, output: OutputMode, empty_msg: &str) -> anyhow::Result<()> {
-    print_list(res, output, empty_msg, &HOST_HEADERS, host_rows)
 }
 
 const HOST_HEADERS: [&str; 3] = ["ID", "NAME", "IP ADDRESSES"];
@@ -220,7 +287,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::cli::{Cli, Command, HostCommand, PageArgs};
+    use crate::cli::{Cli, Command, HostCommand};
 
     #[test]
     fn host_fields_extracts_present_columns() {
@@ -292,12 +359,15 @@ mod tests {
 
     #[test]
     fn no_filter_flags_send_no_filter_params() {
-        assert!(host_filters(&list_args(&[]).filters).is_empty());
+        assert!(host_filters(None, &list_args(&[]).filters).is_empty());
     }
 
     #[test]
     fn every_filter_flag_maps_to_its_query_parameter() {
         let args = list_args(&[
+            "--search=web",
+            "--name=gw-1",
+            "--ip=fd00::5",
             "--role=role-6TZVMAEXCQB4WXWTY5XY6HG7DI",
             "--network=network-CBLAIQENR5J7VAXT4HJ5ZALNXA",
             "--tag=env:prod",
@@ -311,8 +381,11 @@ mod tests {
             "--oidc-user=any",
         ]);
         assert_eq!(
-            host_filters(&args.filters),
+            host_filters(args.search.as_deref(), &args.filters),
             [
+                ("filter.search", "web"),
+                ("filter.name", "gw-1"),
+                ("filter.ipAddress", "fd00::5"),
                 ("filter.roleID", "role-6TZVMAEXCQB4WXWTY5XY6HG7DI"),
                 ("filter.networkID", "network-CBLAIQENR5J7VAXT4HJ5ZALNXA"),
                 ("filter.tag", "env:prod"),
@@ -337,6 +410,10 @@ mod tests {
             ["--role=role-ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
             ["--network=network-01234567890123456789012345"],
             ["--oidc-user=eoidcuser-ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
+            ["--ip=10.0.0.5"],
+            ["--ip=fd00:0:0:0:0:0:0:5"],
+            ["--search=ab"],
+            ["--search=日本"],
         ] {
             assert!(
                 validate_list_preflight(&list_args(&argv)).is_ok(),
@@ -371,6 +448,9 @@ mod tests {
                 "endpoint OIDC user id contains invalid character '?'",
             ),
             (["--tag=noseparator"], "--tag: "),
+            (["--ip=10.0.0"], "--ip: \"10.0.0\" is not an IPv4 or IPv6"),
+            (["--ip=gw-1"], "--ip: "),
+            (["--search=a"], "--search: search query must be at least 2"),
         ] {
             let err = validate_list_preflight(&list_args(&argv)).unwrap_err();
             assert!(err.to_string().contains(want), "{argv:?}: {err}");
@@ -433,17 +513,29 @@ mod tests {
     }
 
     #[test]
-    fn render_hosts_json_passes_the_envelope_through() {
-        let res = json!({"data": [{"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI"}], "metadata": {"hasNextPage": false}});
-        // Just assert it doesn't error on the JSON path; the payload is the
-        // client's, rendered verbatim.
-        assert!(render_hosts(&res, OutputMode::Json, "unused").is_ok());
-    }
-
-    #[test]
-    fn render_hosts_human_empty_uses_the_supplied_message() {
-        let res = json!({"data": [], "metadata": {}});
-        assert!(render_hosts(&res, OutputMode::Human, "No hosts match \"x\".").is_ok());
+    fn an_empty_page_names_what_was_asked_for() {
+        for (argv, want) in [
+            (&[][..], "No hosts found."),
+            (&["--role=null"][..], "No hosts found."),
+            (&["--search=web"][..], "No hosts match \"web\"."),
+            (
+                &["--search=web", "--name=gw-1"][..],
+                "No hosts match \"web\".",
+            ),
+            (&["--name=gw-1"][..], "No host is named \"gw-1\"."),
+            (&["--ip=10.0.0.5"][..], "No host has the address 10.0.0.5."),
+            (
+                &["--name=gw-1", "--ip=fd00::5"][..],
+                "No host is named \"gw-1\" with the address fd00::5.",
+            ),
+        ] {
+            let args = list_args(argv);
+            assert_eq!(
+                empty_message(args.search.as_deref(), &args.filters),
+                want,
+                "{argv:?}"
+            );
+        }
     }
 
     #[test]

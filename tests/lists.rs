@@ -157,6 +157,50 @@ fn host_search_takes_the_same_filters_as_host_list() {
 }
 
 #[test]
+fn host_list_finds_a_host_by_exact_name_or_ip() {
+    let (url, seen) = serve();
+    let network = mock_id("network", "lab");
+    let out = dn(
+        &url,
+        &["host", "list", "--name", "gw 1", "--network", &network],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let out = dn(&url, &["host", "search", "gw", "--ip", "fd00::5"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            format!("/v2/hosts?filter.name=gw%201&filter.networkID={network}&pageSize=500"),
+            "/v2/hosts?filter.search=gw&filter.ipAddress=fd00%3A%3A5&pageSize=500".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn host_list_search_is_the_same_request_as_host_search() {
+    let (url, seen) = serve();
+    let out = dn(&url, &["host", "list", "--search", "web", "--relay=false"]);
+    assert!(out.status.success(), "{out:?}");
+    let out = dn(&url, &["host", "search", "web", "--relay=false"]);
+    assert!(out.status.success(), "{out:?}");
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen[0],
+        "/v2/hosts?filter.search=web&filter.isRelay=false&pageSize=500"
+    );
+    assert_eq!(seen[0], seen[1]);
+}
+
+#[test]
+fn a_host_list_search_with_no_matches_names_the_query() {
+    let (url, _seen) = serve_body(r#"{"data":[],"metadata":{}}"#);
+    let out = dn(&url, &["host", "list", "--search", "nothing"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("No hosts match \"nothing\"."), "{stdout}");
+}
+
+#[test]
 fn a_malformed_host_filter_fails_before_any_request() {
     let (url, seen) = serve();
     let out = dn(&url, &["host", "list", "--tag", "no-separator"]);
@@ -191,4 +235,68 @@ fn an_empty_page_with_more_after_it_does_not_claim_there_are_none() {
         )),
         "{stderr}"
     );
+}
+
+/// What each host filter puts on the wire: the command, then the request it
+/// makes. A flag that stops reaching the API, or reaches it under another
+/// parameter name, changes this snapshot.
+#[test]
+fn host_filter_requests() {
+    let (url, seen) = serve();
+    let commands: &[&[&str]] = &[
+        &["host", "list"],
+        &["host", "list", "--search", "web"],
+        &["host", "search", "web"],
+        &["host", "search", "web", "server"],
+        &["host", "list", "--name", "gw-1"],
+        &[
+            "host",
+            "list",
+            "--name",
+            "Build Server",
+            "--network",
+            "network-Z2B7RBHWBP3VSDAPEWFWKMOMZU",
+        ],
+        &["host", "list", "--ip", "10.0.0.5"],
+        &["host", "list", "--ip", "fd00::5"],
+        &["host", "search", "web", "--ip", "10.0.0.5"],
+        &["host", "list", "--search", "web", "--name", "web-1"],
+        &["host", "list", "--role", "role-MCXBVCRC56AF3ZNM57X7BO5JKE"],
+        &["host", "list", "--role", "null"],
+        &["host", "list", "--tag", "env:prod", "--tag", "site:hou"],
+        &["host", "list", "--lighthouse"],
+        &["host", "list", "--lighthouse=false", "--relay"],
+        &["host", "list", "--blocked"],
+        &[
+            "host",
+            "list",
+            "--update-available",
+            "--platform",
+            "dnclient",
+        ],
+        &["host", "list", "--never-seen"],
+        &["host", "list", "--oidc-user", "any"],
+        &[
+            "host", "list", "--search", "web", "--limit", "50", "--cursor", "n1",
+        ],
+    ];
+    let mut shown = String::new();
+    for args in commands {
+        let before = seen.lock().unwrap().len();
+        let out = dn(&url, args);
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), before + 1, "{args:?} made one request");
+        shown.push_str(&format!(
+            "$ dn {}\nGET {}\n\n",
+            args.join(" "),
+            seen[before]
+        ));
+    }
+    insta::with_settings!({
+        description => "Each host filter flag and the GET /v2/hosts request it makes.",
+        omit_expression => true,
+    }, {
+        insta::assert_snapshot!(shown);
+    });
 }

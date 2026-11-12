@@ -1,0 +1,8 @@
+---
+source: tests/human_output.rs
+description: "host list --search with no matches names the query, as host search does."
+---
+$ dn host list --search nothing
+No hosts match "nothing".
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)

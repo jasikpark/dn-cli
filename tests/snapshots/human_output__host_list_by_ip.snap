@@ -1,0 +1,9 @@
+---
+source: tests/human_output.rs
+description: host list --ip finds the host that holds an overlay address.
+---
+$ dn host list --ip fd00:c0:c0:2966:d3bf:a55d:49a0:6f18
+ID                               NAME          IP ADDRESSES
+host-KQ4ZB7MXRWEPNA2C5TJ3YVHLDI  Build Server  100.100.0.12, fd00:c0:c0:2966:d3bf:a55d:49a0:6f18
+--- stderr
+note: using <API_URL> (from DEFINED_API_URL)
