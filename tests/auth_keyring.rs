@@ -629,8 +629,8 @@ fn a_failed_save_removes_a_new_keyring_entry() {
     assert_eq!(env.keyring_entries(), json!({}));
 }
 
-/// The same rollback when the save gets past the lock and fails at writing
-/// auth.json itself.
+/// A save that takes the lock and then fails at replacing auth.json rolls
+/// the keyring back too.
 #[test]
 fn a_save_that_fails_after_the_lock_removes_a_new_keyring_entry() {
     let env = Env::new();
