@@ -12,6 +12,11 @@ const API_DOCS_HELP: &str = "\
 API reference: https://www.defined.net/docs/api/
 OpenAPI spec:  https://www.defined.net/docs/openapi.yaml";
 
+/// Help heading for the flags every command takes. Without their own
+/// heading clap sorts them in among a command's own options (`--profile`
+/// landed between `--name` and `--ip` in `dn host list --help`).
+const GLOBAL_OPTIONS: &str = "Global options";
+
 #[derive(Parser)]
 #[command(
     name = "dn",
@@ -21,11 +26,11 @@ OpenAPI spec:  https://www.defined.net/docs/openapi.yaml";
 )]
 pub struct Cli {
     /// Output machine-readable JSON (including errors) instead of human tables
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = GLOBAL_OPTIONS)]
     pub json: bool,
     /// Profile to run as (see `dn auth list`); defaults to `DN_PROFILE`, then
     /// the default profile
-    #[arg(long, global = true, value_name = "NAME")]
+    #[arg(long, global = true, value_name = "NAME", help_heading = GLOBAL_OPTIONS)]
     pub profile: Option<String>,
     #[command(subcommand)]
     pub command: Command,

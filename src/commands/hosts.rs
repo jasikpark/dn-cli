@@ -62,11 +62,28 @@ fn list_hosts(
     output: OutputMode,
 ) -> anyhow::Result<()> {
     let res = client.list_hosts(&host_filters(search, filters), page)?;
-    let empty = match search {
-        Some(query) => format!("No hosts match \"{}\".", sanitize_for_display(query)),
-        None => "No hosts found.".to_string(),
-    };
+    let empty = empty_message(search, filters);
     print_list(&res, output, &empty, &HOST_HEADERS, host_rows)
+}
+
+/// What an empty page prints. It names what was asked for when the request
+/// named something specific (a search term, a name, an address), so a miss
+/// reads as "nothing has that" and not as "you have no hosts".
+fn empty_message(search: Option<&str>, filters: &HostFilterArgs) -> String {
+    let quoted = |s: &str| format!("\"{}\"", sanitize_for_display(s));
+    match (search, &filters.name, &filters.ip) {
+        (Some(query), _, _) => format!("No hosts match {}.", quoted(query)),
+        (None, Some(name), Some(ip)) => format!(
+            "No host is named {} with the address {}.",
+            quoted(name),
+            sanitize_for_display(ip)
+        ),
+        (None, Some(name), None) => format!("No host is named {}.", quoted(name)),
+        (None, None, Some(ip)) => {
+            format!("No host has the address {}.", sanitize_for_display(ip))
+        }
+        (None, None, None) => "No hosts found.".to_string(),
+    }
 }
 
 /// Reject filter values the API would reject anyway, before credentials are
@@ -493,6 +510,32 @@ mod tests {
     fn search_preflight_counts_characters_not_bytes() {
         // Two multi-byte chars are two characters, not four+ bytes' worth.
         assert!(validate_search_preflight(&search_args(&["日本"])).is_ok());
+    }
+
+    #[test]
+    fn an_empty_page_names_what_was_asked_for() {
+        for (argv, want) in [
+            (&[][..], "No hosts found."),
+            (&["--role=null"][..], "No hosts found."),
+            (&["--search=web"][..], "No hosts match \"web\"."),
+            (
+                &["--search=web", "--name=gw-1"][..],
+                "No hosts match \"web\".",
+            ),
+            (&["--name=gw-1"][..], "No host is named \"gw-1\"."),
+            (&["--ip=10.0.0.5"][..], "No host has the address 10.0.0.5."),
+            (
+                &["--name=gw-1", "--ip=fd00::5"][..],
+                "No host is named \"gw-1\" with the address fd00::5.",
+            ),
+        ] {
+            let args = list_args(argv);
+            assert_eq!(
+                empty_message(args.search.as_deref(), &args.filters),
+                want,
+                "{argv:?}"
+            );
+        }
     }
 
     #[test]
