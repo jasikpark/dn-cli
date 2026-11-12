@@ -13,8 +13,7 @@ API reference: https://www.defined.net/docs/api/
 OpenAPI spec:  https://www.defined.net/docs/openapi.yaml";
 
 /// Help heading for the flags every command takes. Without their own
-/// heading clap sorts them in among a command's own options (`--profile`
-/// landed between `--name` and `--ip` in `dn host list --help`).
+/// heading clap sorts them in among a command's own options.
 const GLOBAL_OPTIONS: &str = "Global options";
 
 #[derive(Parser)]
