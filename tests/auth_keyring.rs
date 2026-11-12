@@ -596,18 +596,20 @@ fn profile_names_must_be_lowercase() {
 }
 
 /// A login whose keyring write succeeds but whose auth.json save fails,
-/// because a directory sits where `auth.json.lock` goes once `setup` has run.
-/// Opening a directory for writing fails for every user, root included; a
-/// read-only config dir would not stop root, which is what containers and
-/// some CI runners run tests as.
-fn login_with_unwritable_config(env: &Env, setup: impl FnOnce(&Env)) -> Output {
+/// because a directory sits at `blocked` in the config dir once `setup` has
+/// run. `auth.json.lock` there fails the save at taking the lock (a directory
+/// can't be opened for writing); `auth.json` fails it later, at renaming the
+/// new file into place. Both fail for every user, root included; a read-only
+/// config dir would not stop root, which is what containers and some CI
+/// runners run tests as.
+fn login_whose_save_fails(env: &Env, blocked: &str, setup: impl FnOnce(&Env)) -> Output {
     let config = env.dir.path().join("config");
     fs::create_dir(&config).unwrap();
     let config_env = Env {
         dir: tempfile::tempdir_in(&config).unwrap(),
     };
     setup(&config_env);
-    fs::create_dir(config_env.dir.path().join("auth.json.lock")).unwrap();
+    fs::create_dir(config_env.dir.path().join(blocked)).unwrap();
     env.run(
         &["auth", "login", "--key-stdin", "--no-verify", "--json"],
         "new-key",
@@ -618,10 +620,25 @@ fn login_with_unwritable_config(env: &Env, setup: impl FnOnce(&Env)) -> Output {
 #[test]
 fn a_failed_save_removes_a_new_keyring_entry() {
     let env = Env::new();
-    let output = login_with_unwritable_config(&env, |_| {});
+    let output = login_whose_save_fails(&env, "auth.json.lock", |_| {});
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(
         error_message(&output).contains("auth.json.lock"),
+        "{output:?}"
+    );
+    assert_eq!(env.keyring_entries(), json!({}));
+}
+
+/// The same rollback when the save gets past the lock and fails at writing
+/// auth.json itself.
+#[test]
+fn a_save_that_fails_after_the_lock_removes_a_new_keyring_entry() {
+    let env = Env::new();
+    let output = login_whose_save_fails(&env, "auth.json", |_| {});
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let message = error_message(&output);
+    assert!(
+        message.contains("failed to replace") && !message.contains("auth.json.lock"),
         "{output:?}"
     );
     assert_eq!(env.keyring_entries(), json!({}));
@@ -631,7 +648,7 @@ fn a_failed_save_removes_a_new_keyring_entry() {
 fn a_failed_save_restores_the_key_an_existing_profile_uses() {
     let env = Env::new();
     fs::write(env.keyring(), r#"{"default":"old-key"}"#).unwrap();
-    let output = login_with_unwritable_config(&env, |config| {
+    let output = login_whose_save_fails(&env, "auth.json.lock", |config| {
         fs::write(
             config.dir.path().join("auth.json"),
             r#"{"version":2,"default_profile":"default","profiles":{"default":{"key":"keyring"}}}"#,
