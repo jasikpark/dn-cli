@@ -1,5 +1,5 @@
 //! API keys stored in the OS keyring. Debug builds read `DN_TEST_KEYRING`
-//! as a stand-in keyring (a JSON file of profile → key), so these tests
+//! as a stand-in keyring (a JSON file of account → key), so these tests
 //! never touch the machine's real keyring. Release builds ignore it, so the
 //! file only compiles with debug assertions: under `cargo test --release`
 //! these tests would overwrite and delete the developer's real entries.
@@ -35,6 +35,39 @@ impl Env {
             Ok(text) => serde_json::from_str(&text).unwrap(),
             Err(_) => json!({}),
         }
+    }
+
+    /// The keyring account `profile` points at in auth.json: what follows
+    /// `keyring:` in its `key`, or the profile name for a bare `keyring`.
+    fn account(&self, profile: &str) -> String {
+        let key = self.auth_json()["profiles"][profile]["key"].clone();
+        match key.as_str().unwrap() {
+            "keyring" => profile.to_string(),
+            key => key.strip_prefix("keyring:").unwrap().to_string(),
+        }
+    }
+
+    /// The keyring as profile → key, read through each profile's account.
+    /// Panics on an entry no profile points at.
+    fn keys_by_profile(&self) -> Value {
+        let mut entries = self.keyring_entries().as_object().unwrap().clone();
+        let mut keys = serde_json::Map::new();
+        if let Some(profiles) = self.auth_json()["profiles"].as_object() {
+            for (name, profile) in profiles {
+                if profile["key"]
+                    .as_str()
+                    .is_some_and(|k| k.starts_with("keyring"))
+                    && let Some(key) = entries.remove(&self.account(name))
+                {
+                    keys.insert(name.clone(), key);
+                }
+            }
+        }
+        assert!(
+            entries.is_empty(),
+            "entries no profile points at: {entries:?}"
+        );
+        Value::Object(keys)
     }
 
     fn auth_json(&self) -> Value {
@@ -113,10 +146,13 @@ fn login_stores_the_key_in_the_keyring_not_on_disk() {
     assert_eq!(entry["api_key_ref"], Value::Null);
 
     assert_eq!(
-        env.keyring_entries(),
+        env.keys_by_profile(),
         json!({ "default": "dnkey-secret-1" })
     );
-    assert_eq!(env.auth_json()["profiles"]["default"]["key"], "keyring");
+    let account = env.account("default");
+    let id = account.strip_prefix("default/").expect(&account);
+    assert_eq!(id.len(), 16, "{account}");
+    assert!(id.chars().all(|c| c.is_ascii_hexdigit()), "{account}");
     let auth_text = fs::read_to_string(env.dir.path().join("auth.json")).unwrap();
     assert!(!auth_text.contains("dnkey-secret-1"), "{auth_text}");
 
@@ -280,8 +316,7 @@ fn login_accepts_a_key_without_host_list_permission() {
     let request_line = server.join().unwrap();
     assert!(output.status.success(), "{output:?}");
     assert_eq!(request_line.trim(), "GET /v2/whoami HTTP/1.1");
-    assert_eq!(env.keyring_entries(), json!({ "default": "scoped-key" }));
-    assert_eq!(env.auth_json()["profiles"]["default"]["key"], "keyring");
+    assert_eq!(env.keys_by_profile(), json!({ "default": "scoped-key" }));
 }
 
 #[test]
@@ -291,7 +326,7 @@ fn logging_out_removes_the_keyring_entry() {
     env.login("b", "key-b", &[]);
 
     env.ok(&["auth", "logout", "--profile", "a", "--json"], "");
-    assert_eq!(env.keyring_entries(), json!({ "b": "key-b" }));
+    assert_eq!(env.keys_by_profile(), json!({ "b": "key-b" }));
 
     env.login("c", "key-c", &[]);
     env.ok(&["auth", "logout", "--all", "--json"], "");
@@ -338,7 +373,12 @@ fn a_keyring_entry_edited_outside_dn_is_trimmed_or_refused() {
     let (url, seen) = serve();
     env.login("work", "key", &["--api-url", &url]);
 
-    fs::write(env.keyring(), r#"{"work":"  edited-key\n"}"#).unwrap();
+    let account = env.account("work");
+    fs::write(
+        env.keyring(),
+        json!({ &account: "  edited-key\n" }).to_string(),
+    )
+    .unwrap();
     let output = env.run(&["host", "list", "--json"], "", &[]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
@@ -347,7 +387,7 @@ fn a_keyring_entry_edited_outside_dn_is_trimmed_or_refused() {
     );
 
     for bad in ["", "two words"] {
-        fs::write(env.keyring(), json!({ "work": bad }).to_string()).unwrap();
+        fs::write(env.keyring(), json!({ &account: bad }).to_string()).unwrap();
         let output = env.run(&["host", "list", "--json"], "", &[]);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(
@@ -437,7 +477,7 @@ fn a_key_at_the_length_cap_with_a_trailing_newline_is_accepted() {
         &[],
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert_eq!(env.keyring_entries(), json!({ "default": key }));
+    assert_eq!(env.keys_by_profile(), json!({ "default": key }));
 }
 
 #[test]
@@ -514,7 +554,7 @@ fn login_checks_the_key_itself_against_the_api() {
 
     let accepted = login("good-key\r\n");
     assert!(accepted.status.success(), "{accepted:?}");
-    assert_eq!(env.keyring_entries(), json!({ "default": "good-key" }));
+    assert_eq!(env.keys_by_profile(), json!({ "default": "good-key" }));
     assert_eq!(
         seen.lock().unwrap().as_slice(),
         ["Bearer wrong-key", "Bearer good-key"]
@@ -525,8 +565,101 @@ fn login_checks_the_key_itself_against_the_api() {
 fn logging_in_again_replaces_the_stored_key() {
     let env = Env::new();
     env.login("default", "old-key", &[]);
+    let old_account = env.account("default");
     env.login("default", "new-key", &[]);
-    assert_eq!(env.keyring_entries(), json!({ "default": "new-key" }));
+    assert_ne!(env.account("default"), old_account);
+    assert_eq!(env.keys_by_profile(), json!({ "default": "new-key" }));
+}
+
+#[test]
+fn config_directories_sharing_a_keyring_keep_their_own_keys() {
+    let (one, two) = (Env::new(), Env::new());
+    let shared = one.keyring();
+    let shared = [("DN_TEST_KEYRING", shared.to_str().unwrap())];
+    let login = |env: &Env, key: &str| {
+        let args = ["auth", "login", "--key-stdin", "--no-verify", "--json"];
+        assert!(env.run(&args, key, &shared).status.success());
+    };
+    login(&one, "key-one");
+    login(&two, "key-two");
+    assert_eq!(
+        one.keyring_entries(),
+        json!({ one.account("default"): "key-one", two.account("default"): "key-two" })
+    );
+
+    let logout = two.run(&["auth", "logout", "--json"], "", &shared);
+    assert!(logout.status.success(), "{logout:?}");
+    assert_eq!(one.keys_by_profile(), json!({ "default": "key-one" }));
+}
+
+/// A profile whose `key` is the bare `keyring`, as every login was stored
+/// through 0.4.9, with its entry under the profile name.
+fn profile_stored_under_its_name(env: &Env, url: &str) {
+    fs::write(env.keyring(), r#"{"default":"old-key"}"#).unwrap();
+    fs::write(
+        env.dir.path().join("auth.json"),
+        json!({"version": 2, "default_profile": "default",
+            "profiles": {"default": {"key": "keyring", "api_url": url}}})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_profile_stored_under_its_name_is_still_read() {
+    let env = Env::new();
+    let (url, seen) = serve();
+    profile_stored_under_its_name(&env, &url);
+
+    let output = env.run(&["host", "list", "--json"], "", &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(seen.lock().unwrap().as_slice(), ["Bearer old-key"]);
+    let list = env.ok(&["auth", "list", "--json"], "");
+    assert_eq!(list["profiles"][0]["key_source"], "keyring");
+    assert_eq!(list["profiles"][0]["api_key_ref"], Value::Null);
+}
+
+#[test]
+fn logging_in_or_out_removes_an_entry_stored_under_the_profile_name() {
+    let env = Env::new();
+    profile_stored_under_its_name(&env, "http://127.0.0.1:1");
+    env.login("default", "new-key", &[]);
+    assert_ne!(env.account("default"), "default");
+    assert_eq!(env.keys_by_profile(), json!({ "default": "new-key" }));
+
+    profile_stored_under_its_name(&env, "http://127.0.0.1:1");
+    env.ok(&["auth", "logout", "--json"], "");
+    assert_eq!(env.keyring_entries(), json!({}));
+}
+
+#[test]
+fn a_keyring_account_dn_could_not_have_written_is_refused() {
+    let env = Env::new();
+    for account in ["", "Work/abc", "work/", "work/ABC", "a b"] {
+        fs::write(
+            env.dir.path().join("auth.json"),
+            json!({"version": 2, "default_profile": "work",
+                "profiles": {"work": {"key": format!("keyring:{account}")}}})
+            .to_string(),
+        )
+        .unwrap();
+        let status = env.ok(&["auth", "status", "--offline", "--json"], "");
+        assert_eq!(status["source"], "invalid", "{account:?}");
+        let message = status["message"].as_str().unwrap();
+        assert!(
+            message.contains("dn auth login --profile work"),
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn the_profile_table_shows_keyring_without_the_account() {
+    let env = Env::new();
+    env.login("default", "key", &[]);
+    let output = env.run(&["auth", "list"], "", &[]);
+    let table = String::from_utf8_lossy(&output.stdout);
+    assert!(table.trim_end().ends_with(" keyring"), "{table}");
 }
 
 #[test]
@@ -645,7 +778,7 @@ fn a_save_that_fails_after_the_lock_removes_a_new_keyring_entry() {
 }
 
 #[test]
-fn a_failed_save_restores_the_key_an_existing_profile_uses() {
+fn a_failed_save_leaves_the_key_an_existing_profile_uses() {
     let env = Env::new();
     fs::write(env.keyring(), r#"{"default":"old-key"}"#).unwrap();
     let output = login_whose_save_fails(&env, "auth.json.lock", |config| {
@@ -701,6 +834,10 @@ fn parallel_logins_to_different_profiles_all_land() {
             auth["profiles"].get(name).is_some(),
             "{name} missing from {auth}"
         );
-        assert_eq!(keyring[name], format!("key-{name}"), "{name} in {keyring}");
+        assert_eq!(
+            keyring[env.account(name)],
+            format!("key-{name}"),
+            "{name} in {keyring}"
+        );
     }
 }

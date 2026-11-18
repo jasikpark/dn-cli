@@ -17,8 +17,8 @@ pub struct Profile {
     /// Falls back to https://api.defined.net when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_url: Option<String>,
-    /// Where the API key is: [`KEYRING`] for the OS keyring, or a 1Password
-    /// secret reference.
+    /// Where the API key is: [`KEYRING`], alone or with an account, for the
+    /// OS keyring, or a 1Password secret reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     #[serde(flatten)]
@@ -41,7 +41,17 @@ pub struct AuthFile {
 impl Profile {
     /// Whether this profile's key lives in the OS keyring.
     pub fn uses_keyring(&self) -> bool {
-        self.key.as_deref().map(str::trim) == Some(KEYRING)
+        self.keyring_account("").is_some()
+    }
+
+    /// The keyring account holding this profile's key, for a profile stored
+    /// as `name` that uses the keyring. Not checked for validity.
+    pub fn keyring_account<'a>(&'a self, name: &'a str) -> Option<&'a str> {
+        let key = self.key.as_deref()?.trim();
+        if key == KEYRING {
+            return Some(name);
+        }
+        key.strip_prefix(KEYRING)?.strip_prefix(':')
     }
 }
 

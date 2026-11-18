@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::{API_KEY_ENV, OP_SCHEME, Profile};
+use super::{API_KEY_ENV, OP_SCHEME, Profile, is_valid_keyring_account};
 
 /// Where the API key comes from, in precedence order. The environment always
 /// wins so CI and agents can inject a key without touching the config file.
@@ -16,8 +16,8 @@ pub enum KeySource {
     EnvRef(String),
     /// The selected profile's `op://` reference.
     FileRef(String),
-    /// The OS keyring entry for the named profile.
-    Keyring(String),
+    /// The OS keyring entry under `account`, which `profile` points at.
+    Keyring { profile: String, account: String },
 }
 
 /// The raw env key never appears in debug output.
@@ -27,7 +27,11 @@ impl fmt::Debug for KeySource {
             KeySource::Env(_) => f.write_str("Env(<redacted>)"),
             KeySource::EnvRef(r) => f.debug_tuple("EnvRef").field(r).finish(),
             KeySource::FileRef(r) => f.debug_tuple("FileRef").field(r).finish(),
-            KeySource::Keyring(p) => f.debug_tuple("Keyring").field(p).finish(),
+            KeySource::Keyring { profile, account } => f
+                .debug_struct("Keyring")
+                .field("profile", profile)
+                .field("account", account)
+                .finish(),
         }
     }
 }
@@ -38,7 +42,7 @@ impl KeySource {
             KeySource::Env(_) => "env",
             KeySource::EnvRef(_) => "env-ref",
             KeySource::FileRef(_) => "file",
-            KeySource::Keyring(_) => "keyring",
+            KeySource::Keyring { .. } => "keyring",
         }
     }
 
@@ -46,7 +50,7 @@ impl KeySource {
     /// env key deliberately has no accessor here.
     pub fn reference(&self) -> Option<&str> {
         match self {
-            KeySource::Env(_) | KeySource::Keyring(_) => None,
+            KeySource::Env(_) | KeySource::Keyring { .. } => None,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => Some(r),
         }
     }
@@ -56,8 +60,17 @@ impl KeySource {
 /// keyring, or its `op://` reference. `None` for a profile saved with only a
 /// URL, which needs `DEFINED_API_KEY`.
 pub fn profile_key_source(name: &str, profile: &Profile) -> Result<Option<KeySource>> {
-    if profile.uses_keyring() {
-        return Ok(Some(KeySource::Keyring(name.to_string())));
+    if let Some(account) = profile.keyring_account(name) {
+        if !is_valid_keyring_account(account) {
+            bail!(
+                "profile {name:?} names an OS keyring entry `dn` could not have written; \
+                 run `dn auth login --profile {name}` to replace it"
+            );
+        }
+        return Ok(Some(KeySource::Keyring {
+            profile: name.to_string(),
+            account: account.to_string(),
+        }));
     }
     resolve_key_source(None, profile.key.as_deref()).with_context(|| format!("profile {name:?}"))
 }
@@ -160,8 +173,8 @@ pub fn validate_op_ref(s: &str) -> Result<()> {
 /// The key a profile keeps in the OS keyring, trimmed. Anything not a
 /// plausible key (empty, or with spaces or control characters, as an entry
 /// edited outside `dn` can be) is refused here, not sent to the API.
-pub(super) fn keyring_key(profile: &str) -> Result<String> {
-    let key = crate::keystore::get(profile)?.trim().to_string();
+pub(super) fn keyring_key(account: &str, profile: &str) -> Result<String> {
+    let key = crate::keystore::get(account, profile)?.trim().to_string();
     if key.is_empty() || !key.bytes().all(|b| b.is_ascii_graphic()) {
         bail!(
             "the OS keyring entry for profile {profile:?} is not an API key; run \

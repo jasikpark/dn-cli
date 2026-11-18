@@ -1,7 +1,7 @@
 //! API keys kept in the OS credential store: macOS Keychain, Windows
 //! Credential Manager, or the Secret Service (GNOME Keyring, KWallet) on
-//! Linux. One entry per profile, under [`SERVICE`] with the profile name as
-//! the account.
+//! Linux. One entry per login, under [`SERVICE`] with an account from
+//! [`new_account`], which the profile records in `auth.json`.
 //!
 //! Debug builds (and so the test suite) can point this at a JSON file with
 //! `DN_TEST_KEYRING=<path>`, or make it unavailable with
@@ -14,35 +14,50 @@ use anyhow::{Result, anyhow};
 /// with another app's entries.
 pub const SERVICE: &str = "io.github.jasikpark.dn";
 
-/// The key stored for `profile`.
-pub fn get(profile: &str) -> Result<String> {
+/// A keyring account no entry uses yet, for a login to `profile`:
+/// `<profile>/<16 hex digits>`. The digits keep two config directories, and
+/// two logins to one profile, from sharing an entry. `/` can't appear in a
+/// profile name, so the account never equals one of the bare profile names
+/// that entries were once stored under.
+pub fn new_account(profile: &str) -> String {
+    use std::hash::{BuildHasher, Hasher};
+
+    // `RandomState` is keyed from the OS's random source.
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u32(std::process::id());
+    format!("{profile}/{:016x}", hasher.finish())
+}
+
+/// The key stored under `account`. `profile` is the profile that points at
+/// it, which is what errors name.
+pub fn get(account: &str, profile: &str) -> Result<String> {
     #[cfg(debug_assertions)]
     if let Some(store) = test_store::from_env() {
-        return store.get(profile);
+        return store.get(account, profile);
     }
-    entry(profile)?
+    entry(account, profile)?
         .get_password()
         .map_err(|e| describe(e, profile))
 }
 
-/// Store `key` for `profile`, replacing any existing one.
-pub fn set(profile: &str, key: &str) -> Result<()> {
+/// Store `key` under `account`, replacing any existing one.
+pub fn set(account: &str, profile: &str, key: &str) -> Result<()> {
     #[cfg(debug_assertions)]
     if let Some(store) = test_store::from_env() {
-        return store.set(profile, key);
+        return store.set(account, key);
     }
-    entry(profile)?
+    entry(account, profile)?
         .set_password(key)
         .map_err(|e| describe(e, profile))
 }
 
-/// Remove the key stored for `profile`. `false` when there was none.
-pub fn delete(profile: &str) -> Result<bool> {
+/// Remove the key stored under `account`. `false` when there was none.
+pub fn delete(account: &str, profile: &str) -> Result<bool> {
     #[cfg(debug_assertions)]
     if let Some(store) = test_store::from_env() {
-        return store.delete(profile);
+        return store.delete(account);
     }
-    match entry(profile)?.delete_credential() {
+    match entry(account, profile)?.delete_credential() {
         Ok(()) => Ok(true),
         Err(keyring::Error::NoEntry) => Ok(false),
         Err(e) => Err(describe(e, profile)),
@@ -63,8 +78,8 @@ pub fn ensure_available() -> Result<()> {
     }
 }
 
-fn entry(profile: &str) -> Result<keyring::Entry> {
-    keyring::Entry::new(SERVICE, profile).map_err(|e| describe(e, profile))
+fn entry(account: &str, profile: &str) -> Result<keyring::Entry> {
+    keyring::Entry::new(SERVICE, account).map_err(|e| describe(e, profile))
 }
 
 const UNAVAILABLE_HINT: &str = "no OS keyring is available (on Linux this needs a \
@@ -107,7 +122,7 @@ fn describe(err: keyring::Error, profile: &str) -> anyhow::Error {
 
 #[cfg(debug_assertions)]
 mod test_store {
-    //! A stand-in keyring for tests: a JSON object of profile → key.
+    //! A stand-in keyring for tests: a JSON object of account → key.
 
     use std::fs;
     use std::io::ErrorKind;
@@ -174,22 +189,22 @@ mod test_store {
             Ok(result)
         }
 
-        pub fn get(&self, profile: &str) -> Result<String> {
+        pub fn get(&self, account: &str, profile: &str) -> Result<String> {
             self.load()?
-                .get(profile)
+                .get(account)
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .ok_or_else(|| super::no_entry(profile))
         }
 
-        pub fn set(&self, profile: &str, key: &str) -> Result<()> {
+        pub fn set(&self, account: &str, key: &str) -> Result<()> {
             self.update(|entries| {
-                entries.insert(profile.to_string(), Value::String(key.to_string()));
+                entries.insert(account.to_string(), Value::String(key.to_string()));
             })
         }
 
-        pub fn delete(&self, profile: &str) -> Result<bool> {
-            self.update(|entries| entries.remove(profile).is_some())
+        pub fn delete(&self, account: &str) -> Result<bool> {
+            self.update(|entries| entries.remove(account).is_some())
         }
     }
 }
