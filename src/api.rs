@@ -129,12 +129,16 @@ impl Client {
         // Disable ureq's default "non-2xx is an Error::StatusCode" behavior so
         // error responses arrive as Ok(_) and we can read the DN error body
         // (Error::StatusCode carries only the numeric code, never the body).
-        let agent: ureq::Agent = ureq::Agent::config_builder()
+        let mut builder = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(60)))
-            .user_agent(USER_AGENT)
-            .build()
-            .into();
+            .user_agent(USER_AGENT);
+        // `check_api_url` allows plain http:// only to this machine, and a
+        // proxy named in the environment would carry the key off it in clear.
+        if config.api_url.starts_with("http://") {
+            builder = builder.proxy(None);
+        }
+        let agent: ureq::Agent = builder.build().into();
         Self { config, agent }
     }
 
