@@ -39,7 +39,7 @@ pub fn hosts_wait(client: &Client, args: &HostWaitArgs, output: OutputMode) -> a
     };
     let res = wait_for_check_in(
         &plan,
-        || client.get_host(&args.host_id),
+        |limit| client.get_host_within(&args.host_id, limit),
         &mut SystemClock(Instant::now()),
         |progress| match progress {
             // The JSON face stays quiet on stderr until something goes wrong.
@@ -83,6 +83,11 @@ enum Progress<'a> {
     Retrying(&'a anyhow::Error),
 }
 
+/// The least time a check gets to finish, however little of the wait is left:
+/// the check on the deadline has none, and a `--timeout` shorter than a round
+/// trip to the API would otherwise fail its first check.
+const MIN_CHECK_TIME: Duration = Duration::from_secs(5);
+
 /// Time as the wait sees it, so tests can run a ten-minute wait instantly.
 trait Clock {
     /// Time since the wait started.
@@ -105,18 +110,22 @@ impl Clock for SystemClock {
 /// Ask `poll` for the host every `plan.interval` until it has checked in,
 /// returning that response. The first check must succeed: an error there is
 /// a wrong id, key, or URL, and waiting won't fix it. Later, a dropped
-/// connection or a 5xx is reported and retried, while any other API error
-/// (the host was deleted, the key revoked) ends the wait. The last check
+/// connection, a 5xx or a 429 is reported and retried, while any other API
+/// error (the host was deleted, the key revoked) ends the wait. The last check
 /// lands on the deadline, so a host that checks in just before it counts.
+/// `poll` is told how long it may take: what is left of the wait, or
+/// [`MIN_CHECK_TIME`] if that is longer, so the wait ends within
+/// `MIN_CHECK_TIME` of `plan.timeout`.
 fn wait_for_check_in(
     plan: &Plan,
-    mut poll: impl FnMut() -> anyhow::Result<Value>,
+    mut poll: impl FnMut(Duration) -> anyhow::Result<Value>,
     clock: &mut impl Clock,
     mut progress: impl FnMut(Progress),
 ) -> anyhow::Result<Value> {
     let mut last: Option<Value> = None;
     loop {
-        match poll() {
+        let left = plan.timeout.saturating_sub(clock.elapsed());
+        match poll(left.max(MIN_CHECK_TIME)) {
             Ok(res) => {
                 let host = checked_host(plan.host_id, &res)?;
                 if checked_in(host, plan.since)? {
@@ -155,11 +164,12 @@ fn checked_host<'a>(requested: &str, res: &'a Value) -> anyhow::Result<&'a Value
     Ok(host)
 }
 
-/// A failure worth retrying mid-wait: one that never got an API response,
-/// or a server-side 5xx. A 4xx means the next check would fail the same way.
+/// A failure worth retrying mid-wait: one that never got an API response, a
+/// server-side 5xx, or a 429. Any other 4xx means the next check would fail
+/// the same way.
 fn is_transient(err: &anyhow::Error) -> bool {
     err.downcast_ref::<ApiError>()
-        .is_none_or(|api| api.status >= 500)
+        .is_none_or(|api| api.status >= 500 || api.status == 429)
 }
 
 /// `metadata.lastSeenAt`, which the API leaves `null` until the host first
@@ -332,14 +342,23 @@ mod tests {
         plan: &Plan,
         answers: Vec<anyhow::Result<Value>>,
     ) -> (anyhow::Result<Value>, FakeClock, usize, Vec<String>) {
+        let (result, clock, limits, said) = run_timed(plan, answers);
+        (result, clock, limits.len(), said)
+    }
+
+    /// [`run`], returning the time each check was given, not their count.
+    fn run_timed(
+        plan: &Plan,
+        answers: Vec<anyhow::Result<Value>>,
+    ) -> (anyhow::Result<Value>, FakeClock, Vec<Duration>, Vec<String>) {
         let answers = RefCell::new(VecDeque::from(answers));
-        let mut polls = 0;
+        let mut polls = Vec::new();
         let mut clock = FakeClock::default();
         let mut said = Vec::new();
         let result = wait_for_check_in(
             plan,
-            || {
-                polls += 1;
+            |limit| {
+                polls.push(limit);
                 let mut answers = answers.borrow_mut();
                 match answers.front() {
                     Some(Ok(v)) if answers.len() == 1 => Ok(v.clone()),
@@ -394,6 +413,27 @@ mod tests {
         assert!(msg.contains(&format!("\"Build Server\" ({ID})")), "{msg}");
         assert!(msg.contains("after 12s"), "{msg}");
         assert!(msg.contains(&format!("dn host wait {ID}")), "{msg}");
+    }
+
+    #[test]
+    fn each_check_gets_what_is_left_of_the_wait_but_never_too_little() {
+        let (res, _, limits, _) = run_timed(&plan(None, 12, 5), vec![never_seen()]);
+        assert!(res.is_err());
+        // Checks at 0s, 5s, 10s and 12s, with 12s, 7s, 2s and 0s left.
+        assert_eq!(limits, [12, 7, 5, 5].map(Duration::from_secs));
+        assert_eq!(MIN_CHECK_TIME, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_rate_limit_mid_wait_is_retried_until_the_deadline() {
+        let (res, _, polls, said) = run(
+            &plan(None, 5, 5),
+            vec![never_seen(), api_error(429), api_error(429)],
+        );
+        let err = res.unwrap_err();
+        assert!(err.downcast_ref::<TimedOut>().is_some(), "{err:#}");
+        assert_eq!(polls, 2);
+        assert_eq!(said.len(), 2, "{said:?}");
     }
 
     #[test]
@@ -526,6 +566,7 @@ mod tests {
     fn transient_means_no_response_or_a_server_error() {
         assert!(is_transient(&anyhow!("connection reset")));
         assert!(is_transient(&api_error(500).unwrap_err()));
+        assert!(is_transient(&api_error(429).unwrap_err()));
         assert!(!is_transient(&api_error(499).unwrap_err()));
         assert!(!is_transient(&api_error(404).unwrap_err()));
     }

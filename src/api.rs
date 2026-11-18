@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -12,6 +12,9 @@ use crate::cli::PageArgs;
 use crate::config::Config;
 
 const MAX_RETRIES: u32 = 3;
+
+/// How long one request may take, connecting through reading the body.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Minimal client for the Defined Networking REST API.
 ///
@@ -131,7 +134,7 @@ impl Client {
         // (Error::StatusCode carries only the numeric code, never the body).
         let mut builder = ureq::Agent::config_builder()
             .http_status_as_error(false)
-            .timeout_global(Some(Duration::from_secs(60)))
+            .timeout_global(Some(REQUEST_TIMEOUT))
             .user_agent(USER_AGENT);
         // `check_api_url` allows plain http:// only to this machine, and a
         // proxy named in the environment would carry the key off it in clear.
@@ -142,8 +145,12 @@ impl Client {
         Self { config, agent }
     }
 
+    /// Send, sleeping and trying again on a 429 up to [`MAX_RETRIES`] times.
+    /// With a `deadline`, a 429 whose delay would sleep past it is returned
+    /// as it is.
     fn call_with_retry(
         &self,
+        deadline: Option<Instant>,
         send: impl Fn() -> Result<Response<Body>, ureq::Error>,
     ) -> Result<Response<Body>> {
         for attempt in 0..MAX_RETRIES {
@@ -152,6 +159,9 @@ impl Client {
                 return Ok(res);
             }
             let delay = retry_delay(&res, attempt);
+            if deadline.is_some_and(|d| delay >= time_left(d)) {
+                return Ok(res);
+            }
             eprintln!(
                 "rate limited, retrying in {:.1}s ({}/{MAX_RETRIES})...",
                 delay.as_secs_f64(),
@@ -170,9 +180,19 @@ impl Client {
         path: &str,
         build: impl Fn(&str, &str) -> Result<Response<Body>, ureq::Error>,
     ) -> Result<Response<Body>> {
+        self.send_by(path, None, build)
+    }
+
+    /// [`Client::send`] that stops retrying a 429 at `deadline`.
+    fn send_by(
+        &self,
+        path: &str,
+        deadline: Option<Instant>,
+        build: impl Fn(&str, &str) -> Result<Response<Body>, ureq::Error>,
+    ) -> Result<Response<Body>> {
         let url = format!("{}{}", self.config.api_url, path);
         let auth = format!("Bearer {}", self.config.api_key);
-        let mut res = self.call_with_retry(|| build(&url, &auth))?;
+        let mut res = self.call_with_retry(deadline, || build(&url, &auth))?;
         error_for_status(&mut res)?;
         Ok(res)
     }
@@ -353,6 +373,24 @@ impl Client {
         self.get(&format!("/v2/hosts/{id}"))
     }
 
+    /// [`Client::get_host`] that gives up once `limit` has passed, retries
+    /// included; `limit` over [`REQUEST_TIMEOUT`] still bounds each request
+    /// by that. A 429 still unanswered then is the [`ApiError`].
+    pub fn get_host_within(&self, id: &str, limit: Duration) -> Result<Value> {
+        let deadline = Instant::now() + limit;
+        read_json(
+            self.send_by(&format!("/v2/hosts/{id}"), Some(deadline), |url, auth| {
+                self.agent
+                    .get(url)
+                    .config()
+                    .timeout_global(Some(time_left(deadline).min(REQUEST_TIMEOUT)))
+                    .build()
+                    .header("Authorization", auth)
+                    .call()
+            })?,
+        )
+    }
+
     /// Update a host (v3). The body is the full host object — PUT is not
     /// field-partial, so callers GET first and send the modified whole.
     /// v2 network hosts require v3 for mutations.
@@ -428,7 +466,7 @@ impl Client {
     }
 
     /// StreamLogs: the same POST, but the response stays open while the host
-    /// sends log lines, so it gets `limit` instead of the client's 60s, and
+    /// sends log lines, so it gets `limit` instead of [`REQUEST_TIMEOUT`], and
     /// the body comes back unread for the caller to take a line at a time.
     pub fn host_command_stream(
         &self,
@@ -528,6 +566,14 @@ fn read_json(mut res: Response<Body>) -> Result<Value> {
     res.body_mut()
         .read_json()
         .context("failed to parse Defined API response as JSON")
+}
+
+/// The time until `deadline`, and at least a millisecond once it has passed,
+/// so the result is always usable as a timeout.
+fn time_left(deadline: Instant) -> Duration {
+    deadline
+        .saturating_duration_since(Instant::now())
+        .max(Duration::from_millis(1))
 }
 
 fn retry_delay(res: &Response<Body>, attempt: u32) -> Duration {
