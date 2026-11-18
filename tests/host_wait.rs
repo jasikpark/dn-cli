@@ -150,8 +150,42 @@ fn a_timeout_is_err_timeout_with_exit_1() {
     assert_eq!(envelope["errors"][0]["code"], "ERR_TIMEOUT");
     let message = envelope["errors"][0]["message"].as_str().unwrap();
     assert!(message.contains("hasn't checked in after 1s"), "{message}");
-    // One check at the start and one on the deadline.
-    assert_eq!(seen.lock().unwrap().len(), 2);
+    // At least the first check runs; the deadline stops the wait without a
+    // check of its own, so the exact count depends on real-clock timing.
+    assert!(!seen.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_stalled_server_times_out_rather_than_erroring_local() {
+    // A listener that accepts connections but never answers: each request runs
+    // out its budget instead of failing fast, which must read as ERR_TIMEOUT.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming() {
+            held.push(stream.unwrap());
+        }
+    });
+    let id = mock_id("host", "stalled");
+    let started = std::time::Instant::now();
+    let out = dn(
+        &url,
+        &[
+            "host",
+            "wait",
+            &id,
+            "--timeout",
+            "1s",
+            "--interval",
+            "1s",
+            "--json",
+        ],
+    );
+    let took = started.elapsed();
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(stdout_json(&out)["errors"][0]["code"], "ERR_TIMEOUT");
+    assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
 }
 
 #[test]

@@ -377,7 +377,7 @@ impl Client {
     /// included; `limit` over [`REQUEST_TIMEOUT`] still bounds each request
     /// by that. A 429 still unanswered then is the [`ApiError`].
     pub fn get_host_within(&self, id: &str, limit: Duration) -> Result<Value> {
-        let deadline = Instant::now() + limit;
+        let deadline = deadline_after(limit);
         read_json(
             self.send_by(&format!("/v2/hosts/{id}"), Some(deadline), |url, auth| {
                 self.agent
@@ -568,6 +568,26 @@ fn read_json(mut res: Response<Body>) -> Result<Value> {
         .context("failed to parse Defined API response as JSON")
 }
 
+/// `limit` from now, as a deadline. `host wait --timeout` accepts an
+/// hours-denominated duration large enough that `Instant` + it would overflow
+/// and panic, so an unrepresentable deadline falls back to [`REQUEST_TIMEOUT`].
+fn deadline_after(limit: Duration) -> Instant {
+    Instant::now()
+        .checked_add(limit)
+        .unwrap_or_else(|| Instant::now() + REQUEST_TIMEOUT)
+}
+
+/// Whether `err` is a request that ran out its timeout, so a wait can report
+/// `ERR_TIMEOUT` rather than the catch-all `ERR_LOCAL`. A different transport
+/// failure (a refused connection, a reset) is not one.
+pub fn is_timeout(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<ureq::Error>()
+            .is_some_and(|e| matches!(e, ureq::Error::Timeout(_)))
+    })
+}
+
 /// The time until `deadline`, and at least a millisecond once it has passed,
 /// so the result is always usable as a timeout.
 fn time_left(deadline: Instant) -> Duration {
@@ -688,6 +708,15 @@ fn encode_path_segment(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deadline_after_a_huge_limit_does_not_overflow() {
+        // `Instant::now() + Duration::MAX` panics; the deadline must not.
+        let before = Instant::now();
+        let deadline = deadline_after(Duration::MAX);
+        assert!(deadline >= before);
+        assert!(deadline <= Instant::now() + REQUEST_TIMEOUT + Duration::from_secs(1));
+    }
 
     #[test]
     fn encode_path_segment_keeps_tag_colon_and_escapes_url_structure() {
