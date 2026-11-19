@@ -657,8 +657,9 @@ pub(crate) fn log_duration(s: &str) -> Result<Duration, String> {
 pub struct HostWaitArgs {
     /// Host id (host-…). Find ids with `dn host list` or `dn host search`.
     pub host_id: String,
-    /// How long to wait before giving up, e.g. 90s, 10m, 1h
-    #[arg(long, value_name = "DURATION", default_value = "10m", value_parser = wait_duration)]
+    /// How long to wait before giving up, e.g. 90s, 10m, 1h. At least 1s and
+    /// no shorter than --interval; the command never runs longer than this.
+    #[arg(long, value_name = "DURATION", default_value = "10m", value_parser = wait_timeout)]
     pub timeout: Duration,
     /// How often to ask the API, e.g. 5s or 30s. At least 1s.
     #[arg(long, value_name = "DURATION", default_value = "5s", value_parser = poll_interval)]
@@ -682,6 +683,16 @@ fn wait_duration(s: &str) -> Result<Duration, String> {
         return Err("must be longer than 0 seconds".to_string());
     }
     Duration::try_from(d).map_err(|e| e.to_string())
+}
+
+/// A [`wait_duration`] of at least a second: a shorter wait can't finish even
+/// one round trip to the API.
+fn wait_timeout(s: &str) -> Result<Duration, String> {
+    let d = wait_duration(s)?;
+    if d < Duration::from_secs(1) {
+        return Err("must be at least 1s".to_string());
+    }
+    Ok(d)
 }
 
 /// A [`wait_duration`] of at least a second, so a wait can't hammer the API.

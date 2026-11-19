@@ -13,9 +13,18 @@ use crate::output::{
     OutputMode, data_object, joined_field, render_details, sanitize_for_display, str_field,
 };
 
-/// Reject a malformed host id or `--since` before credentials are resolved.
+/// Reject a malformed host id, a `--timeout` shorter than `--interval`, or a
+/// bad `--since` before credentials are resolved.
 pub fn validate_wait_preflight(args: &HostWaitArgs) -> anyhow::Result<()> {
     validate_id("host", &args.host_id)?;
+    if args.timeout < args.interval {
+        bail!(
+            "--timeout {} is shorter than --interval {}, so the wait would end before \
+             its second check; raise --timeout or lower --interval",
+            friendly(args.timeout),
+            friendly(args.interval)
+        );
+    }
     if let Some(since) = &args.since {
         parse_since(since, Timestamp::now())?;
     }

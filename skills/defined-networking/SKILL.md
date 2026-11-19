@@ -373,7 +373,7 @@ confirm the device came up.
 
 | flag | effect |
 |------|--------|
-| `--timeout <DURATION>` | give up after this long (default `10m`); `90s`, `10m`, `1h`, … |
+| `--timeout <DURATION>` | give up after this long (default `10m`); `90s`, `10m`, `1h`, … At least `1s` and no shorter than `--interval`; the command never runs longer than this |
 | `--interval <DURATION>` | how often to ask the API (default `5s`, at least `1s`) |
 | `--since <TIMESTAMP\|now>` | only count a check-in at or after this time. A host that was ever seen counts at once without it, so pass `--since now` when re-enrolling an existing host |
 

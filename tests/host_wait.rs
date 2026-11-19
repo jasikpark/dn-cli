@@ -237,6 +237,13 @@ fn bad_arguments_fail_before_any_request() {
     for (args, exit, code) in [
         (vec!["--interval", "500ms"], 2, "ERR_USAGE"),
         (vec!["--timeout", "0s"], 2, "ERR_USAGE"),
+        (vec!["--timeout", "500ms"], 2, "ERR_USAGE"),
+        (vec!["--timeout", "3s"], 1, "ERR_INVALID_ARGUMENT"),
+        (
+            vec!["--timeout", "2s", "--interval", "5s"],
+            1,
+            "ERR_INVALID_ARGUMENT",
+        ),
         (vec!["--timeout", "1d"], 2, "ERR_USAGE"),
         (vec!["--since", "yesterday"], 1, "ERR_INVALID_ARGUMENT"),
     ] {
