@@ -9,3 +9,6 @@ test-dn.sh
 # insta writes these for review; `cargo insta review` accepts or rejects them.
 *.snap.new
 *.pending-snap
+
+# APM dependencies
+apm_modules/
