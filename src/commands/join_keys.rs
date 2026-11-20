@@ -260,7 +260,7 @@ fn expiry(at: Option<&str>, after: Option<&str>) -> anyhow::Result<Option<String
             anyhow!("--expires-in: expected a duration such as 30m, 12h, 7d, or 1y ({e})")
         })?;
         let when = now
-            .to_zoned(TimeZone::UTC)
+            .to_zoned_datetime(TimeZone::UTC)
             .checked_add(span)
             .map_err(|e| anyhow!("--expires-in: {e}"))?
             .timestamp();
