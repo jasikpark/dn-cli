@@ -36,7 +36,11 @@ one expression at a time and reruns `cargo test`. A MISSED mutant is an edit the
 suite did not notice, so it names a behaviour nothing asserts on.
 `just mutants-diff` narrows that to the lines the current change touches.
 The `cargo-mutants` skill in `.claude/skills/` loads when Claude Code runs in this
-checkout and walks through a run and the survivor triage.
+checkout and walks through a run and the survivor triage. The `proptest-praxis`
+skill in `.claude/skills/` (from
+[inanna-malick/agent-skills](https://github.com/inanna-malick/agent-skills))
+covers model-based `proptest` investigations and reducing findings to standalone
+regression tests.
 
 ### Mock ids
 
