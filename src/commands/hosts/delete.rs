@@ -12,8 +12,8 @@ pub fn hosts_delete(
     args: &HostDeleteArgs,
     output: OutputMode,
 ) -> anyhow::Result<()> {
-    validate_id("host", &args.host_id)?;
-    let id = args.host_id.as_str();
+    let id = args.host_id.trim();
+    validate_id("host", id)?;
     let target = DeleteTarget {
         kind: "host",
         id,

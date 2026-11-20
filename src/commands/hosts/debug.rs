@@ -31,10 +31,10 @@ impl HostDebugCommand {
     /// The host whose dnclient runs the command.
     pub fn host_id(&self) -> &str {
         match self {
-            Self::Cert(a) | Self::Tunnel(a) | Self::CreateTunnel(a) => &a.host_id,
-            Self::Lighthouse(a) => &a.host_id,
-            Self::Stack(a) => &a.host_id,
-            Self::Logs(a) => &a.host_id,
+            Self::Cert(a) | Self::Tunnel(a) | Self::CreateTunnel(a) => a.host_id.trim(),
+            Self::Lighthouse(a) => a.host_id.trim(),
+            Self::Stack(a) => a.host_id.trim(),
+            Self::Logs(a) => a.host_id.trim(),
         }
     }
 }

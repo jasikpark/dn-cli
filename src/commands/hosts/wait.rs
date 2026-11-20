@@ -16,7 +16,7 @@ use crate::output::{
 /// Reject a malformed host id, a `--timeout` shorter than `--interval`, or a
 /// bad `--since` before credentials are resolved.
 pub fn validate_wait_preflight(args: &HostWaitArgs) -> anyhow::Result<()> {
-    validate_id("host", &args.host_id)?;
+    validate_id("host", args.host_id.trim())?;
     if args.timeout < args.interval {
         bail!(
             "--timeout {} is shorter than --interval {}, so the wait would end before \
@@ -34,27 +34,28 @@ pub fn validate_wait_preflight(args: &HostWaitArgs) -> anyhow::Result<()> {
 /// Poll a host until it checks in, then show it. `--json` prints the host as
 /// `host get` would; a wait that runs out of time fails with `ERR_TIMEOUT`.
 pub fn hosts_wait(client: &Client, args: &HostWaitArgs, output: OutputMode) -> anyhow::Result<()> {
-    validate_id("host", &args.host_id)?;
+    let id = args.host_id.trim();
+    validate_id("host", id)?;
     let since = args
         .since
         .as_deref()
         .map(|s| parse_since(s, Timestamp::now()))
         .transpose()?;
     let plan = Plan {
-        host_id: &args.host_id,
+        host_id: id,
         since,
         timeout: args.timeout,
         interval: args.interval,
     };
     let res = wait_for_check_in(
         &plan,
-        |limit| client.get_host_within(&args.host_id, limit),
+        |limit| client.get_host_within(id, limit),
         &mut SystemClock(Instant::now()),
         |progress| match progress {
             // The JSON face stays quiet on stderr until something goes wrong.
             Progress::Waiting(host) if output == OutputMode::Human => eprintln!(
                 "Waiting for {} to check in (up to {}, every {})...",
-                host_label(&args.host_id, host),
+                host_label(id, host),
                 friendly(args.timeout),
                 friendly(args.interval),
             ),
@@ -66,10 +67,7 @@ pub fn hosts_wait(client: &Client, args: &HostWaitArgs, output: OutputMode) -> a
         },
     )?;
     output.emit(&res, |res| {
-        print!(
-            "{}",
-            render_checked_in(&args.host_id, data_object(res, "host")?)
-        );
+        print!("{}", render_checked_in(id, data_object(res, "host")?));
         Ok(())
     })
 }

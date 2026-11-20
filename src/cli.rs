@@ -852,9 +852,9 @@ pub struct HostCreateArgs {
     /// UDP listen port. Required (non-zero) for lighthouses and relays.
     #[arg(long)]
     pub listen_port: Option<u16>,
-    /// Tags in `key:value` form (key ≤20 chars, value ≤50, no whitespace).
-    /// Repeatable, or comma-separated.
-    #[arg(long, value_delimiter = ',')]
+    /// Tag in `key:value` form (key ≤20 chars, value ≤50, no whitespace around
+    /// either). Repeatable.
+    #[arg(long = "tag", visible_alias = "tags", value_name = "TAG")]
     pub tags: Vec<String>,
     /// Lifetime of the enrollment code in seconds. API default is 86400
     /// (24h).

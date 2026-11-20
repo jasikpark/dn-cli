@@ -238,7 +238,7 @@ Creates the host **and** its one-time enrollment code in a single call.
 | `--relay` | with `--listen-port <port>` |
 | `--ipv4 <ADDR\|CIDR>` / `--no-ipv4` | to pin an IPv4, or to make a v6-only host |
 | `--ipv6 <ADDR>` | to pin an IPv6 |
-| `--tags k:v` | repeatable, or comma-separated |
+| `--tag k:v` | repeatable (alias `--tags`) |
 | `--code-lifetime <SECONDS>` | enrollment code lifetime (API default 86400) |
 
 Returns `{ "data": { "host": { … }, "enrollmentCode": { "code", "lifetimeSeconds" } } }`.
@@ -246,7 +246,7 @@ Hand the user the code and the exact command to run on the device —
 `dnclient enroll -code <code>` — and tell them it expires (`lifetimeSeconds`). The
 human view prints the same thing, plus a reminder that the default role denies
 all inbound traffic: nothing can reach a freshly enrolled host until its role
-or one of its `--tags` allows it (`dn tag get`). What the new host can reach
+or one of its `--tag` values allows it (`dn tag get`). What the new host can reach
 depends on the other hosts' rules — run the reachability check under
 `role get` rather than assuming either way.
 
@@ -851,7 +851,7 @@ One id per call.
 |-----------|------|
 | `host list`, `host get`, `host search`, `host wait`, `host debug cert`, `host debug tunnel`, `host debug lighthouse`, `host debug stack`, `role list`, `role get`, `tag list`, `tag get`, `network list`, `network get`, `route list`, `route get`, `join-key list`, `join-key get`, `audit-log list` | free — reads change nothing |
 | `host edit` | a write: renaming is cosmetic, but `--role`, `--clear-role`, `--add-tag`, and `--remove-tag` change the host's firewall. Confirm the host and the role or tag with the user first. |
-| `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tags` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
+| `host create` | a write: it creates a billable host and a one-time enrollment code. Confirm the name, the network, and any `--role` or `--tag` with the user first — like `host edit`, a role or tag sets the new host's firewall. |
 | `host debug create-tunnel` | a small write on the device: it starts a handshake, as traffic to that peer would. Run it when the user is debugging that pair of hosts; say which peer. |
 | `host debug logs` | a small write on the device: the host reloads its Nebula config when the session starts and again when it ends, and it streams for the whole `--duration` even if `dn` stops early. Run it when the user is debugging that host; keep `--duration` short and don't loop it. |
 | `host block` | a reversible write: the host is cut off from every other host until unblocked. Confirm the host by name with the user first, and say so if it is a lighthouse or relay (the whole network is affected). |

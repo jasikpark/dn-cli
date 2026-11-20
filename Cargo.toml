@@ -6,7 +6,6 @@ edition = "2024"
 rust-version = "1.89"
 description = "Unofficial CLI for the Defined Networking API"
 repository = "https://github.com/jasikpark/dn-cli"
-homepage = "https://github.com/jasikpark/dn-cli"
 readme = "README.md"
 license-file = "LICENSE.md"
 keywords = ["defined-networking", "nebula", "vpn", "cli"]

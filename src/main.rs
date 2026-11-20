@@ -79,13 +79,13 @@ fn preflight(cli: &Cli) -> anyhow::Result<()> {
             HostCommand::Edit(args) => validate_edit_preflight(args)?,
             HostCommand::Search(args) => validate_search_preflight(args)?,
             HostCommand::Delete(args) => {
-                validate_id("host", &args.host_id)?;
+                validate_id("host", args.host_id.trim())?;
                 preflight_delete(args.yes, output)?;
             }
             HostCommand::Get(args) | HostCommand::Block(args) | HostCommand::Unblock(args) => {
-                validate_id("host", &args.host_id)?;
+                validate_id("host", args.host_id.trim())?;
             }
-            HostCommand::EnrollCode(args) => validate_id("host", &args.host_id)?,
+            HostCommand::EnrollCode(args) => validate_id("host", args.host_id.trim())?,
             HostCommand::Wait(args) => validate_wait_preflight(args)?,
             HostCommand::Debug(command) => validate_id("host", command.host_id())?,
             HostCommand::List(args) => validate_list_preflight(args)?,

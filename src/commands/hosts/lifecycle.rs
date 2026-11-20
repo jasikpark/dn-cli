@@ -9,11 +9,12 @@ use crate::output::{OutputMode, data_object, sanitize_for_display, str_field};
 
 /// Block one host. `--json` prints the updated host as the API returns it.
 pub fn hosts_block(client: &Client, args: &HostGetArgs, output: OutputMode) -> anyhow::Result<()> {
-    validate_id("host", &args.host_id)?;
-    let res = client.block_host(&args.host_id)?;
+    let id = args.host_id.trim();
+    validate_id("host", id)?;
+    let res = client.block_host(id)?;
     output.emit(&res, |res| {
         let host = data_object(res, "host")?;
-        print!("{}", render_blocked(&args.host_id, host, true)?);
+        print!("{}", render_blocked(id, host, true)?);
         Ok(())
     })
 }
@@ -24,11 +25,12 @@ pub fn hosts_unblock(
     args: &HostGetArgs,
     output: OutputMode,
 ) -> anyhow::Result<()> {
-    validate_id("host", &args.host_id)?;
-    let res = client.unblock_host(&args.host_id)?;
+    let id = args.host_id.trim();
+    validate_id("host", id)?;
+    let res = client.unblock_host(id)?;
     output.emit(&res, |res| {
         let host = data_object(res, "host")?;
-        print!("{}", render_blocked(&args.host_id, host, false)?);
+        print!("{}", render_blocked(id, host, false)?);
         Ok(())
     })
 }
@@ -39,11 +41,12 @@ pub fn hosts_enroll_code(
     args: &HostEnrollCodeArgs,
     output: OutputMode,
 ) -> anyhow::Result<()> {
-    validate_id("host", &args.host_id)?;
-    let res = client.create_enrollment_code(&args.host_id, args.code_lifetime)?;
+    let id = args.host_id.trim();
+    validate_id("host", id)?;
+    let res = client.create_enrollment_code(id, args.code_lifetime)?;
     output.emit(&res, |res| {
         let data = data_object(res, "enrollment code")?;
-        print!("{}", render_enroll_code(&args.host_id, data)?);
+        print!("{}", render_enroll_code(id, data)?);
         Ok(())
     })
 }
