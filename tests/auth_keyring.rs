@@ -654,6 +654,60 @@ fn a_keyring_account_dn_could_not_have_written_is_refused() {
 }
 
 #[test]
+fn invalid_keyring_accounts_are_not_deleted_on_login_or_logout() {
+    let env = Env::new();
+    let write_bad = || {
+        fs::write(
+            env.dir.path().join("auth.json"),
+            json!({"version": 2, "default_profile": "work",
+                "profiles": {"work": {"key": "keyring:Work/abc"}}})
+            .to_string(),
+        )
+        .unwrap();
+    };
+    write_bad();
+    // With an unavailable keyring, attempting to delete the bogus entry would
+    // warn and report `work` in `keyring_left`.
+    let out = env.run(
+        &["auth", "logout", "--profile", "work", "--json"],
+        "",
+        &[("DN_TEST_KEYRING", "unavailable")],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let payload: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(payload["keyring_left"], json!([]));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    write_bad();
+    let out = env.run(
+        &[
+            "auth",
+            "login",
+            "--profile",
+            "work",
+            "--ref",
+            "op://Vault/Item/key",
+            "--no-verify",
+            "--json",
+        ],
+        "",
+        &[("DN_TEST_KEYRING", "unavailable")],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let payload: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(payload["keyring_left"], json!([]));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn the_profile_table_shows_keyring_without_the_account() {
     let env = Env::new();
     env.login("default", "key", &[]);

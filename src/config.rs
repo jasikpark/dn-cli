@@ -41,7 +41,7 @@ pub fn keyring_marker(account: &str) -> String {
 /// Whether `account` could be one of ours: a profile name, alone or followed
 /// by `/` and the lowercase letters and digits `keystore::new_account` adds.
 /// Lowercase for the reason profile names are.
-fn is_valid_keyring_account(account: &str) -> bool {
+pub fn is_valid_keyring_account(account: &str) -> bool {
     let (profile, id) = account.split_once('/').unwrap_or((account, "0"));
     is_valid_profile_name(profile)
         && (1..=32).contains(&id.len())

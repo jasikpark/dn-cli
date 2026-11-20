@@ -264,7 +264,7 @@ fn bad_arguments_fail_before_any_request() {
 #[test]
 fn a_rate_limit_asking_for_a_long_pause_does_not_outlast_the_timeout() {
     let id = mock_id("host", "build server");
-    let (url, _) = serve(vec![
+    let (url, seen) = serve(vec![
         host(&id, Value::Null),
         (
             "429 Too Many Requests\r\nRetry-After: 30",
@@ -279,7 +279,7 @@ fn a_rate_limit_asking_for_a_long_pause_does_not_outlast_the_timeout() {
             "wait",
             &id,
             "--timeout",
-            "1s",
+            "2s",
             "--interval",
             "1s",
             "--json",
@@ -288,5 +288,6 @@ fn a_rate_limit_asking_for_a_long_pause_does_not_outlast_the_timeout() {
     let took = started.elapsed();
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(stdout_json(&out)["errors"][0]["code"], "ERR_TIMEOUT");
+    assert_eq!(seen.lock().unwrap().len(), 2);
     assert!(took < std::time::Duration::from_secs(15), "took {took:?}");
 }

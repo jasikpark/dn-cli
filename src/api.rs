@@ -146,8 +146,8 @@ impl Client {
     }
 
     /// Send, sleeping and trying again on a 429 up to [`MAX_RETRIES`] times.
-    /// With a `deadline`, a 429 whose delay would sleep past it is returned
-    /// as it is.
+    /// With a `deadline`, a 429 whose delay would sleep past it returns
+    /// [`RateLimitedPastDeadline`] instead of sleeping.
     fn call_with_retry(
         &self,
         deadline: Option<Instant>,
@@ -160,7 +160,7 @@ impl Client {
             }
             let delay = retry_delay(&res, attempt);
             if deadline.is_some_and(|d| delay >= time_left(d)) {
-                return Ok(res);
+                return Err(RateLimitedPastDeadline.into());
             }
             eprintln!(
                 "rate limited, retrying in {:.1}s ({}/{MAX_RETRIES})...",
@@ -169,7 +169,13 @@ impl Client {
             );
             std::thread::sleep(delay);
         }
-        send().context("request to Defined API failed")
+        let res = send().context("request to Defined API failed")?;
+        if res.status().as_u16() == 429
+            && deadline.is_some_and(|d| retry_delay(&res, MAX_RETRIES) >= time_left(d))
+        {
+            return Err(RateLimitedPastDeadline.into());
+        }
+        Ok(res)
     }
 
     /// Send one request to a versioned path and fail on a non-2xx with a
@@ -575,6 +581,24 @@ fn deadline_after(limit: Duration) -> Instant {
     Instant::now()
         .checked_add(limit)
         .unwrap_or_else(|| Instant::now() + REQUEST_TIMEOUT)
+}
+
+/// A 429 whose backoff would sleep past a caller-supplied deadline, so
+/// [`Client::get_host_within`] gave up instead of sleeping past it.
+#[derive(Debug)]
+pub struct RateLimitedPastDeadline;
+
+impl fmt::Display for RateLimitedPastDeadline {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("rate limited past wait deadline")
+    }
+}
+
+impl std::error::Error for RateLimitedPastDeadline {}
+
+/// Whether `err` is [`RateLimitedPastDeadline`].
+pub fn is_rate_limited_past_deadline(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<RateLimitedPastDeadline>().is_some()
 }
 
 /// Whether `err` is a request that ran out its timeout, so a wait can report

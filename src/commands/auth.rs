@@ -7,9 +7,9 @@ use crate::api::{ApiError, Client};
 use crate::cli::{AuthLoginArgs, AuthLogoutArgs, AuthStatusArgs, AuthSwitchArgs};
 use crate::config::{
     Active, AuthFile, AuthLock, Config, DEFAULT_PROFILE, KeySource, Profile, api_key_env_is_set,
-    api_url, auth_path, check_api_url, keyring_marker, normalize_api_url, normalize_op_ref,
-    op_read, remove_file_if_present, requested_profile, select_profile, stored_api_url,
-    validate_op_ref,
+    api_url, auth_path, check_api_url, is_valid_keyring_account, keyring_marker, normalize_api_url,
+    normalize_op_ref, op_read, remove_file_if_present, requested_profile, select_profile,
+    stored_api_url, validate_op_ref,
 };
 use crate::error::{InvalidArgument, ReportedInOutput, error_envelope};
 use crate::keystore;
@@ -164,8 +164,12 @@ fn save_login(
 
 /// Delete the keyring entry under `account`, which `profile` no longer points
 /// at. Failing to is only a warning, and `false`: the profile change it
-/// follows has already happened.
+/// follows has already happened. A hand-edited account `dn` could never have
+/// written is skipped without touching the keyring.
 fn forget_keyring_entry(account: &str, profile: &str) -> bool {
+    if !is_valid_keyring_account(account) {
+        return true;
+    }
     match keystore::delete(account, profile) {
         Ok(_) => true,
         Err(e) => {

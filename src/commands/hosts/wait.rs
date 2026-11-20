@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::Value;
 
-use crate::api::{ApiError, Client, is_timeout};
+use crate::api::{ApiError, Client, is_rate_limited_past_deadline, is_timeout};
 use crate::cli::HostWaitArgs;
 use crate::error::TimedOut;
 use crate::ids::validate_id;
@@ -115,9 +115,10 @@ impl Clock for SystemClock {
 /// returning that response. Each check is given what is left of the wait, so
 /// the command stops within a round trip of `plan.timeout`; a check that
 /// outlasts it, and a rate limit the wait can't sit out, both end as
-/// `ERR_TIMEOUT`. A dropped connection or a 5xx is reported and retried
-/// (even on the first check, since waiting may fix it), while any other API
-/// error (a wrong id or key, the host deleted, the key revoked) ends the wait.
+/// `ERR_TIMEOUT`. The first check must succeed unless it times out: an error
+/// there is usually a wrong id, key, or URL. Mid-wait, a dropped connection,
+/// 5xx, or 429 with time remaining is reported and retried, while any other
+/// API error (the host deleted, the key revoked) ends the wait.
 fn wait_for_check_in(
     plan: &Plan,
     mut poll: impl FnMut(Duration) -> anyhow::Result<Value>,
@@ -150,9 +151,9 @@ fn wait_for_check_in(
                 }
                 last = Some(res);
             }
-            // The API client surfaces a 429 only once the backoff it asks for
-            // runs past the wait's deadline, so polling again would ignore it.
-            Err(err) if is_rate_limited(&err) => return timed_out(&last),
+            // The backoff this 429 asked for runs past the wait's deadline, so
+            // polling again would ignore it.
+            Err(err) if is_rate_limited_past_deadline(&err) => return timed_out(&last),
             // The check used up the time the wait had left.
             Err(err) if is_timeout(&err) && clock.elapsed() >= plan.timeout => {
                 return timed_out(&last);
@@ -183,18 +184,12 @@ fn checked_host<'a>(requested: &str, res: &'a Value) -> anyhow::Result<&'a Value
     Ok(host)
 }
 
-/// A failure worth retrying mid-wait: one that never got an API response, or a
-/// server-side 5xx. A 4xx means the next check would fail the same way.
+/// A failure worth retrying mid-wait: one that never got an API response, a
+/// 429 whose retries ran out while time remains, or a server-side 5xx. Any
+/// other 4xx means the next check would fail the same way.
 fn is_transient(err: &anyhow::Error) -> bool {
     err.downcast_ref::<ApiError>()
-        .is_none_or(|api| api.status >= 500)
-}
-
-/// A 429 from the API. The client has already retried it within the request's
-/// budget, so one reaching the wait wants a longer backoff than remains.
-fn is_rate_limited(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<ApiError>()
-        .is_some_and(|api| api.status == 429)
+        .is_none_or(|api| api.status == 429 || api.status >= 500)
 }
 
 /// `metadata.lastSeenAt`, which the API leaves `null` until the host first
@@ -452,9 +447,13 @@ mod tests {
 
     #[test]
     fn a_rate_limit_the_wait_cannot_sit_out_ends_it() {
-        // The client only surfaces a 429 whose backoff exceeds the budget, so
-        // the wait gives up rather than polling straight through it.
-        let (res, _, polls, _) = run(&plan(None, 10, 5), vec![never_seen(), api_error(429)]);
+        let (res, _, polls, _) = run(
+            &plan(None, 10, 5),
+            vec![
+                never_seen(),
+                Err(crate::api::RateLimitedPastDeadline.into()),
+            ],
+        );
         let err = res.unwrap_err();
         assert!(err.downcast_ref::<TimedOut>().is_some(), "{err:#}");
         assert_eq!(polls, 2);
@@ -515,13 +514,14 @@ mod tests {
             vec![
                 never_seen(),
                 Err(anyhow!("connection reset")),
+                api_error(429),
                 api_error(502),
                 seen("2026-11-03T01:00:00Z"),
             ],
         );
         assert!(res.is_ok());
-        assert_eq!(polls, 4);
-        assert_eq!(said.len(), 3, "{said:?}");
+        assert_eq!(polls, 5);
+        assert_eq!(said.len(), 4, "{said:?}");
         assert!(said[1].starts_with("retrying connection reset"), "{said:?}");
     }
 
@@ -590,9 +590,11 @@ mod tests {
     fn transient_means_no_response_or_a_server_error() {
         assert!(is_transient(&anyhow!("connection reset")));
         assert!(is_transient(&api_error(500).unwrap_err()));
-        assert!(!is_transient(&api_error(429).unwrap_err()));
-        assert!(is_rate_limited(&api_error(429).unwrap_err()));
-        assert!(!is_rate_limited(&api_error(503).unwrap_err()));
+        assert!(is_transient(&api_error(429).unwrap_err()));
+        assert!(is_rate_limited_past_deadline(
+            &crate::api::RateLimitedPastDeadline.into()
+        ));
+        assert!(!is_rate_limited_past_deadline(&api_error(429).unwrap_err()));
         assert!(!is_transient(&api_error(499).unwrap_err()));
         assert!(!is_transient(&api_error(404).unwrap_err()));
     }
