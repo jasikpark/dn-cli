@@ -10,7 +10,7 @@ use crate::output::{OutputMode, sanitize_for_display, str_field};
 /// Catch user errors (empty flags, bad tag format) before credentials are
 /// resolved, matching `validate_create_preflight`'s contract.
 pub fn validate_edit_preflight(args: &HostEditArgs) -> anyhow::Result<()> {
-    validate_id("host", &args.host_id)?;
+    validate_id("host", args.host_id.trim())?;
     if args.name.is_none()
         && args.role.is_none()
         && !args.clear_role
@@ -43,7 +43,8 @@ pub fn validate_edit_preflight(args: &HostEditArgs) -> anyhow::Result<()> {
 /// (the caller decides whether to warn). Removes run before adds so
 /// `--remove-tag old:x --add-tag old:y` replaces in one call.
 fn build_edit_body(data: &Value, args: &HostEditArgs) -> anyhow::Result<(Value, Vec<String>)> {
-    let mut tags = extract_tags(data);
+    let orig_tags = extract_tags(data);
+    let mut tags = orig_tags.clone();
     let mut missing = Vec::new();
 
     for raw in &args.remove_tag {
@@ -65,7 +66,9 @@ fn build_edit_body(data: &Value, args: &HostEditArgs) -> anyhow::Result<(Value, 
     let obj = body
         .as_object_mut()
         .ok_or_else(|| anyhow!("host data is not an object"))?;
-    obj.insert("tags".into(), json!(tags));
+    if tags != orig_tags {
+        obj.insert("tags".into(), json!(tags));
+    }
     if let Some(new_name) = &args.name {
         obj.insert("name".into(), json!(new_name.trim()));
     }
@@ -80,7 +83,7 @@ fn build_edit_body(data: &Value, args: &HostEditArgs) -> anyhow::Result<(Value, 
 /// Edit a host via read-modify-write: GET the current host, apply deltas,
 /// PUT the full object back (the v3 PUT is whole-object, not partial).
 pub fn hosts_edit(client: &Client, args: &HostEditArgs, output: OutputMode) -> anyhow::Result<()> {
-    let id = args.host_id.as_str();
+    let id = args.host_id.trim();
     let res = client.get_host(id)?;
     let data = res
         .get("data")
@@ -277,6 +280,20 @@ mod tests {
         let (body, missing) = build_edit_body(&data, &args).unwrap();
         assert_eq!(missing, vec!["gone:1"]);
         assert_eq!(body["tags"], json!(["a:2"]));
+    }
+
+    #[test]
+    fn build_edit_body_noop_with_null_or_missing_tags_keeps_body_equal() {
+        for data in [
+            json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "name": "web", "tags": null}),
+            json!({"id": "host-FBNRAHQYQLWXWMCY7L4XP46ZXI", "name": "web"}),
+        ] {
+            let mut args = edit_args(None, None);
+            args.remove_tag = vec!["gone:1".to_string()];
+            let (body, missing) = build_edit_body(&data, &args).unwrap();
+            assert_eq!(missing, vec!["gone:1"]);
+            assert_eq!(body, data);
+        }
     }
 
     #[test]

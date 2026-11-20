@@ -631,7 +631,8 @@ fn retry_delay(res: &Response<Body>, attempt: u32) -> Duration {
 fn retry_delay_from(header: Option<&str>, attempt: u32, jitter: f64) -> Duration {
     let from_header = header
         .and_then(|s| s.parse::<f64>().ok())
-        .filter(|s| (0.0..=60.0).contains(s));
+        .filter(|s| s.is_finite() && *s >= 0.0)
+        .map(|s| s.min(60.0));
 
     let base = from_header.unwrap_or_else(|| 2.0_f64.powi(attempt as i32));
     Duration::from_secs_f64(base + jitter * 0.5 * base)
@@ -859,7 +860,7 @@ mod tests {
     #[test]
     fn retry_delay_caps_header_at_60() {
         let d = retry_delay_from(Some("61"), 0, 0.0);
-        assert_eq!(d, Duration::from_secs(1));
+        assert_eq!(d, Duration::from_secs(60));
     }
 
     #[test]

@@ -10,8 +10,9 @@ use crate::output::{
 /// Show one host. `--json` prints the response as-is; the human view resolves
 /// the role id to its name.
 pub fn hosts_get(client: &Client, args: &HostGetArgs, output: OutputMode) -> anyhow::Result<()> {
-    validate_id("host", &args.host_id)?;
-    let res = client.get_host(&args.host_id)?;
+    let id = args.host_id.trim();
+    validate_id("host", id)?;
+    let res = client.get_host(id)?;
     output.emit(&res, |res| {
         let data = data_object(res, "host")?;
         let role = data["roleID"].as_str().filter(|id| !id.is_empty());

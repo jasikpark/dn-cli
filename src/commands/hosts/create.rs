@@ -1,10 +1,11 @@
 use anyhow::{Context, anyhow, bail};
 use serde_json::{Value, json};
 
-use super::checked_enroll_code;
+use super::{checked_enroll_code, parse_tag};
 use crate::api::Client;
 use crate::cli::HostCreateArgs;
 use crate::error::InvalidArgument;
+use crate::ids::validate_id;
 use crate::output::{OutputMode, joined_field, sanitize_for_display, str_field};
 
 pub fn hosts_create(
@@ -15,17 +16,18 @@ pub fn hosts_create(
     // Auto-assigning an IPv4 means sending the network's own IPv4 prefix, so
     // the network is fetched only while IPv4 is still undecided.
     let auto_ipv4 = wants_auto_ipv4(args);
-    let (network_id, ipv4_cidr) = match &args.network {
+    let (network_id, ipv4_cidr) = match args.network.as_deref().map(str::trim) {
         Some(id) if auto_ipv4 => {
+            validate_id("network", id)?;
             let network = client.get_network(id).with_context(|| {
                 format!(
                     "could not read network {id} to auto-assign an IPv4 (the API key needs \
                      networks:read; pass --ipv4 <ADDR|CIDR> or --no-ipv4 to skip the lookup)"
                 )
             })?;
-            (id.clone(), network_ipv4_cidr(&network["data"]))
+            (id.to_owned(), network_ipv4_cidr(&network["data"]))
         }
-        Some(id) => (id.clone(), None),
+        Some(id) => (id.to_owned(), None),
         None => {
             let networks = client.all_networks()?;
             let network = pick_network(&networks)?;
@@ -47,11 +49,23 @@ pub fn hosts_create(
     })
 }
 
-/// Reject lighthouse/relay configurations the API would also reject, but with
-/// a clearer message than `ERR_INVALID_VALUE` from a round-trip away. The
-/// pairing rules (lighthouse needs static address + non-zero port; relay
-/// needs non-zero port) come straight from the v2 host-create error examples.
+/// Reject malformed arguments and lighthouse/relay configurations before
+/// credentials are resolved or any request is sent. The pairing rules
+/// (lighthouse needs static address + non-zero port; relay needs non-zero
+/// port) come straight from the v2 host-create error examples.
 pub fn validate_create_preflight(args: &HostCreateArgs) -> anyhow::Result<()> {
+    if args.name.trim().is_empty() {
+        bail!("host name must not be empty");
+    }
+    if let Some(network) = &args.network {
+        validate_id("network", network.trim()).map_err(|e| anyhow!("--network: {e}"))?;
+    }
+    if let Some(role) = &args.role {
+        validate_id("role", role.trim()).map_err(|e| anyhow!("--role: {e}"))?;
+    }
+    for raw in &args.tags {
+        parse_tag(raw.trim())?;
+    }
     let has_port = args.listen_port.unwrap_or(0) != 0;
     if args.lighthouse && args.static_addresses.is_empty() {
         bail!("--lighthouse requires at least one --static-address <ip:port>");
@@ -136,8 +150,9 @@ fn build_host_create_body(
         ips.push(v4);
     }
     ips.extend(args.ipv6.as_deref());
+    let tags: Vec<&str> = args.tags.iter().map(|t| t.trim()).collect();
     let optional = [
-        ("roleID", args.role.as_ref().map(|r| json!(r))),
+        ("roleID", args.role.as_deref().map(|r| json!(r.trim()))),
         ("ipAddresses", (!ips.is_empty()).then(|| json!(ips))),
         (
             "staticAddresses",
@@ -146,10 +161,10 @@ fn build_host_create_body(
         ("listenPort", args.listen_port.map(|p| json!(p))),
         ("isLighthouse", args.lighthouse.then(|| json!(true))),
         ("isRelay", args.relay.then(|| json!(true))),
-        ("tags", (!args.tags.is_empty()).then(|| json!(args.tags))),
+        ("tags", (!tags.is_empty()).then(|| json!(tags))),
         ("codeLifetimeSeconds", args.code_lifetime.map(|c| json!(c))),
     ];
-    let mut body = json!({ "name": args.name, "networkID": network_id });
+    let mut body = json!({ "name": args.name.trim(), "networkID": network_id });
     for (key, value) in optional {
         if let Some(value) = value {
             body[key] = value;
@@ -175,7 +190,7 @@ fn render_host_create_human(res: &Value) -> String {
     } else {
         "host"
     };
-    let id = str_field(host, "id");
+    let id = sanitize_for_display(str_field(host, "id"));
     let code = str_field(&res["data"]["enrollmentCode"], "code");
     let name = sanitize_for_display(str_field(host, "name"));
     let ips = sanitize_for_display(&joined_field(host, "ipAddresses"));
@@ -196,10 +211,7 @@ fn render_host_create_human(res: &Value) -> String {
         Err(_) => {
             out.push('\n');
             out.push_str("The response had no usable enrollment code. Issue one with:\n");
-            out.push_str(&format!(
-                "  dn host enroll-code {}\n",
-                sanitize_for_display(id)
-            ));
+            out.push_str(&format!("  dn host enroll-code {id}\n"));
         }
     }
     out.push('\n');
@@ -399,6 +411,73 @@ mod tests {
     fn preflight_ok_for_regular_host_with_no_flags() {
         let a = args("plain", None, false, false, vec![], None);
         assert!(validate_create_preflight(&a).is_ok());
+    }
+
+    #[test]
+    fn preflight_rejects_blank_name_and_malformed_ids_or_tags() {
+        assert!(validate_create_preflight(&args("   ", None, false, false, vec![], None)).is_err());
+
+        let err = validate_create_preflight(&args(
+            "web",
+            Some("network-1/../hosts"),
+            false,
+            false,
+            vec![],
+            None,
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.starts_with("--network:"), "{err}");
+
+        let mut a = args("web", None, false, false, vec![], None);
+        a.role = Some("role/bad".into());
+        let err = validate_create_preflight(&a).unwrap_err().to_string();
+        assert!(err.starts_with("--role:"), "{err}");
+
+        let mut a = args("web", None, false, false, vec![], None);
+        a.tags = vec!["nocolon".into()];
+        assert!(validate_create_preflight(&a).is_err());
+    }
+
+    #[test]
+    fn host_create_preserves_commas_in_tag_values_and_accepts_tags_alias() {
+        use clap::Parser;
+
+        use crate::cli::{Cli, Command, HostCommand};
+
+        for flag in ["--tag", "--tags"] {
+            let cli = Cli::try_parse_from([
+                "dn",
+                "host",
+                "create",
+                "web",
+                flag,
+                "splice:by,comma",
+                flag,
+                "env:prod",
+            ])
+            .unwrap();
+            let Command::Host {
+                command: HostCommand::Create(args),
+            } = cli.command
+            else {
+                panic!("expected `host create`");
+            };
+            assert_eq!(args.tags, vec!["splice:by,comma", "env:prod"]);
+            assert!(validate_create_preflight(&args).is_ok());
+        }
+    }
+
+    #[test]
+    fn render_human_sanitizes_host_id() {
+        let res = json!({
+            "data": {
+                "host": {"id": "host-\u{1b}[31m1", "name": "web"},
+                "enrollmentCode": {"code": "OTP"},
+            }
+        });
+        let out = render_host_create_human(&res);
+        assert!(!out.contains('\u{1b}'), "{out:?}");
     }
 
     #[test]
