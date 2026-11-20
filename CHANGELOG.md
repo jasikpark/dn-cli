@@ -1,6 +1,63 @@
 # Changelog
 
 All notable changes to this project are documented here.
+## 0.4.10 (2026-11-20)
+
+### Fixes
+
+- update rust crate jiff to v1 (#191)
+
+#### Validate `host create` arguments locally and preserve commas in `--tag`
+
+`dn host create` now validates `name`, `--network`, `--role`, and `--tag`
+before resolving credentials or contacting the API, matching the other host
+commands.
+
+The tag flag on `host create` is now `--tag` (with `--tags` kept as an alias)
+and no longer splits values on commas, so tag values containing commas (such as
+`splice:by,comma`) work the same way as in `host edit --add-tag`, `host list --tag`,
+and `join-key create --tag`. Pass `--tag` once per tag instead of separating
+multiple tags with commas.
+
+Also caps `Retry-After` delays above 60 seconds at 60 seconds instead of
+falling back to a 1-second backoff, and skips no-op `host edit` writes when the
+API returns `tags: null`.
+
+#### Bound `dn host wait` by its `--timeout`
+
+A slow or rate-limited API could keep `dn host wait` running well past
+`--timeout`, because each check had its own 60-second limit and its own
+rate-limit retries. `--timeout` is now a hard limit on how long the command
+runs: each check gets only what is left of the wait, and a check that runs out
+of that time or a rate limit the wait can't sit out both end as `ERR_TIMEOUT`.
+
+`--timeout` must now be at least `1s` and no shorter than `--interval`; a
+shorter one couldn't finish a round trip to the API, or would end before its
+second check. A host that checks in during the last `--interval` before the
+deadline may be reported as a timeout; a smaller `--interval` narrows that.
+
+#### Keep each config directory's keyring keys apart
+
+Keyring entries were named after the profile alone, so two config directories
+(`DN_CONFIG_DIR`, or a changed `XDG_CONFIG_HOME`) with a profile of the same
+name shared one key: logging in to one silently pointed the other at that
+organization, and logging out of one broke the other. A logout running at the
+same moment as a login to the same profile could also delete the key that
+login had just stored.
+
+Each `dn auth login` now stores its key in an entry of its own, named
+`<profile>/<random id>`, and `auth.json` records which one. Profiles saved by
+an earlier `dn` keep working and move to an entry of their own the next time
+you log in to them. A `dn` older than this one can't read a profile saved by
+this one; log in again after a downgrade.
+
+#### Don't send plain-HTTP loopback requests through a proxy
+
+With `ALL_PROXY`, `HTTPS_PROXY` or `HTTP_PROXY` set and no `NO_PROXY` entry for
+localhost, a call to an `http://localhost` API URL went to the proxy, API key
+included. `dn` now ignores proxy settings for `http://` URLs, which it only
+allows to this machine.
+
 ## 0.4.9 (2026-11-12)
 
 ### Features
