@@ -28,8 +28,27 @@ const AUTH_VERSION: u64 = 2;
 /// The profile `auth login` creates when nothing else is named.
 pub const DEFAULT_PROFILE: &str = "default";
 
-/// A profile `key` meaning "the OS keyring holds it, under the profile name".
-pub const KEYRING: &str = "keyring";
+/// A profile `key` of `keyring:<account>` means the OS keyring holds the key
+/// under that account. The bare word is the same with the profile's name as
+/// the account, which is how every login was stored through 0.4.9.
+const KEYRING: &str = "keyring";
+
+/// The profile `key` that points at keyring `account`.
+pub fn keyring_marker(account: &str) -> String {
+    format!("{KEYRING}:{account}")
+}
+
+/// Whether `account` could be one of ours: a profile name, alone or followed
+/// by `/` and the lowercase letters and digits `keystore::new_account` adds.
+/// Lowercase for the reason profile names are.
+pub fn is_valid_keyring_account(account: &str) -> bool {
+    let (profile, id) = account.split_once('/').unwrap_or((account, "0"));
+    is_valid_profile_name(profile)
+        && (1..=32).contains(&id.len())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
 
 /// Resolved runtime configuration: a usable bearer token plus the API base.
 pub struct Config {
@@ -327,7 +346,7 @@ impl Config {
         let api_key = match source {
             KeySource::Env(key) => key,
             KeySource::EnvRef(r) | KeySource::FileRef(r) => op_read(&r)?,
-            KeySource::Keyring(profile) => keyring_key(&profile)?,
+            KeySource::Keyring { profile, account } => keyring_key(&account, &profile)?,
         };
         let mut config = Self::with_key(api_key, active.profile.as_ref());
         config.profile = active.profile_name;

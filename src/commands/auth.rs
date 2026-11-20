@@ -6,10 +6,10 @@ use serde_json::{Value, json};
 use crate::api::{ApiError, Client};
 use crate::cli::{AuthLoginArgs, AuthLogoutArgs, AuthStatusArgs, AuthSwitchArgs};
 use crate::config::{
-    Active, AuthFile, AuthLock, Config, DEFAULT_PROFILE, KEYRING, KeySource, Profile,
-    api_key_env_is_set, api_url, auth_path, check_api_url, normalize_api_url, normalize_op_ref,
-    op_read, remove_file_if_present, requested_profile, select_profile, stored_api_url,
-    validate_op_ref,
+    Active, AuthFile, AuthLock, Config, DEFAULT_PROFILE, KeySource, Profile, api_key_env_is_set,
+    api_url, auth_path, check_api_url, is_valid_keyring_account, keyring_marker, normalize_api_url,
+    normalize_op_ref, op_read, remove_file_if_present, requested_profile, select_profile,
+    stored_api_url, validate_op_ref,
 };
 use crate::error::{InvalidArgument, ReportedInOutput, error_envelope};
 use crate::keystore;
@@ -60,36 +60,33 @@ pub fn auth_login(
     }
 
     // The keyring write can also wait on an unlock prompt, so it happens
-    // before the lock too, and before auth.json points at it. If saving the
-    // profile then fails, the keyring goes back to what auth.json still
-    // describes: the profile's old key, or no entry.
-    let had_keyring_entry = planned
-        .profiles
-        .get(&name)
-        .is_some_and(|p| p.uses_keyring());
-    let mut old_key = None;
-    if let LoginKey::Keyring(key) = &key {
-        if had_keyring_entry {
-            old_key = keystore::get(&name).ok();
+    // before the lock too, under an account nothing points at until the
+    // profile is saved. A concurrent login or logout of this profile deletes
+    // only the entry of the profile it replaced or removed, never this one.
+    let (stored_key, account) = match &key {
+        LoginKey::Keyring(key) => {
+            let account = keystore::new_account(&name);
+            keystore::set(&account, &name, key)?;
+            (keyring_marker(&account), Some(account))
         }
-        keystore::set(&name, key)?;
-    }
-    let saved = save_login(args, &name, &key);
+        LoginKey::Reference(reference) => (reference.clone(), None),
+    };
+    let saved = save_login(args, &name, stored_key);
     let (auth, replaced, previous_default, path) = match saved {
         Ok(saved) => saved,
         Err(e) => {
-            if matches!(key, LoginKey::Keyring(_)) {
-                restore_keyring_entry(&name, old_key.as_deref(), had_keyring_entry);
+            if let Some(account) = &account {
+                forget_keyring_entry(account, &name);
             }
             return Err(e);
         }
     };
-    // Judged by the profile this save replaced, not `planned`: another login
-    // may have pointed it at the keyring while this one waited on a prompt.
+    // The entry of the profile this save replaced, not of the one in
+    // `planned`: another login may have replaced that while this one waited
+    // on a prompt.
     let mut keyring_left = Vec::new();
-    if replaced.is_some_and(|p| p.uses_keyring())
-        && matches!(key, LoginKey::Reference(_))
-        && !forget_keyring_entry(&name)
+    if let Some(old) = replaced.as_ref().and_then(|p| p.keyring_account(&name))
+        && !forget_keyring_entry(old, &name)
     {
         keyring_left.push(name.clone());
     }
@@ -126,11 +123,12 @@ pub fn auth_login(
 
 /// Record a login in auth.json under the lock: re-read it and apply only this
 /// login's change, so a concurrent login isn't overwritten.
-/// Returns the saved file, the previous default and its path.
+/// `stored_key` is the profile's `key`. Returns the saved file, the profile
+/// it replaced, the previous default and the file's path.
 fn save_login(
     args: &AuthLoginArgs,
     name: &str,
-    key: &LoginKey,
+    stored_key: String,
 ) -> anyhow::Result<(
     AuthFile,
     Option<Profile>,
@@ -151,10 +149,7 @@ fn save_login(
     if let Some(url) = &args.api_url {
         profile.api_url = Some(normalize_api_url(url));
     }
-    profile.key = Some(match key {
-        LoginKey::Keyring(_) => KEYRING.to_string(),
-        LoginKey::Reference(reference) => reference.clone(),
-    });
+    profile.key = Some(stored_key);
     auth.profiles.insert(name.to_string(), profile);
     // Like `gh` and `tg`, the profile just logged in to becomes the default,
     // unless asked not to.
@@ -167,11 +162,15 @@ fn save_login(
     Ok((auth, replaced, previous_default, path))
 }
 
-/// Delete a profile's keyring entry that nothing points at any more. Failing
-/// to is only a warning, and `false`: the profile change it follows has
-/// already happened.
-fn forget_keyring_entry(profile: &str) -> bool {
-    match keystore::delete(profile) {
+/// Delete the keyring entry under `account`, which `profile` no longer points
+/// at. Failing to is only a warning, and `false`: the profile change it
+/// follows has already happened. A hand-edited account `dn` could never have
+/// written is skipped without touching the keyring.
+fn forget_keyring_entry(account: &str, profile: &str) -> bool {
+    if !is_valid_keyring_account(account) {
+        return true;
+    }
+    match keystore::delete(account, profile) {
         Ok(_) => true,
         Err(e) => {
             eprintln!(
@@ -180,52 +179,6 @@ fn forget_keyring_entry(profile: &str) -> bool {
             );
             false
         }
-    }
-}
-
-/// Warn about profiles logged out and deleted from the keyring that a
-/// concurrent `auth login` has since saved again: the key that login stored
-/// may be the one just deleted.
-fn warn_relogged_profiles(forgotten: &[String]) {
-    if forgotten.is_empty() {
-        return;
-    }
-    let Ok(_lock) = AuthLock::acquire() else {
-        return;
-    };
-    let Ok(auth) = AuthFile::load() else {
-        return;
-    };
-    for name in forgotten {
-        if auth.profiles.get(name).is_some_and(|p| p.uses_keyring()) {
-            eprintln!(
-                "warning: profile {name:?} was logged in again while it was being logged \
-                 out, and its key may have been removed; run `dn auth login --profile {name}`"
-            );
-        }
-    }
-}
-
-/// Put back the keyring entry a failed login replaced. With no `old_key` to
-/// restore, an entry the profile didn't use before is removed, and one it did
-/// use (but couldn't be read) is left holding the new key.
-fn restore_keyring_entry(profile: &str, old_key: Option<&str>, had_entry: bool) {
-    match old_key {
-        Some(old) => {
-            if let Err(e) = keystore::set(profile, old) {
-                eprintln!(
-                    "warning: could not restore the previous key for profile {profile:?} \
-                     in the OS keyring ({e:#}); it now holds the key just entered"
-                );
-            }
-        }
-        None if !had_entry => {
-            forget_keyring_entry(profile);
-        }
-        None => eprintln!(
-            "warning: the OS keyring entry for profile {profile:?} now holds the key \
-             just entered, though the profile was not saved"
-        ),
     }
 }
 
@@ -291,7 +244,12 @@ fn render_profiles(auth: &AuthFile) -> String {
                 mark.to_string(),
                 name.clone(),
                 stored_api_url(Some(profile)),
-                profile.key.clone().unwrap_or_default(),
+                // The account after `keyring:` only means something to `dn`.
+                if profile.uses_keyring() {
+                    "keyring".to_string()
+                } else {
+                    profile.key.clone().unwrap_or_default()
+                },
             ]
         })
         .collect();
@@ -470,7 +428,7 @@ pub fn auth_status(
             "API key: {r} (from {}, resolved via op read)",
             auth_path.display()
         ),
-        Ok(Some(KeySource::Keyring(profile))) => {
+        Ok(Some(KeySource::Keyring { profile, .. })) => {
             println!("API key: OS keyring (entry for profile {profile:?})")
         }
         Err(e) => println!("API key: invalid — {e:#}"),
@@ -558,9 +516,10 @@ pub fn auth_logout(
 ) -> anyhow::Result<()> {
     let path = auth_path()?;
     let lock = AuthLock::acquire()?;
-    // Keyring entries to delete once the lock is released: deleting can wait
-    // on an unlock prompt, and other `dn` calls shouldn't wait with it.
-    let mut forget = Vec::new();
+    // Profiles and their keyring accounts, to delete once the lock is
+    // released: deleting can wait on an unlock prompt, and other `dn` calls
+    // shouldn't wait with it.
+    let mut forget: Vec<(String, String)> = Vec::new();
     // `--all` removes the file without reading it, so it also clears a
     // corrupt file or one from a newer `dn`. Removing one profile needs a
     // readable file; an unreadable one is an error, never a deletion.
@@ -574,13 +533,9 @@ pub fn auth_logout(
         // Keyring entries are found through the file, so read it if it can
         // be read; an unreadable one can't say which entries are ours.
         match AuthFile::load() {
-            Ok(stored) => forget.extend(
-                stored
-                    .profiles
-                    .into_iter()
-                    .filter(|(_, p)| p.uses_keyring())
-                    .map(|(name, _)| name),
-            ),
+            Ok(stored) => forget.extend(stored.profiles.iter().filter_map(|(name, p)| {
+                Some((name.clone(), p.keyring_account(name)?.to_string()))
+            })),
             Err(e) => eprintln!(
                 "warning: could not read the profiles ({e:#}), so any keys they kept in the \
                  OS keyring (service {}) are left there",
@@ -600,8 +555,8 @@ pub fn auth_logout(
                 } else {
                     auth.save()?;
                 }
-                if removed.is_some_and(|p| p.uses_keyring()) {
-                    forget.push(name.clone());
+                if let Some(account) = removed.as_ref().and_then(|p| p.keyring_account(&name)) {
+                    forget.push((name.clone(), account.to_string()));
                 }
                 (true, Some(name))
             }
@@ -610,9 +565,9 @@ pub fn auth_logout(
     drop(lock);
     let keyring_left: Vec<&String> = forget
         .iter()
-        .filter(|name| !forget_keyring_entry(name))
+        .filter(|(name, account)| !forget_keyring_entry(account, name))
+        .map(|(name, _)| name)
         .collect();
-    warn_relogged_profiles(&forget);
     let env_override = warn_env_override();
 
     match output {

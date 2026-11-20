@@ -59,3 +59,26 @@ fn requests_identify_the_client_by_version_and_repository() {
     );
     assert_eq!(rx.recv().unwrap().as_deref(), Some(expected.as_str()));
 }
+
+#[test]
+fn a_plain_http_loopback_request_ignores_a_proxy_from_the_environment() {
+    let (url, rx) = serve();
+    let dir = tempfile::tempdir().unwrap();
+    // Nothing listens on port 1, so a request sent through the proxy fails.
+    let out = Command::new(env!("CARGO_BIN_EXE_dn"))
+        .args(["hosts", "list"])
+        .env("DN_CONFIG_DIR", dir.path())
+        .env("DEFINED_API_URL", &url)
+        .env("DEFINED_API_KEY", "fake-test-key")
+        .env("ALL_PROXY", "http://127.0.0.1:1")
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(rx.recv().unwrap().is_some());
+}

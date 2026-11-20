@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -12,6 +12,9 @@ use crate::cli::PageArgs;
 use crate::config::Config;
 
 const MAX_RETRIES: u32 = 3;
+
+/// How long one request may take, connecting through reading the body.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Minimal client for the Defined Networking REST API.
 ///
@@ -129,17 +132,25 @@ impl Client {
         // Disable ureq's default "non-2xx is an Error::StatusCode" behavior so
         // error responses arrive as Ok(_) and we can read the DN error body
         // (Error::StatusCode carries only the numeric code, never the body).
-        let agent: ureq::Agent = ureq::Agent::config_builder()
+        let mut builder = ureq::Agent::config_builder()
             .http_status_as_error(false)
-            .timeout_global(Some(Duration::from_secs(60)))
-            .user_agent(USER_AGENT)
-            .build()
-            .into();
+            .timeout_global(Some(REQUEST_TIMEOUT))
+            .user_agent(USER_AGENT);
+        // `check_api_url` allows plain http:// only to this machine, and a
+        // proxy named in the environment would carry the key off it in clear.
+        if config.api_url.starts_with("http://") {
+            builder = builder.proxy(None);
+        }
+        let agent: ureq::Agent = builder.build().into();
         Self { config, agent }
     }
 
+    /// Send, sleeping and trying again on a 429 up to [`MAX_RETRIES`] times.
+    /// With a `deadline`, a 429 whose delay would sleep past it returns
+    /// [`RateLimitedPastDeadline`] instead of sleeping.
     fn call_with_retry(
         &self,
+        deadline: Option<Instant>,
         send: impl Fn() -> Result<Response<Body>, ureq::Error>,
     ) -> Result<Response<Body>> {
         for attempt in 0..MAX_RETRIES {
@@ -148,6 +159,9 @@ impl Client {
                 return Ok(res);
             }
             let delay = retry_delay(&res, attempt);
+            if deadline.is_some_and(|d| delay >= time_left(d)) {
+                return Err(RateLimitedPastDeadline.into());
+            }
             eprintln!(
                 "rate limited, retrying in {:.1}s ({}/{MAX_RETRIES})...",
                 delay.as_secs_f64(),
@@ -155,7 +169,13 @@ impl Client {
             );
             std::thread::sleep(delay);
         }
-        send().context("request to Defined API failed")
+        let res = send().context("request to Defined API failed")?;
+        if res.status().as_u16() == 429
+            && deadline.is_some_and(|d| retry_delay(&res, MAX_RETRIES) >= time_left(d))
+        {
+            return Err(RateLimitedPastDeadline.into());
+        }
+        Ok(res)
     }
 
     /// Send one request to a versioned path and fail on a non-2xx with a
@@ -166,9 +186,19 @@ impl Client {
         path: &str,
         build: impl Fn(&str, &str) -> Result<Response<Body>, ureq::Error>,
     ) -> Result<Response<Body>> {
+        self.send_by(path, None, build)
+    }
+
+    /// [`Client::send`] that stops retrying a 429 at `deadline`.
+    fn send_by(
+        &self,
+        path: &str,
+        deadline: Option<Instant>,
+        build: impl Fn(&str, &str) -> Result<Response<Body>, ureq::Error>,
+    ) -> Result<Response<Body>> {
         let url = format!("{}{}", self.config.api_url, path);
         let auth = format!("Bearer {}", self.config.api_key);
-        let mut res = self.call_with_retry(|| build(&url, &auth))?;
+        let mut res = self.call_with_retry(deadline, || build(&url, &auth))?;
         error_for_status(&mut res)?;
         Ok(res)
     }
@@ -349,6 +379,24 @@ impl Client {
         self.get(&format!("/v2/hosts/{id}"))
     }
 
+    /// [`Client::get_host`] that gives up once `limit` has passed, retries
+    /// included; `limit` over [`REQUEST_TIMEOUT`] still bounds each request
+    /// by that. A 429 still unanswered then is the [`ApiError`].
+    pub fn get_host_within(&self, id: &str, limit: Duration) -> Result<Value> {
+        let deadline = deadline_after(limit);
+        read_json(
+            self.send_by(&format!("/v2/hosts/{id}"), Some(deadline), |url, auth| {
+                self.agent
+                    .get(url)
+                    .config()
+                    .timeout_global(Some(time_left(deadline).min(REQUEST_TIMEOUT)))
+                    .build()
+                    .header("Authorization", auth)
+                    .call()
+            })?,
+        )
+    }
+
     /// Update a host (v3). The body is the full host object — PUT is not
     /// field-partial, so callers GET first and send the modified whole.
     /// v2 network hosts require v3 for mutations.
@@ -424,7 +472,7 @@ impl Client {
     }
 
     /// StreamLogs: the same POST, but the response stays open while the host
-    /// sends log lines, so it gets `limit` instead of the client's 60s, and
+    /// sends log lines, so it gets `limit` instead of [`REQUEST_TIMEOUT`], and
     /// the body comes back unread for the caller to take a line at a time.
     pub fn host_command_stream(
         &self,
@@ -524,6 +572,52 @@ fn read_json(mut res: Response<Body>) -> Result<Value> {
     res.body_mut()
         .read_json()
         .context("failed to parse Defined API response as JSON")
+}
+
+/// `limit` from now, as a deadline. `host wait --timeout` accepts an
+/// hours-denominated duration large enough that `Instant` + it would overflow
+/// and panic, so an unrepresentable deadline falls back to [`REQUEST_TIMEOUT`].
+fn deadline_after(limit: Duration) -> Instant {
+    Instant::now()
+        .checked_add(limit)
+        .unwrap_or_else(|| Instant::now() + REQUEST_TIMEOUT)
+}
+
+/// A 429 whose backoff would sleep past a caller-supplied deadline, so
+/// [`Client::get_host_within`] gave up instead of sleeping past it.
+#[derive(Debug)]
+pub struct RateLimitedPastDeadline;
+
+impl fmt::Display for RateLimitedPastDeadline {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("rate limited past wait deadline")
+    }
+}
+
+impl std::error::Error for RateLimitedPastDeadline {}
+
+/// Whether `err` is [`RateLimitedPastDeadline`].
+pub fn is_rate_limited_past_deadline(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<RateLimitedPastDeadline>().is_some()
+}
+
+/// Whether `err` is a request that ran out its timeout, so a wait can report
+/// `ERR_TIMEOUT` rather than the catch-all `ERR_LOCAL`. A different transport
+/// failure (a refused connection, a reset) is not one.
+pub fn is_timeout(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<ureq::Error>()
+            .is_some_and(|e| matches!(e, ureq::Error::Timeout(_)))
+    })
+}
+
+/// The time until `deadline`, and at least a millisecond once it has passed,
+/// so the result is always usable as a timeout.
+fn time_left(deadline: Instant) -> Duration {
+    deadline
+        .saturating_duration_since(Instant::now())
+        .max(Duration::from_millis(1))
 }
 
 fn retry_delay(res: &Response<Body>, attempt: u32) -> Duration {
@@ -638,6 +732,15 @@ fn encode_path_segment(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deadline_after_a_huge_limit_does_not_overflow() {
+        // `Instant::now() + Duration::MAX` panics; the deadline must not.
+        let before = Instant::now();
+        let deadline = deadline_after(Duration::MAX);
+        assert!(deadline >= before);
+        assert!(deadline <= Instant::now() + REQUEST_TIMEOUT + Duration::from_secs(1));
+    }
 
     #[test]
     fn encode_path_segment_keeps_tag_colon_and_escapes_url_structure() {

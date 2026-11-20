@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::Value;
 
-use crate::api::{ApiError, Client};
+use crate::api::{ApiError, Client, is_rate_limited_past_deadline, is_timeout};
 use crate::cli::HostWaitArgs;
 use crate::error::TimedOut;
 use crate::ids::validate_id;
@@ -13,9 +13,18 @@ use crate::output::{
     OutputMode, data_object, joined_field, render_details, sanitize_for_display, str_field,
 };
 
-/// Reject a malformed host id or `--since` before credentials are resolved.
+/// Reject a malformed host id, a `--timeout` shorter than `--interval`, or a
+/// bad `--since` before credentials are resolved.
 pub fn validate_wait_preflight(args: &HostWaitArgs) -> anyhow::Result<()> {
     validate_id("host", &args.host_id)?;
+    if args.timeout < args.interval {
+        bail!(
+            "--timeout {} is shorter than --interval {}, so the wait would end before \
+             its second check; raise --timeout or lower --interval",
+            friendly(args.timeout),
+            friendly(args.interval)
+        );
+    }
     if let Some(since) = &args.since {
         parse_since(since, Timestamp::now())?;
     }
@@ -39,7 +48,7 @@ pub fn hosts_wait(client: &Client, args: &HostWaitArgs, output: OutputMode) -> a
     };
     let res = wait_for_check_in(
         &plan,
-        || client.get_host(&args.host_id),
+        |limit| client.get_host_within(&args.host_id, limit),
         &mut SystemClock(Instant::now()),
         |progress| match progress {
             // The JSON face stays quiet on stderr until something goes wrong.
@@ -103,20 +112,35 @@ impl Clock for SystemClock {
 }
 
 /// Ask `poll` for the host every `plan.interval` until it has checked in,
-/// returning that response. The first check must succeed: an error there is
-/// a wrong id, key, or URL, and waiting won't fix it. Later, a dropped
-/// connection or a 5xx is reported and retried, while any other API error
-/// (the host was deleted, the key revoked) ends the wait. The last check
-/// lands on the deadline, so a host that checks in just before it counts.
+/// returning that response. Each check is given what is left of the wait, so
+/// the command stops within a round trip of `plan.timeout`; a check that
+/// outlasts it, and a rate limit the wait can't sit out, both end as
+/// `ERR_TIMEOUT`. The first check must succeed unless it times out: an error
+/// there is usually a wrong id, key, or URL. Mid-wait, a dropped connection,
+/// 5xx, or 429 with time remaining is reported and retried, while any other
+/// API error (the host deleted, the key revoked) ends the wait.
 fn wait_for_check_in(
     plan: &Plan,
-    mut poll: impl FnMut() -> anyhow::Result<Value>,
+    mut poll: impl FnMut(Duration) -> anyhow::Result<Value>,
     clock: &mut impl Clock,
     mut progress: impl FnMut(Progress),
 ) -> anyhow::Result<Value> {
     let mut last: Option<Value> = None;
+    let timed_out = |last: &Option<Value>| {
+        let host = last.as_ref().and_then(|res| res.get("data"));
+        Err(TimedOut(timeout_message(plan, host)).into())
+    };
     loop {
-        match poll() {
+        // A check must start while time remains; one starting at the deadline
+        // would get no budget, so the wait ends here instead.
+        let Some(left) = plan
+            .timeout
+            .checked_sub(clock.elapsed())
+            .filter(|d| !d.is_zero())
+        else {
+            return timed_out(&last);
+        };
+        match poll(left) {
             Ok(res) => {
                 let host = checked_host(plan.host_id, &res)?;
                 if checked_in(host, plan.since)? {
@@ -127,17 +151,22 @@ fn wait_for_check_in(
                 }
                 last = Some(res);
             }
-            Err(err) if last.is_some() && is_transient(&err) => {
+            // The backoff this 429 asked for runs past the wait's deadline, so
+            // polling again would ignore it.
+            Err(err) if is_rate_limited_past_deadline(&err) => return timed_out(&last),
+            // The check used up the time the wait had left.
+            Err(err) if is_timeout(&err) && clock.elapsed() >= plan.timeout => {
+                return timed_out(&last);
+            }
+            Err(err) if is_timeout(&err) || (last.is_some() && is_transient(&err)) => {
                 progress(Progress::Retrying(&err));
             }
             Err(err) => return Err(err),
         }
-        let elapsed = clock.elapsed();
-        if elapsed >= plan.timeout {
-            let host = last.as_ref().and_then(|res| res.get("data"));
-            return Err(TimedOut(timeout_message(plan, host)).into());
-        }
-        clock.sleep(plan.interval.min(plan.timeout - elapsed));
+        clock.sleep(
+            plan.interval
+                .min(plan.timeout.saturating_sub(clock.elapsed())),
+        );
     }
 }
 
@@ -155,11 +184,12 @@ fn checked_host<'a>(requested: &str, res: &'a Value) -> anyhow::Result<&'a Value
     Ok(host)
 }
 
-/// A failure worth retrying mid-wait: one that never got an API response,
-/// or a server-side 5xx. A 4xx means the next check would fail the same way.
+/// A failure worth retrying mid-wait: one that never got an API response, a
+/// 429 whose retries ran out while time remains, or a server-side 5xx. Any
+/// other 4xx means the next check would fail the same way.
 fn is_transient(err: &anyhow::Error) -> bool {
     err.downcast_ref::<ApiError>()
-        .is_none_or(|api| api.status >= 500)
+        .is_none_or(|api| api.status == 429 || api.status >= 500)
 }
 
 /// `metadata.lastSeenAt`, which the API leaves `null` until the host first
@@ -332,14 +362,23 @@ mod tests {
         plan: &Plan,
         answers: Vec<anyhow::Result<Value>>,
     ) -> (anyhow::Result<Value>, FakeClock, usize, Vec<String>) {
+        let (result, clock, limits, said) = run_timed(plan, answers);
+        (result, clock, limits.len(), said)
+    }
+
+    /// [`run`], returning the time each check was given, not their count.
+    fn run_timed(
+        plan: &Plan,
+        answers: Vec<anyhow::Result<Value>>,
+    ) -> (anyhow::Result<Value>, FakeClock, Vec<Duration>, Vec<String>) {
         let answers = RefCell::new(VecDeque::from(answers));
-        let mut polls = 0;
+        let mut polls = Vec::new();
         let mut clock = FakeClock::default();
         let mut said = Vec::new();
         let result = wait_for_check_in(
             plan,
-            || {
-                polls += 1;
+            |limit| {
+                polls.push(limit);
                 let mut answers = answers.borrow_mut();
                 match answers.front() {
                     Some(Ok(v)) if answers.len() == 1 => Ok(v.clone()),
@@ -379,12 +418,13 @@ mod tests {
     }
 
     #[test]
-    fn it_times_out_with_a_final_check_on_the_deadline() {
+    fn it_times_out_without_polling_past_the_deadline() {
         let (res, clock, polls, _) = run(&plan(None, 12, 5), vec![never_seen()]);
         let err = res.unwrap_err();
         assert!(err.downcast_ref::<TimedOut>().is_some(), "{err:#}");
-        // Checks at 0s, 5s, 10s, and 12s: the last sleep is cut short.
-        assert_eq!(polls, 4);
+        // Checks at 0s, 5s and 10s; at 12s the deadline ends the wait with no
+        // further check, and the last sleep is cut short to land there.
+        assert_eq!(polls, 3);
         assert_eq!(
             clock.sleeps,
             [5, 5, 2].map(Duration::from_secs),
@@ -397,9 +437,32 @@ mod tests {
     }
 
     #[test]
-    fn a_check_in_found_on_the_deadline_counts() {
+    fn each_check_is_bounded_by_the_time_left_in_the_wait() {
+        let (res, _, limits, _) = run_timed(&plan(None, 12, 5), vec![never_seen()]);
+        assert!(res.is_err());
+        // Checks at 0s, 5s and 10s get the 12s, 7s and 2s that remain; no
+        // floor, so a check can't run past the deadline.
+        assert_eq!(limits, [12, 7, 2].map(Duration::from_secs));
+    }
+
+    #[test]
+    fn a_rate_limit_the_wait_cannot_sit_out_ends_it() {
         let (res, _, polls, _) = run(
-            &plan(None, 5, 5),
+            &plan(None, 10, 5),
+            vec![
+                never_seen(),
+                Err(crate::api::RateLimitedPastDeadline.into()),
+            ],
+        );
+        let err = res.unwrap_err();
+        assert!(err.downcast_ref::<TimedOut>().is_some(), "{err:#}");
+        assert_eq!(polls, 2);
+    }
+
+    #[test]
+    fn a_check_in_in_the_last_interval_counts() {
+        let (res, _, polls, _) = run(
+            &plan(None, 10, 5),
             vec![never_seen(), seen("2026-11-03T01:00:00Z")],
         );
         assert!(res.is_ok());
@@ -451,13 +514,14 @@ mod tests {
             vec![
                 never_seen(),
                 Err(anyhow!("connection reset")),
+                api_error(429),
                 api_error(502),
                 seen("2026-11-03T01:00:00Z"),
             ],
         );
         assert!(res.is_ok());
-        assert_eq!(polls, 4);
-        assert_eq!(said.len(), 3, "{said:?}");
+        assert_eq!(polls, 5);
+        assert_eq!(said.len(), 4, "{said:?}");
         assert!(said[1].starts_with("retrying connection reset"), "{said:?}");
     }
 
@@ -526,6 +590,11 @@ mod tests {
     fn transient_means_no_response_or_a_server_error() {
         assert!(is_transient(&anyhow!("connection reset")));
         assert!(is_transient(&api_error(500).unwrap_err()));
+        assert!(is_transient(&api_error(429).unwrap_err()));
+        assert!(is_rate_limited_past_deadline(
+            &crate::api::RateLimitedPastDeadline.into()
+        ));
+        assert!(!is_rate_limited_past_deadline(&api_error(429).unwrap_err()));
         assert!(!is_transient(&api_error(499).unwrap_err()));
         assert!(!is_transient(&api_error(404).unwrap_err()));
     }
