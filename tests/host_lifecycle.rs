@@ -249,3 +249,35 @@ fn malformed_success_responses_fail_in_the_human_view() {
         assert!(stdout.is_empty(), "{cmd} {body}: {stdout}");
     }
 }
+
+#[test]
+fn code_lifetime_outside_60_to_604800_is_a_usage_error_on_both_commands() {
+    let host = mock_id("host", "build server");
+    let (url, seen) = serve(host_body(&host, false));
+    for lifetime in ["59", "604801"] {
+        for args in [
+            [
+                "--json",
+                "host",
+                "create",
+                "web",
+                "--code-lifetime",
+                lifetime,
+            ],
+            [
+                "--json",
+                "host",
+                "enroll-code",
+                host.as_str(),
+                "--code-lifetime",
+                lifetime,
+            ],
+        ] {
+            let out = dn(&url, &args);
+            assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+            let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(printed["errors"][0]["code"], "ERR_USAGE", "{args:?}");
+        }
+    }
+    assert!(requests(&seen).is_empty());
+}

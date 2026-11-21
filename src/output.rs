@@ -151,12 +151,36 @@ pub fn joined_field(v: &Value, key: &str) -> String {
         .join(", ")
 }
 
-/// `s` with control characters replaced by spaces, so API-supplied text
-/// can't move the cursor or recolour the terminal.
+/// `s` with control characters and hidden format characters replaced by
+/// spaces, so API-supplied text can't move the cursor, recolour the terminal,
+/// or display as a different name (`web\u{202E}dorp` reads as "webprod").
 pub fn sanitize_for_display(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| if is_unsafe_for_display(c) { ' ' } else { c })
         .collect()
+}
+
+/// Whether `sanitize_for_display` replaces `c`.
+fn is_unsafe_for_display(c: char) -> bool {
+    c.is_control() || is_hidden_format(c)
+}
+
+/// Invisible format characters that reorder or hide the text around them:
+/// bidi embeddings, overrides, isolates and marks, and zero-width spaces.
+/// ZWJ and ZWNJ (U+200D, U+200C) stay, since emoji sequences and several
+/// scripts need them.
+fn is_hidden_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}'
+            | '\u{200B}'
+            | '\u{200E}'
+            | '\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
 }
 
 /// Display width the way wcwidth-family terminals count it: one char at a
@@ -470,8 +494,39 @@ mod tests {
                 2 => prop::char::range('\0', '\x1f'),
                 1 => prop::char::range('\x7f', '\u{9f}'),
                 1 => prop::sample::select(vec!['💻', '中', '\u{2601}', '\u{fe0f}', '\u{301}']),
+                1 => prop::sample::select(vec!['\u{202E}', '\u{2067}', '\u{200B}', '\u{FEFF}', '\u{200D}']),
             ];
             prop::collection::vec(ch, 0..24).prop_map(String::from_iter)
+        }
+
+        #[test]
+        fn a_bidi_override_cannot_disguise_a_name() {
+            assert_eq!(sanitize_for_display("web\u{202E}dorp"), "web dorp");
+            assert_eq!(sanitize_for_display("\u{2067}gw-1\u{2069}"), " gw-1 ");
+            assert_eq!(sanitize_for_display("db\u{200B}1"), "db 1");
+        }
+
+        #[test]
+        fn every_hidden_format_character_is_replaced() {
+            let hidden = [
+                '\u{061C}', '\u{200B}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}', '\u{202C}',
+                '\u{202D}', '\u{202E}', '\u{2060}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
+                '\u{FEFF}',
+            ];
+            for c in hidden {
+                let s = format!("a{c}b");
+                assert_eq!(sanitize_for_display(&s), "a b", "U+{:04X}", c as u32);
+            }
+            for c in ['\u{200C}', '\u{200D}'] {
+                let s = format!("a{c}b");
+                assert_eq!(sanitize_for_display(&s), s, "U+{:04X}", c as u32);
+            }
+        }
+
+        #[test]
+        fn zwj_emoji_sequences_are_kept() {
+            let family = "👨\u{200D}👩\u{200D}👧";
+            assert_eq!(sanitize_for_display(family), family);
         }
 
         #[test]
@@ -490,25 +545,25 @@ mod tests {
 
         proptest! {
             #[test]
-            fn no_control_chars_survive(s in api_text()) {
+            fn no_unsafe_chars_survive(s in api_text()) {
                 let out = sanitize_for_display(&s);
                 prop_assert!(
-                    !out.chars().any(|c| c.is_control()),
-                    "control character in output: {:?}", out
+                    !out.chars().any(is_unsafe_for_display),
+                    "control or hidden format character in output: {:?}", out
                 );
             }
 
             #[test]
-            fn non_control_chars_are_preserved(s in "[^\\p{Cc}]*") {
+            fn non_control_chars_are_preserved(s in "[^\\p{Cc}\\p{Cf}]*") {
                 prop_assert_eq!(sanitize_for_display(&s), s);
             }
 
             #[test]
-            fn only_control_chars_change(s in api_text()) {
+            fn only_unsafe_chars_change(s in api_text()) {
                 let out = sanitize_for_display(&s);
                 prop_assert_eq!(out.chars().count(), s.chars().count());
                 for (before, after) in s.chars().zip(out.chars()) {
-                    let expected = if before.is_control() { ' ' } else { before };
+                    let expected = if is_unsafe_for_display(before) { ' ' } else { before };
                     prop_assert_eq!(after, expected);
                 }
             }

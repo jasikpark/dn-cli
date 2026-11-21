@@ -628,14 +628,16 @@ fn retry_delay(res: &Response<Body>, attempt: u32) -> Duration {
     retry_delay_from(header_val, attempt, cheap_jitter())
 }
 
+/// Longest a retry waits, jitter included, whatever `Retry-After` asks for.
+const MAX_RETRY_DELAY_SECS: f64 = 60.0;
+
 fn retry_delay_from(header: Option<&str>, attempt: u32, jitter: f64) -> Duration {
     let from_header = header
         .and_then(|s| s.parse::<f64>().ok())
-        .filter(|s| s.is_finite() && *s >= 0.0)
-        .map(|s| s.min(60.0));
+        .filter(|s| s.is_finite() && *s >= 0.0);
 
     let base = from_header.unwrap_or_else(|| 2.0_f64.powi(attempt as i32));
-    Duration::from_secs_f64(base + jitter * 0.5 * base)
+    Duration::from_secs_f64((base + jitter * 0.5 * base).min(MAX_RETRY_DELAY_SECS))
 }
 
 fn cheap_jitter() -> f64 {
@@ -861,6 +863,18 @@ mod tests {
     fn retry_delay_caps_header_at_60() {
         let d = retry_delay_from(Some("61"), 0, 0.0);
         assert_eq!(d, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn retry_delay_cap_includes_jitter() {
+        assert_eq!(
+            retry_delay_from(Some("120"), 0, 0.99),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            retry_delay_from(Some("50"), 0, 0.99),
+            Duration::from_secs(60)
+        );
     }
 
     #[test]

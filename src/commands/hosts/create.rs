@@ -176,10 +176,6 @@ fn build_host_create_body(
 /// Human-readable post-create summary. Surfaces what the user needs to act on
 /// next: the OTP to feed `dnclient enroll -code`, and the deny-all-default warning
 /// so a fresh user doesn't wonder why the hosts can't reach each other yet.
-///
-/// Treated as the user-facing UX surface — strings, ordering, and emphasis
-/// are deliberately open to revision; the structure (extract → format → emit)
-/// is what's load-bearing.
 fn render_host_create_human(res: &Value) -> String {
     let host = &res["data"]["host"];
     let flag = |key| host[key].as_bool().unwrap_or(false);

@@ -856,9 +856,9 @@ pub struct HostCreateArgs {
     /// either). Repeatable.
     #[arg(long = "tag", visible_alias = "tags", value_name = "TAG")]
     pub tags: Vec<String>,
-    /// Lifetime of the enrollment code in seconds. API default is 86400
-    /// (24h).
-    #[arg(long)]
+    /// How long the enrollment code stays valid, in seconds: 60 to 604800
+    /// (7 days). The API default is 86400 (24h).
+    #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(60..=604_800))]
     pub code_lifetime: Option<u64>,
 }
 
