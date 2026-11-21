@@ -123,7 +123,9 @@ impl std::error::Error for MissingAuthVersion {}
 /// concurrent `dn` processes can't lose each other's changes. It lives in a
 /// separate `auth.json.lock` because `auth.json` itself is replaced by rename.
 /// Released on drop.
-pub struct AuthLock(#[allow(dead_code)] fs::File);
+pub struct AuthLock(
+    #[expect(dead_code, reason = "held only so the lock lasts until drop")] fs::File,
+);
 
 impl AuthLock {
     pub fn acquire() -> Result<Self> {

@@ -219,8 +219,8 @@ fn host_rows(rows: &[Value]) -> Vec<Vec<String>> {
 }
 
 /// Parse and validate a `key:value` tag, matching the server's rules:
-/// exactly one colon, key 1–20 chars, value 1–50 chars, no
-/// leading/trailing whitespace on either part.
+/// split on the first colon (the value may contain more), key 1–20 chars,
+/// value 1–50 chars, no leading/trailing whitespace on either part.
 pub fn parse_tag(s: &str) -> anyhow::Result<(String, String)> {
     let s = s.trim();
     let shown = sanitize_for_display(s);

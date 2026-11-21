@@ -239,7 +239,7 @@ Creates the host **and** its one-time enrollment code in a single call.
 | `--ipv4 <ADDR\|CIDR>` / `--no-ipv4` | to pin an IPv4, or to make a v6-only host |
 | `--ipv6 <ADDR>` | to pin an IPv6 |
 | `--tag k:v` | repeatable (alias `--tags`) |
-| `--code-lifetime <SECONDS>` | enrollment code lifetime (API default 86400) |
+| `--code-lifetime <SECONDS>` | enrollment code lifetime, 60 to 604800 (API default 86400) |
 
 Returns `{ "data": { "host": { … }, "enrollmentCode": { "code", "lifetimeSeconds" } } }`.
 Hand the user the code and the exact command to run on the device —
