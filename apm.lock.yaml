@@ -1,5 +1,8 @@
-lockfile_version: '1'
-apm_version: 0.36.1
+lockfile_version: '4'
+apm_version: 0.38.0
+manifest_targets:
+- agent-skills
+- claude
 dependencies:
 - repo_url: inanna-malick/agent-skills
   name: proptest-praxis
@@ -26,7 +29,7 @@ dependencies:
     .claude/skills/proptest-praxis/LICENSE: sha256:47dd520c38b3660a3b661385ff4397b9c32dfbf53af313b3b5f85de8667e6fbc
     .claude/skills/proptest-praxis/SKILL.md: sha256:ff68a6cc83f39418ad50d8d821cba243d67a4aa653ad1def8f4fc89f5124cceb
     .claude/skills/proptest-praxis/agents/openai.yaml: sha256:452c8fbf8b44c46880ca7f85c54e99aa41d3b44909f3185c8ef4e67c89d57a86
-  content_hash: sha256:71144b2fd905b8c0b0686e69e1aaab9e75bbdce5c601595eb524fca2a7c9f50a
+  content_hash: sha256:88ffea97dcd3ffaca6bda0792a42636b668d25d362943410844c9a51e80882d2
   carried_licenses:
   - path: LICENSE
     source: LICENSE
